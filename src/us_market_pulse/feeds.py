@@ -159,11 +159,13 @@ _CACHE: dict[str, Any] = {
     "timeline": [],
     "live_briefing": {},
     "markets": {"indices": [], "charts": [], "source": ""},
+    "markets_fetched_at": 0.0,
     "next_fomc": None,
     "fetched_at": 0.0,
     "errors": [],
 }
-_CACHE_TTL = 300  # seconds
+_CACHE_TTL = 300  # seconds (intel / RSS)
+_MARKETS_TTL = 90  # fresher tape for intraday charts
 
 
 def _parse_date(entry: dict[str, Any]) -> datetime | None:
@@ -305,6 +307,27 @@ async def refresh_intel(force: bool = False) -> dict[str, Any]:
             events=(_CACHE.get("event_threads") or []) + (_CACHE.get("events") or []),
         )
         _CACHE["live_briefing"] = live_briefing
+        markets = _CACHE.get("markets") or {"indices": [], "charts": [], "source": ""}
+        markets_age = now - float(_CACHE.get("markets_fetched_at") or 0)
+        # Keep intraday tape fresher than RSS cache
+        if markets_age >= _MARKETS_TTL or not (markets.get("indices") or []):
+            async with httpx.AsyncClient(
+                headers={
+                    "User-Agent": USER_AGENT,
+                    "Accept": "application/json, text/plain, */*",
+                },
+                follow_redirects=True,
+            ) as market_client:
+                markets, market_errors = await fetch_market_board(market_client)
+            _CACHE["markets"] = markets
+            _CACHE["markets_fetched_at"] = now
+            if market_errors:
+                # keep old intel errors; append market freshness errors lightly
+                merged = list(_CACHE.get("errors") or [])
+                for err in market_errors:
+                    if err not in merged:
+                        merged.append(err)
+                _CACHE["errors"] = merged[-40:]
         return {
             "items": _CACHE["items"],
             "indicators": _CACHE["indicators"],
@@ -316,7 +339,7 @@ async def refresh_intel(force: bool = False) -> dict[str, Any]:
             "event_threads": _CACHE["event_threads"],
             "timeline": _CACHE["timeline"],
             "live_briefing": live_briefing,
-            "markets": _CACHE.get("markets") or {"indices": [], "charts": [], "source": ""},
+            "markets": markets,
             "next_fomc": _CACHE["next_fomc"],
             "fetched_at": _CACHE["fetched_at"],
             "errors": _CACHE["errors"],
@@ -390,6 +413,7 @@ async def refresh_intel(force: bool = False) -> dict[str, Any]:
             "timeline": bundle["timeline"],
             "live_briefing": live_briefing,
             "markets": markets,
+            "markets_fetched_at": now,
             "next_fomc": next_fomc(),
             "fetched_at": now,
             "errors": errors,

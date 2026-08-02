@@ -22,7 +22,7 @@ const state = {
   watchOnly: false,
   q: "",
   eventsById: {},
-  marketTf: "h24",
+  marketTf: "intraday",
   markets: null,
 };
 
@@ -157,12 +157,20 @@ function sparklinePath(points, width = 120, height = 36, pad = 2) {
     .join(" ");
 }
 
+// Chinese tape colors: red = up, green = down
+const TAPE_UP = "#d92b2b";
+const TAPE_DOWN = "#0f8a6a";
+const TAPE_UP_SOFT = "rgba(217,43,43,0.14)";
+const TAPE_DOWN_SOFT = "rgba(15,138,106,0.12)";
+
 function renderChartSvg(points, { up = true } = {}) {
   const width = 320;
   const height = 140;
   const padX = 8;
   const padY = 12;
-  const vals = (points || []).map((p) => Number(p.v)).filter((v) => !Number.isNaN(v));
+  const vals = (points || [])
+    .map((p) => Number(p.v ?? p.c))
+    .filter((v) => !Number.isNaN(v));
   if (vals.length < 2) {
     return `<svg viewBox="0 0 ${width} ${height}" role="img" aria-label="暂无走势"><text x="16" y="72" fill="#3a4d63" font-size="13">暂无走势数据</text></svg>`;
   }
@@ -179,18 +187,76 @@ function renderChartSvg(points, { up = true } = {}) {
     .map(([x, y], i) => `${i === 0 ? "M" : "L"}${x.toFixed(2)},${y.toFixed(2)}`)
     .join(" ");
   const area = `${line} L${coords[coords.length - 1][0].toFixed(2)},${height} L${coords[0][0].toFixed(2)},${height} Z`;
-  const stroke = up ? "#0f8a6a" : "#b42318";
-  const fill = up ? "rgba(15,138,106,0.14)" : "rgba(180,35,24,0.12)";
+  const stroke = up ? TAPE_UP : TAPE_DOWN;
+  const fill = up ? TAPE_UP_SOFT : TAPE_DOWN_SOFT;
   return `
-    <svg viewBox="0 0 ${width} ${height}" preserveAspectRatio="none" role="img" aria-label="走势图">
+    <svg viewBox="0 0 ${width} ${height}" preserveAspectRatio="none" role="img" aria-label="分时走势图">
       <path d="${area}" fill="${fill}"></path>
       <path d="${line}" fill="none" stroke="${stroke}" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"></path>
     </svg>
   `;
 }
 
+function renderCandleSvg(points) {
+  const width = 320;
+  const height = 150;
+  const padX = 8;
+  const padY = 10;
+  const bars = (points || []).filter(
+    (p) =>
+      p &&
+      [p.o, p.h, p.l, p.c].every((n) => n != null && !Number.isNaN(Number(n)))
+  );
+  if (bars.length < 2) {
+    return `<svg viewBox="0 0 ${width} ${height}" role="img" aria-label="暂无K线"><text x="16" y="78" fill="#3a4d63" font-size="13">暂无K线数据</text></svg>`;
+  }
+  const highs = bars.map((b) => Number(b.h));
+  const lows = bars.map((b) => Number(b.l));
+  const min = Math.min(...lows);
+  const max = Math.max(...highs);
+  const span = max - min || 1;
+  const slot = (width - padX * 2) / bars.length;
+  const bodyW = Math.max(1.5, Math.min(7, slot * 0.62));
+  const yOf = (price) => padY + (1 - (price - min) / span) * (height - padY * 2);
+
+  const shapes = bars
+    .map((b, i) => {
+      const o = Number(b.o);
+      const h = Number(b.h);
+      const l = Number(b.l);
+      const c = Number(b.c);
+      const up = c >= o;
+      const color = up ? TAPE_UP : TAPE_DOWN;
+      const x = padX + i * slot + slot / 2;
+      const yHigh = yOf(h);
+      const yLow = yOf(l);
+      const yOpen = yOf(o);
+      const yClose = yOf(c);
+      const top = Math.min(yOpen, yClose);
+      const bodyH = Math.max(1.2, Math.abs(yClose - yOpen));
+      return `
+        <line x1="${x.toFixed(2)}" y1="${yHigh.toFixed(2)}" x2="${x.toFixed(
+          2
+        )}" y2="${yLow.toFixed(2)}" stroke="${color}" stroke-width="1.2"></line>
+        <rect x="${(x - bodyW / 2).toFixed(2)}" y="${top.toFixed(
+          2
+        )}" width="${bodyW.toFixed(2)}" height="${bodyH.toFixed(
+          2
+        )}" fill="${color}"></rect>
+      `;
+    })
+    .join("");
+
+  return `
+    <svg viewBox="0 0 ${width} ${height}" preserveAspectRatio="none" role="img" aria-label="K线柱状图 红涨绿跌">
+      ${shapes}
+    </svg>
+  `;
+}
+
 function activeMarketTf(data) {
-  const tf = state.marketTf || data?.default_tf || "h24";
+  let tf = state.marketTf || data?.default_tf || "intraday";
+  if (tf === "h24") tf = "intraday";
   const known = (data?.timeframes || []).map((t) => t.id);
   if (known.length && !known.includes(tf)) return data.default_tf || known[0];
   return tf;
@@ -239,13 +305,21 @@ function renderMarketCharts(data) {
         typeof pct === "number"
           ? `${pct >= 0 ? "+" : ""}${pct.toFixed(2)}%`
           : "—";
+      const kind = chart.chart || meta.chart || (tf === "intraday" ? "line" : "candle");
+      const svg =
+        kind === "candle"
+          ? renderCandleSvg(chart.points || [])
+          : renderChartSvg(chart.points || [], { up });
+      const chgCls = up ? "up" : "down";
       return `
         <article class="chart-card">
           <div class="chart-head">
             <h3>${escapeHtml(chart.label || chart.short || "")}</h3>
-            <span class="range">${escapeHtml(meta.label || "")} · 区间 ${pctText}</span>
+            <span class="range chg ${chgCls}">${escapeHtml(
+              meta.label || ""
+            )} · 区间 ${pctText}</span>
           </div>
-          ${renderChartSvg(chart.points || [], { up })}
+          ${svg}
           <div class="chart-foot">${escapeHtml(chart.blurb || meta.blurb || "")}</div>
         </article>
       `;
@@ -256,14 +330,16 @@ function renderMarketCharts(data) {
 function renderMarkets(markets) {
   const data = markets || {};
   state.markets = data;
-  if (!state.marketTf) state.marketTf = data.default_tf || "h24";
+  if (!state.marketTf || state.marketTf === "h24") {
+    state.marketTf = data.default_tf || "intraday";
+  }
   const indices = data.indices || [];
   const tf = activeMarketTf(data);
 
   if (els.marketsBlurb) {
     els.marketsBlurb.textContent = data.source
-      ? `来源 ${data.source} · 可切换 24小时 / 日 / 周 / 月 / 年（延迟报价，仅供研究）`
-      : "24 小时分时 · 日 / 周 / 月 / 年走势";
+      ? `来源 ${data.source} · 分时含盘前盘后；日/周/月/年为K线（红涨绿跌，延迟报价）`
+      : "分时 · 日 / 周 / 月 / 年 K 线（红涨绿跌）";
   }
 
   if (els.indexGrid) {
@@ -286,14 +362,17 @@ function renderMarkets(markets) {
               : ` · ${row.change >= 0 ? "+" : ""}${Number(row.change).toFixed(
                   row.unit === "%" ? 3 : 2
                 )}`;
-          const sparkPoints =
+          const rawSpark =
             row.series?.[tf]?.points ||
-            row.series?.h24?.points ||
+            row.series?.intraday?.points ||
             row.series?.day?.points ||
             row.points ||
             [];
+          const sparkPoints = rawSpark.map((p) =>
+            p && p.c != null && p.v == null ? { t: p.t, v: p.c } : p
+          );
           const path = sparklinePath(sparkPoints);
-          const stroke = cls === "down" ? "#b42318" : "#0f8a6a";
+          const stroke = cls === "down" ? TAPE_DOWN : TAPE_UP;
           return `
             <a class="index-card" href="${escapeHtml(
               row.url || "#"

@@ -670,12 +670,15 @@ main,
   font-variant-numeric: tabular-nums;
 }
 
-.index-card .chg.up {
-  color: var(--signal);
+/* A股习惯：红涨绿跌 */
+.index-card .chg.up,
+.chart-card .range.chg.up {
+  color: #d92b2b;
 }
 
-.index-card .chg.down {
-  color: var(--bear);
+.index-card .chg.down,
+.chart-card .range.chg.down {
+  color: var(--signal);
 }
 
 .index-card .mini-spark {

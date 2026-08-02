@@ -42,86 +42,145 @@ INDEX_SPECS: list[dict[str, str]] = [
     },
 ]
 
-# UI timeframes: 24h / daily / weekly / monthly / yearly
-TIMEFRAMES: list[dict[str, str]] = [
+# 分时 = intraday line; others = OHLC candlesticks (Chinese red-up / green-down)
+TIMEFRAMES: list[dict[str, Any]] = [
     {
-        "id": "h24",
-        "label": "24小时",
-        "blurb": "近 24 小时分时（约 5 分钟点）",
+        "id": "intraday",
+        "label": "分时",
+        "blurb": "当日分时（含盘前盘后，约 5 分钟点，延迟报价）",
         "range": "1d",
         "interval": "5m",
-        "max_points": 120,
+        "max_points": 160,
+        "chart": "line",
+        "prepost": True,
     },
     {
         "id": "day",
         "label": "日图",
-        "blurb": "近 1 年日线",
+        "blurb": "近 1 年日 K 线（红涨绿跌）",
         "range": "1y",
         "interval": "1d",
         "max_points": 160,
+        "chart": "candle",
+        "prepost": False,
     },
     {
         "id": "week",
         "label": "周图",
-        "blurb": "近 5 年周线",
+        "blurb": "近 5 年周 K 线（红涨绿跌）",
         "range": "5y",
         "interval": "1wk",
         "max_points": 160,
+        "chart": "candle",
+        "prepost": False,
     },
     {
         "id": "month",
         "label": "月图",
-        "blurb": "历史月线",
+        "blurb": "历史月 K 线（红涨绿跌）",
         "range": "max",
         "interval": "1mo",
         "max_points": 180,
+        "chart": "candle",
+        "prepost": False,
     },
     {
         "id": "year",
         "label": "年图",
-        "blurb": "历史季线（年景）",
+        "blurb": "历史季 K 线 / 年景（红涨绿跌）",
         "range": "max",
         "interval": "3mo",
         "max_points": 120,
+        "chart": "candle",
+        "prepost": False,
     },
 ]
 
 CHART_INDEX_IDS = {"spx", "dji", "ixic", "vix", "tnx"}
 
 
-def _yahoo_chart_url(symbol: str, *, range_: str, interval: str) -> str:
+def _yahoo_chart_url(
+    symbol: str, *, range_: str, interval: str, prepost: bool
+) -> str:
     enc = quote(symbol, safe="")
+    flag = "true" if prepost else "false"
     return (
         f"https://query1.finance.yahoo.com/v8/finance/chart/{enc}"
-        f"?range={range_}&interval={interval}&includePrePost=false"
+        f"?range={range_}&interval={interval}&includePrePost={flag}"
     )
 
 
-def _compact_points(
-    closes: list[float | None],
+def _nth(values: list[Any] | None, idx: int) -> float | None:
+    if not values or idx >= len(values):
+        return None
+    value = values[idx]
+    if value is None:
+        return None
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _compact_bars(
     timestamps: list[int],
+    opens: list[Any] | None,
+    highs: list[Any] | None,
+    lows: list[Any] | None,
+    closes: list[Any] | None,
+    volumes: list[Any] | None,
     *,
-    max_points: int = 120,
+    max_points: int,
+    chart: str,
 ) -> list[dict[str, Any]]:
-    pairs = [
-        {"t": int(ts), "v": float(close)}
-        for ts, close in zip(timestamps, closes, strict=False)
-        if close is not None
-    ]
-    if len(pairs) <= max_points:
-        return pairs
-    step = max(1, len(pairs) // max_points)
-    trimmed = pairs[::step]
-    if trimmed[-1] is not pairs[-1]:
-        trimmed.append(pairs[-1])
+    bars: list[dict[str, Any]] = []
+    for i, ts in enumerate(timestamps):
+        close = _nth(closes, i)
+        if close is None:
+            continue
+        open_ = _nth(opens, i)
+        high = _nth(highs, i)
+        low = _nth(lows, i)
+        vol = _nth(volumes, i)
+        if open_ is None:
+            open_ = close
+        if high is None:
+            high = max(open_, close)
+        if low is None:
+            low = min(open_, close)
+        bar = {
+            "t": int(ts),
+            "o": round(open_, 6),
+            "h": round(high, 6),
+            "l": round(low, 6),
+            "c": round(close, 6),
+            "v": round(vol, 2) if vol is not None else None,
+        }
+        # line charts still expose v=close for sparklines
+        bar["v"] = bar["c"] if chart == "line" else bar.get("v")
+        if chart == "line":
+            bars.append({"t": bar["t"], "v": bar["c"]})
+        else:
+            bars.append(bar)
+
+    if len(bars) <= max_points:
+        return bars
+    step = max(1, len(bars) // max_points)
+    trimmed = bars[::step]
+    if trimmed[-1] is not bars[-1]:
+        trimmed.append(bars[-1])
     return trimmed[:max_points]
 
 
-def _series_change(points: list[dict[str, Any]]) -> tuple[float | None, float | None]:
+def _series_change(points: list[dict[str, Any]], chart: str) -> tuple[float | None, float | None]:
     if len(points) < 2:
         return None, None
-    first = float(points[0]["v"])
-    last = float(points[-1]["v"])
+    if chart == "line":
+        first = float(points[0]["v"])
+        last = float(points[-1]["v"])
+    else:
+        first = float(points[0]["o"] if points[0].get("o") is not None else points[0]["c"])
+        last = float(points[-1]["c"])
     if first == 0:
         return round(last - first, 4), None
     return round(last - first, 4), round((last - first) / first * 100.0, 3)
@@ -130,9 +189,14 @@ def _series_change(points: list[dict[str, Any]]) -> tuple[float | None, float | 
 async def _fetch_yahoo_series(
     client: httpx.AsyncClient,
     spec: dict[str, str],
-    tf: dict[str, str],
+    tf: dict[str, Any],
 ) -> tuple[dict[str, Any] | None, str | None]:
-    url = _yahoo_chart_url(spec["symbol"], range_=tf["range"], interval=tf["interval"])
+    url = _yahoo_chart_url(
+        spec["symbol"],
+        range_=tf["range"],
+        interval=tf["interval"],
+        prepost=bool(tf.get("prepost")),
+    )
     try:
         resp = await client.get(
             url,
@@ -151,16 +215,24 @@ async def _fetch_yahoo_series(
         meta = result.get("meta") or {}
         timestamps = result.get("timestamp") or []
         quote_block = ((result.get("indicators") or {}).get("quote") or [{}])[0]
-        closes = quote_block.get("close") or []
-        max_points = int(tf.get("max_points") or 120)
-        points = _compact_points(closes, timestamps, max_points=max_points)
+        chart = str(tf.get("chart") or "line")
+        points = _compact_bars(
+            timestamps,
+            quote_block.get("open"),
+            quote_block.get("high"),
+            quote_block.get("low"),
+            quote_block.get("close"),
+            quote_block.get("volume"),
+            max_points=int(tf.get("max_points") or 120),
+            chart=chart,
+        )
         if not points:
             return None, f"{spec['label']}/{tf['label']}: no points"
 
-        change, change_pct = _series_change(points)
+        change, change_pct = _series_change(points, chart)
         price = meta.get("regularMarketPrice")
         if price is None:
-            price = points[-1]["v"]
+            price = points[-1]["c"] if chart == "candle" else points[-1]["v"]
         prev = meta.get("chartPreviousClose") or meta.get("previousClose")
         day_change = None
         day_change_pct = None
@@ -174,6 +246,7 @@ async def _fetch_yahoo_series(
             "blurb": tf["blurb"],
             "range": tf["range"],
             "interval": tf["interval"],
+            "chart": chart,
             "points": points,
             "change": change,
             "change_pct": change_pct,
@@ -190,8 +263,9 @@ async def _fetch_index_bundle(
     client: httpx.AsyncClient, spec: dict[str, str]
 ) -> tuple[dict[str, Any] | None, list[str]]:
     errors: list[str] = []
-    tasks = [_fetch_yahoo_series(client, spec, tf) for tf in TIMEFRAMES]
-    results = await asyncio.gather(*tasks)
+    results = await asyncio.gather(
+        *[_fetch_yahoo_series(client, spec, tf) for tf in TIMEFRAMES]
+    )
 
     series: dict[str, Any] = {}
     quote_seed: dict[str, Any] | None = None
@@ -206,19 +280,21 @@ async def _fetch_index_bundle(
             "blurb": row["blurb"],
             "range": row["range"],
             "interval": row["interval"],
+            "chart": row["chart"],
             "points": row["points"],
             "change": row["change"],
             "change_pct": row["change_pct"],
         }
-        if quote_seed is None:
+        if quote_seed is None or tf["id"] == "intraday":
             quote_seed = row
 
     if not series or quote_seed is None:
         return None, errors or [f"{spec['label']}: no series"]
 
-    # Prefer 24h / day for quote fields
-    preferred = series.get("h24") or series.get("day") or next(iter(series.values()))
-    day_series = series.get("day") or preferred
+    spark_src = series.get("intraday") or series.get("day") or next(iter(series.values()))
+    spark_points = spark_src.get("points") or []
+    if spark_src.get("chart") == "candle":
+        spark_points = [{"t": p["t"], "v": p["c"]} for p in spark_points]
 
     return {
         "id": spec["id"],
@@ -230,7 +306,7 @@ async def _fetch_index_bundle(
         "change": quote_seed.get("day_change"),
         "change_pct": quote_seed.get("day_change_pct"),
         "as_of": quote_seed.get("as_of"),
-        "points": (day_series.get("points") or [])[-48:],
+        "points": spark_points[-64:],
         "series": series,
         "url": f"https://finance.yahoo.com/quote/{quote(spec['symbol'], safe='')}",
     }, errors
@@ -263,6 +339,7 @@ async def fetch_market_board(client: httpx.AsyncClient) -> tuple[dict[str, Any],
                     "price": row.get("price"),
                     "change_pct": series.get("change_pct"),
                     "points": series.get("points") or [],
+                    "chart": series.get("chart") or tf.get("chart") or "line",
                     "blurb": series.get("blurb") or tf["blurb"],
                 }
             )
@@ -270,11 +347,17 @@ async def fetch_market_board(client: httpx.AsyncClient) -> tuple[dict[str, Any],
     return {
         "indices": indices,
         "timeframes": [
-            {"id": tf["id"], "label": tf["label"], "blurb": tf["blurb"]} for tf in TIMEFRAMES
+            {
+                "id": tf["id"],
+                "label": tf["label"],
+                "blurb": tf["blurb"],
+                "chart": tf["chart"],
+            }
+            for tf in TIMEFRAMES
         ],
-        "default_tf": "h24",
+        "default_tf": "intraday",
         "charts_by_tf": charts_by_tf,
-        # back-compat for older UI
-        "charts": charts_by_tf.get("h24") or charts_by_tf.get("day") or [],
+        "charts": charts_by_tf.get("intraday") or charts_by_tf.get("day") or [],
         "source": "Yahoo Finance",
+        "style": {"up": "red", "down": "green", "note": "A股习惯：红涨绿跌"},
     }, errors
