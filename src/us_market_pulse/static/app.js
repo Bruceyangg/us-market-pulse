@@ -199,6 +199,14 @@ const TAPE_DOWN = "#0f8a6a";
 const TAPE_UP_SOFT = "rgba(217,43,43,0.14)";
 const TAPE_DOWN_SOFT = "rgba(15,138,106,0.12)";
 
+function themeMutedFill() {
+  return (
+    getComputedStyle(document.documentElement)
+      .getPropertyValue("--ink-soft")
+      .trim() || "#3a4d63"
+  );
+}
+
 function renderChartSvg(points, { up = true } = {}) {
   const width = 320;
   const height = 140;
@@ -208,7 +216,7 @@ function renderChartSvg(points, { up = true } = {}) {
     .map((p) => Number(p.v ?? p.c))
     .filter((v) => !Number.isNaN(v));
   if (vals.length < 2) {
-    return `<svg viewBox="0 0 ${width} ${height}" role="img" aria-label="暂无走势"><text x="16" y="72" fill="#3a4d63" font-size="13">暂无走势数据</text></svg>`;
+    return `<svg viewBox="0 0 ${width} ${height}" role="img" aria-label="暂无走势"><text x="16" y="72" fill="${themeMutedFill()}" font-size="13">暂无走势数据</text></svg>`;
   }
   const min = Math.min(...vals);
   const max = Math.max(...vals);
@@ -244,7 +252,7 @@ function renderCandleSvg(points) {
       [p.o, p.h, p.l, p.c].every((n) => n != null && !Number.isNaN(Number(n)))
   );
   if (bars.length < 2) {
-    return `<svg viewBox="0 0 ${width} ${height}" role="img" aria-label="暂无K线"><text x="16" y="78" fill="#3a4d63" font-size="13">暂无K线数据</text></svg>`;
+    return `<svg viewBox="0 0 ${width} ${height}" role="img" aria-label="暂无K线"><text x="16" y="78" fill="${themeMutedFill()}" font-size="13">暂无K线数据</text></svg>`;
   }
   const highs = bars.map((b) => Number(b.h));
   const lows = bars.map((b) => Number(b.l));
@@ -2734,5 +2742,131 @@ function bindStickyNavChrome() {
   );
 }
 
+const THEME_MODE_KEY = "pulse_theme_mode";
+const THEME_MODE_LABELS = {
+  auto: "自动",
+  light: "白天",
+  dark: "夜晚",
+};
+
+function readThemeMode() {
+  try {
+    const mode = localStorage.getItem(THEME_MODE_KEY) || "auto";
+    return mode === "light" || mode === "dark" || mode === "auto" ? mode : "auto";
+  } catch {
+    return "auto";
+  }
+}
+
+function resolveTheme(mode = readThemeMode()) {
+  if (mode === "light" || mode === "dark") return mode;
+  const hour = new Date().getHours();
+  return hour >= 6 && hour < 18 ? "light" : "dark";
+}
+
+function applyTheme(mode = readThemeMode(), { announce = false } = {}) {
+  const nextMode = mode === "light" || mode === "dark" || mode === "auto" ? mode : "auto";
+  const theme = resolveTheme(nextMode);
+  document.documentElement.setAttribute("data-theme", theme);
+  document.documentElement.setAttribute("data-theme-mode", nextMode);
+  try {
+    localStorage.setItem(THEME_MODE_KEY, nextMode);
+  } catch {
+    /* ignore */
+  }
+
+  const metaColor = document.getElementById("meta-theme-color");
+  if (metaColor) {
+    metaColor.setAttribute(
+      "content",
+      theme === "dark" ? "#0a0e14" : "#102033"
+    );
+  }
+  const statusBar = document.getElementById("meta-status-bar");
+  if (statusBar) {
+    statusBar.setAttribute(
+      "content",
+      theme === "dark" ? "black-translucent" : "default"
+    );
+  }
+
+  const label = document.getElementById("theme-label");
+  if (label) label.textContent = THEME_MODE_LABELS[nextMode] || "自动";
+
+  const btn = document.getElementById("btn-theme");
+  if (btn) {
+    btn.setAttribute(
+      "aria-label",
+      `当前主题：${THEME_MODE_LABELS[nextMode]}，点击切换`
+    );
+    btn.title = `主题：${THEME_MODE_LABELS[nextMode]}（点击切换 自动/白天/夜晚）`;
+  }
+
+  document.querySelectorAll("[data-theme-mode]").forEach((el) => {
+    const active = el.dataset.themeMode === nextMode;
+    el.classList.toggle("is-active", active);
+    el.setAttribute("aria-pressed", active ? "true" : "false");
+  });
+
+  if (announce) {
+    setStatus(`已切换为${THEME_MODE_LABELS[nextMode]}主题`);
+  }
+
+  window.dispatchEvent(
+    new CustomEvent("pulse-theme-change", {
+      detail: { mode: nextMode, theme },
+    })
+  );
+}
+
+function cycleThemeMode() {
+  const order = ["auto", "light", "dark"];
+  const current = readThemeMode();
+  const next = order[(order.indexOf(current) + 1) % order.length];
+  applyTheme(next, { announce: true });
+}
+
+function refreshThemeBoundViews() {
+  if (PAGE === "markets" && state.markets) renderMarkets(state.markets);
+  if (PAGE === "desk" && state.portfolio) {
+    renderPortfolio(state.portfolio);
+    renderPortfolioChart();
+  }
+}
+
+function scheduleAutoThemeRefresh() {
+  const now = new Date();
+  const next = new Date(now);
+  const hour = now.getHours();
+  if (hour < 6) {
+    next.setHours(6, 0, 0, 0);
+  } else if (hour < 18) {
+    next.setHours(18, 0, 0, 0);
+  } else {
+    next.setDate(next.getDate() + 1);
+    next.setHours(6, 0, 0, 0);
+  }
+  const delay = Math.max(5_000, next.getTime() - now.getTime() + 250);
+  window.setTimeout(() => {
+    if (readThemeMode() === "auto") applyTheme("auto");
+    scheduleAutoThemeRefresh();
+  }, delay);
+}
+
+function bindThemeChrome() {
+  applyTheme(readThemeMode());
+  document.getElementById("btn-theme")?.addEventListener("click", () => {
+    cycleThemeMode();
+  });
+  document.querySelectorAll("[data-theme-mode]").forEach((el) => {
+    el.addEventListener("click", () => {
+      applyTheme(el.dataset.themeMode || "auto", { announce: true });
+    });
+  });
+  window.addEventListener("pulse-theme-change", refreshThemeBoundViews);
+  scheduleAutoThemeRefresh();
+}
+
 bootPage();
 bindStickyNavChrome();
+bindThemeChrome();

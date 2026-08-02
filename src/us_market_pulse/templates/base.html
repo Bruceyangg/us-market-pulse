@@ -6,16 +6,39 @@
       name="viewport"
       content="width=device-width, initial-scale=1, viewport-fit=cover"
     />
-    <meta name="theme-color" content="#102033" />
+    <meta name="theme-color" content="#102033" id="meta-theme-color" />
     <meta name="apple-mobile-web-app-capable" content="yes" />
     <meta name="mobile-web-app-capable" content="yes" />
-    <meta name="apple-mobile-web-app-status-bar-style" content="default" />
+    <meta
+      name="apple-mobile-web-app-status-bar-style"
+      content="default"
+      id="meta-status-bar"
+    />
     <meta name="apple-mobile-web-app-title" content="Pulse Desk" />
     <title>{% block title %}Pulse Desk · 美股情报台{% endblock %}</title>
     <meta
       name="description"
       content="{% block description %}追踪美股、时政、政策、美联储与国债动态的实时情报台。{% endblock %}"
     />
+    <script>
+      (function () {
+        try {
+          var mode = localStorage.getItem("pulse_theme_mode") || "auto";
+          var hour = new Date().getHours();
+          var theme =
+            mode === "light" || mode === "dark"
+              ? mode
+              : hour >= 6 && hour < 18
+                ? "light"
+                : "dark";
+          document.documentElement.setAttribute("data-theme", theme);
+          document.documentElement.setAttribute("data-theme-mode", mode);
+        } catch (e) {
+          document.documentElement.setAttribute("data-theme", "light");
+          document.documentElement.setAttribute("data-theme-mode", "auto");
+        }
+      })();
+    </script>
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link
@@ -50,6 +73,16 @@
         <a href="/settings" data-nav="settings" class="{% if page == 'settings' %}is-active{% endif %}">设置</a>
       </nav>
       <div class="header-meta">
+        <button
+          class="btn ghost btn-compact theme-toggle"
+          id="btn-theme"
+          type="button"
+          aria-label="切换昼夜主题"
+          title="切换昼夜主题：自动 / 白天 / 夜晚"
+        >
+          <span class="theme-icon" aria-hidden="true"></span>
+          <span class="theme-label" id="theme-label">自动</span>
+        </button>
         <span class="live-dot" aria-hidden="true"></span>
         <span id="status-line">{% block status_default %}就绪{% endblock %}</span>
         {% if user %}
