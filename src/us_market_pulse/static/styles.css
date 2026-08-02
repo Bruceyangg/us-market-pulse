@@ -44,11 +44,11 @@ html[data-theme="light"] {
 
 html[data-theme="dark"] {
   color-scheme: dark;
-  --ink: #e7eef6;
-  --ink-soft: #9aadc2;
+  --ink: #eef3f8;
+  --ink-soft: #c2d0e0;
   --paper: #0a0e14;
   --panel: rgba(18, 24, 34, 0.82);
-  --line: rgba(231, 238, 246, 0.12);
+  --line: rgba(231, 238, 246, 0.18);
   --signal: #2ecf9a;
   --signal-soft: rgba(46, 207, 154, 0.16);
   --amber: #e0a34a;
@@ -3318,37 +3318,92 @@ body {
   }
 }
 
-/* Dark theme surface overrides for panels that still use light hardcoded fills */
+/* Dark theme: surfaces, filters, and hardcoded light-mode ink */
 html[data-theme="dark"] .user-chip,
 html[data-theme="dark"] .holding-chip,
+html[data-theme="dark"] .filter,
 html[data-theme="dark"] .tf-filters button,
 html[data-theme="dark"] .sentiment-filters button,
 html[data-theme="dark"] .sort-filters button,
 html[data-theme="dark"] .category-filters button,
 html[data-theme="dark"] .btn.ghost,
 html[data-theme="dark"] .auth-card,
+html[data-theme="dark"] .auth-gate-card,
 html[data-theme="dark"] .holding-intel-card,
+html[data-theme="dark"] .holding-row,
 html[data-theme="dark"] .index-card,
 html[data-theme="dark"] .chart-card,
-html[data-theme="dark"] .feed-card,
 html[data-theme="dark"] .event-card,
-html[data-theme="dark"] .timeline-item,
-html[data-theme="dark"] .portfolio-row,
+html[data-theme="dark"] .portfolio-chart,
 html[data-theme="dark"] .portfolio-chart-pane,
 html[data-theme="dark"] .holding-intel-sticky,
+html[data-theme="dark"] .portfolio-manage,
 html[data-theme="dark"] .push-panel,
 html[data-theme="dark"] .settings-form input,
 html[data-theme="dark"] .settings-form select,
 html[data-theme="dark"] .auth-form input,
 html[data-theme="dark"] .portfolio-add input,
-html[data-theme="dark"] .search-box input,
+html[data-theme="dark"] .search input,
 html[data-theme="dark"] .live-brief-rail,
+html[data-theme="dark"] .live-brief-pin-inner,
 html[data-theme="dark"] .brief-chip,
 html[data-theme="dark"] .event-drawer-panel,
-html[data-theme="dark"] .share-bar {
+html[data-theme="dark"] .share-bar,
+html[data-theme="dark"] .watch-hit-card,
+html[data-theme="dark"] .spotlight-card,
+html[data-theme="dark"] .agenda-card,
+html[data-theme="dark"] .story,
+html[data-theme="dark"] .story-verdict,
+html[data-theme="dark"] .agenda-logic,
+html[data-theme="dark"] .digest-line,
+html[data-theme="dark"] .portfolio-stats {
   background: var(--elevated);
   color: var(--ink);
   border-color: var(--line);
+}
+
+html[data-theme="dark"] .holding-row:hover,
+html[data-theme="dark"] .holding-row.is-preview,
+html[data-theme="dark"] .story:hover {
+  background: var(--elevated-soft);
+  border-color: rgba(106, 168, 212, 0.35);
+}
+
+html[data-theme="dark"] .holding-row.is-active {
+  background: linear-gradient(180deg, rgba(240, 113, 103, 0.14), var(--elevated));
+  border-color: rgba(240, 113, 103, 0.4);
+}
+
+html[data-theme="dark"] .holding-row::before {
+  background: var(--line);
+}
+
+html[data-theme="dark"] .filter {
+  background: var(--chip-bg);
+  color: var(--ink-soft);
+}
+
+html[data-theme="dark"] .filter:hover {
+  color: var(--ink);
+  border-color: rgba(231, 238, 246, 0.28);
+}
+
+html[data-theme="dark"] .filter.is-active {
+  background: rgba(106, 168, 212, 0.28);
+  border-color: rgba(106, 168, 212, 0.55);
+  color: var(--ink);
+}
+
+html[data-theme="dark"] .filter.sentiment-bear.is-active {
+  background: var(--bear);
+  border-color: var(--bear);
+  color: #141014;
+}
+
+html[data-theme="dark"] .filter.sentiment-bull.is-active {
+  background: var(--signal);
+  border-color: var(--signal);
+  color: #0a1410;
 }
 
 html[data-theme="dark"] .holding-chip.is-active,
@@ -3358,6 +3413,7 @@ html[data-theme="dark"] .sort-filters button.is-active,
 html[data-theme="dark"] .category-filters button.is-active,
 html[data-theme="dark"] .desk-nav a.is-active {
   background: var(--chip-active);
+  color: var(--ink);
 }
 
 html[data-theme="dark"] .btn.primary {
@@ -3368,18 +3424,25 @@ html[data-theme="dark"] .btn.primary {
 
 html[data-theme="dark"] .btn.ghost:hover {
   background: var(--nav-hover);
+  border-color: var(--line);
 }
 
 html[data-theme="dark"] .holding-intel-card.is-bearish,
-html[data-theme="dark"] .live-brief-rail {
-  background: linear-gradient(180deg, rgba(240, 113, 103, 0.12), var(--elevated));
+html[data-theme="dark"] .live-brief-rail,
+html[data-theme="dark"] .live-brief-pin-inner,
+html[data-theme="dark"] .spotlight-card,
+html[data-theme="dark"] .agenda-card.is-bearish {
+  background: linear-gradient(180deg, rgba(240, 113, 103, 0.14), var(--elevated));
 }
 
-html[data-theme="dark"] .holding-intel-card.is-bullish {
-  background: linear-gradient(180deg, rgba(46, 207, 154, 0.1), var(--elevated));
+html[data-theme="dark"] .holding-intel-card.is-bullish,
+html[data-theme="dark"] .agenda-card.is-bullish {
+  background: linear-gradient(180deg, rgba(46, 207, 154, 0.12), var(--elevated));
 }
 
-html[data-theme="dark"] .site-footer {
+html[data-theme="dark"] .site-footer,
+html[data-theme="dark"] .header-meta,
+html[data-theme="dark"] #status-line {
   color: var(--ink-soft);
   border-color: var(--line);
 }
@@ -3391,6 +3454,113 @@ html[data-theme="dark"] .watch-hits {
   background: var(--elevated-soft);
   border-color: var(--line);
   color: var(--ink-soft);
+}
+
+html[data-theme="dark"] .index-card .short,
+html[data-theme="dark"] .index-card .label,
+html[data-theme="dark"] .chart-card .chart-head .range,
+html[data-theme="dark"] .portfolio-chart .chart-foot,
+html[data-theme="dark"] .holding-row .meta .sym,
+html[data-theme="dark"] .page-kicker,
+html[data-theme="dark"] .lede,
+html[data-theme="dark"] .section-head p {
+  color: var(--ink-soft);
+  opacity: 1;
+}
+
+html[data-theme="dark"] .chip.neutral,
+html[data-theme="dark"] .chip.policy,
+html[data-theme="dark"] .kind-pill,
+html[data-theme="dark"] .event-card .key-chip,
+html[data-theme="dark"] .brief-chip {
+  background: var(--chip-bg);
+  color: var(--ink-soft);
+  border-color: var(--line);
+}
+
+html[data-theme="dark"] .chip.bearish,
+html[data-theme="dark"] .story-sentiment.bearish,
+html[data-theme="dark"] .delta.down,
+html[data-theme="dark"] .agenda-bear,
+html[data-theme="dark"] .brief-card.bearish .value,
+html[data-theme="dark"] .mood-card.bearish .tilt {
+  color: var(--bear);
+}
+
+html[data-theme="dark"] .day-bucket.is-today .day-bucket-head h3,
+html[data-theme="dark"] .day-bucket.is-today .day-bucket-head span {
+  color: #ff9b94;
+}
+
+html[data-theme="dark"] .day-bucket.is-tone-0 .day-bucket-head h3,
+html[data-theme="dark"] .day-bucket.is-tone-0 .day-bucket-head span {
+  color: #9cc8e8;
+}
+
+html[data-theme="dark"] .day-bucket.is-tone-1 .day-bucket-head h3,
+html[data-theme="dark"] .day-bucket.is-tone-1 .day-bucket-head span {
+  color: #7ee0bd;
+}
+
+html[data-theme="dark"] .day-bucket.is-tone-2 .day-bucket-head h3,
+html[data-theme="dark"] .day-bucket.is-tone-2 .day-bucket-head span {
+  color: #f0c27a;
+}
+
+html[data-theme="dark"] .day-bucket.is-tone-3 {
+  border-left-color: var(--ink-soft);
+}
+
+html[data-theme="dark"] .day-bucket.is-tone-3 .day-bucket-head {
+  background: var(--chip-bg);
+  border-color: var(--line);
+}
+
+html[data-theme="dark"] .day-bucket.is-tone-3 .day-bucket-head h3 {
+  color: var(--ink);
+}
+
+html[data-theme="dark"] .day-bucket.is-tone-3 .day-bucket-head span {
+  color: var(--ink-soft);
+}
+
+html[data-theme="dark"] .day-bucket-head {
+  color: var(--ink);
+}
+
+html[data-theme="dark"] .skeleton,
+html[data-theme="dark"] .skeleton-story,
+html[data-theme="dark"] .index-card.skeleton,
+html[data-theme="dark"] .chart-card.skeleton {
+  background: linear-gradient(
+    90deg,
+    rgba(255, 255, 255, 0.04),
+    rgba(255, 255, 255, 0.1),
+    rgba(255, 255, 255, 0.04)
+  );
+}
+
+html[data-theme="dark"] .settings-form input,
+html[data-theme="dark"] .settings-form select,
+html[data-theme="dark"] .auth-form input,
+html[data-theme="dark"] .portfolio-add input,
+html[data-theme="dark"] .search input {
+  background: var(--input-bg);
+  color: var(--ink);
+  caret-color: var(--ink);
+}
+
+html[data-theme="dark"] .settings-form input::placeholder,
+html[data-theme="dark"] .auth-form input::placeholder,
+html[data-theme="dark"] .portfolio-add input::placeholder,
+html[data-theme="dark"] .search input::placeholder {
+  color: rgba(194, 208, 224, 0.55);
+}
+
+html[data-theme="dark"] #btn-portfolio-manage.is-open {
+  background: rgba(106, 168, 212, 0.14);
+  border-color: rgba(106, 168, 212, 0.35);
+  color: var(--ink);
 }
 
 @media (max-width: 720px) {
