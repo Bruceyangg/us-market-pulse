@@ -1,0 +1,10 @@
+.venv
+.git
+.tools
+data/settings.json
+data/translate_cache.json
+data/share.json
+__pycache__
+*.pyc
+.DS_Store
+.env

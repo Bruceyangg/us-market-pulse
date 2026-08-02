@@ -1,0 +1,11 @@
+services:
+  - type: web
+    name: pulse-desk
+    runtime: docker
+    plan: free
+    healthCheckPath: /api/health
+    envVars:
+      - key: PULSE_RELOAD
+        value: "0"
+      - key: PULSE_HOST
+        value: "0.0.0.0"
