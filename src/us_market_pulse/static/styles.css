@@ -272,11 +272,10 @@ main,
 }
 
 .live-brief-pin {
-  position: sticky;
-  top: 0;
-  z-index: 20;
+  position: relative;
+  z-index: 2;
   max-width: var(--workspace);
-  margin: 0 auto 1.25rem;
+  margin: 0 auto 1.75rem;
   padding: 0 1.25rem;
 }
 
@@ -434,6 +433,8 @@ main,
 }
 
 .workspace {
+  position: relative;
+  z-index: 1;
   max-width: var(--workspace);
   margin: 0 auto;
   padding: 0 1.25rem;
@@ -1950,10 +1951,6 @@ main,
   .site-footer {
     padding-left: 1rem;
     padding-right: 1rem;
-  }
-
-  .live-brief-pin {
-    top: 0;
   }
 
   .live-brief-pin-inner {
