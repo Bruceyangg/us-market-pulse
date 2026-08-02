@@ -23,6 +23,7 @@ from us_market_pulse.feeds import (
     filter_items,
     get_event,
     refresh_intel,
+    refresh_market_desk,
 )
 from us_market_pulse.portfolio import (
     add_holding,
@@ -92,16 +93,39 @@ app.mount("/static", StaticFiles(directory=BASE_DIR / "static"), name="static")
 templates = Jinja2Templates(directory=str(BASE_DIR / "templates"))
 
 
+def _page(request: Request, template: str, page: str, **extra: Any) -> HTMLResponse:
+    ctx = {
+        "page": page,
+        "categories": CATEGORIES,
+        "source_count": len(FEED_SOURCES),
+        **extra,
+    }
+    return templates.TemplateResponse(request, template, ctx)
+
+
 @app.get("/", response_class=HTMLResponse)
 async def home(request: Request) -> HTMLResponse:
-    return templates.TemplateResponse(
-        request,
-        "index.html",
-        {
-            "categories": CATEGORIES,
-            "source_count": len(FEED_SOURCES),
-        },
-    )
+    return _page(request, "desk.html", "desk")
+
+
+@app.get("/markets", response_class=HTMLResponse)
+async def markets_page(request: Request) -> HTMLResponse:
+    return _page(request, "markets.html", "markets")
+
+
+@app.get("/intel", response_class=HTMLResponse)
+async def intel_page(request: Request) -> HTMLResponse:
+    return _page(request, "intel.html", "intel")
+
+
+@app.get("/settings", response_class=HTMLResponse)
+async def settings_page(request: Request) -> HTMLResponse:
+    return _page(request, "settings.html", "settings")
+
+
+@app.get("/api/markets")
+async def api_markets(refresh: bool = Query(default=False)) -> dict[str, Any]:
+    return await refresh_market_desk(force=refresh)
 
 
 @app.get("/api/intel")

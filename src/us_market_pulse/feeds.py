@@ -160,12 +160,87 @@ _CACHE: dict[str, Any] = {
     "live_briefing": {},
     "markets": {"indices": [], "charts": [], "source": ""},
     "markets_fetched_at": 0.0,
+    "fred_fetched_at": 0.0,
     "next_fomc": None,
     "fetched_at": 0.0,
     "errors": [],
 }
 _CACHE_TTL = 300  # seconds (intel / RSS)
 _MARKETS_TTL = 90  # fresher tape for intraday charts
+_FRED_TTL = 300  # FRED indicators on the markets page
+
+
+async def refresh_market_desk(*, force: bool = False) -> dict[str, Any]:
+    """Lightweight board: Yahoo indices + FRED readouts + local calendar (no RSS)."""
+    now = time.time()
+    markets = _CACHE.get("markets") or {"indices": [], "charts": [], "source": ""}
+    indicators = list(_CACHE.get("indicators") or [])
+    markets_age = now - float(_CACHE.get("markets_fetched_at") or 0)
+    fred_age = now - float(_CACHE.get("fred_fetched_at") or _CACHE.get("fetched_at") or 0)
+    errors: list[str] = []
+
+    need_markets = force or markets_age >= _MARKETS_TTL or not (markets.get("indices") or [])
+    need_fred = force or fred_age >= _FRED_TTL or not indicators
+
+    if need_markets or need_fred:
+        async with httpx.AsyncClient(
+            headers={
+                "User-Agent": USER_AGENT,
+                "Accept": "application/json, text/plain, */*",
+            },
+            follow_redirects=True,
+        ) as client:
+            if need_markets and need_fred:
+                market_bundle, fred_results = await asyncio.gather(
+                    fetch_market_board(client),
+                    asyncio.gather(*[_fetch_fred_series(client, s) for s in FRED_SERIES]),
+                )
+                markets, market_errors = market_bundle
+                errors.extend(market_errors)
+                indicators = []
+                for row, err in fred_results:
+                    if row:
+                        indicators.append(row)
+                    if err:
+                        errors.append(err)
+                _CACHE["markets"] = markets
+                _CACHE["markets_fetched_at"] = now
+                _CACHE["indicators"] = indicators
+                _CACHE["fred_fetched_at"] = now
+            elif need_markets:
+                markets, market_errors = await fetch_market_board(client)
+                errors.extend(market_errors)
+                _CACHE["markets"] = markets
+                _CACHE["markets_fetched_at"] = now
+            else:
+                fred_results = await asyncio.gather(
+                    *[_fetch_fred_series(client, s) for s in FRED_SERIES]
+                )
+                indicators = []
+                for row, err in fred_results:
+                    if row:
+                        indicators.append(row)
+                    if err:
+                        errors.append(err)
+                _CACHE["indicators"] = indicators
+                _CACHE["fred_fetched_at"] = now
+
+    if errors:
+        merged = list(_CACHE.get("errors") or [])
+        for err in errors:
+            if err not in merged:
+                merged.append(err)
+        _CACHE["errors"] = merged[-40:]
+
+    return {
+        "markets": _CACHE.get("markets") or markets,
+        "indicators": _CACHE.get("indicators") or indicators,
+        "calendar": upcoming_calendar(limit=8),
+        "next_fomc": next_fomc(),
+        "fetched_at": now,
+        "errors": errors or list(_CACHE.get("errors") or [])[-8:],
+        "cached": not (need_markets or need_fred),
+    }
 
 
 def _parse_date(entry: dict[str, Any]) -> datetime | None:
@@ -414,6 +489,7 @@ async def refresh_intel(force: bool = False) -> dict[str, Any]:
             "live_briefing": live_briefing,
             "markets": markets,
             "markets_fetched_at": now,
+            "fred_fetched_at": now,
             "next_fomc": next_fomc(),
             "fetched_at": now,
             "errors": errors,

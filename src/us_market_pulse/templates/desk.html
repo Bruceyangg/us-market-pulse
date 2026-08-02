@@ -1,0 +1,94 @@
+{% extends "base.html" %}
+{% block title %}Pulse Desk · 持仓台{% endblock %}
+{% block status_default %}同步持仓行情…{% endblock %}
+{% block content %}
+      <section class="page-intro desk-intro">
+        <p class="page-kicker">交易台</p>
+        <h1>我的持仓</h1>
+        <p class="lede compact">
+          全部持仓走势一目了然 · 分时 / 日 / 月 / 季 / 年 · 红涨绿跌 · 云端同步
+        </p>
+      </section>
+      <div class="workspace workspace-single">
+        <div class="workspace-main">
+<section class="portfolio" id="portfolio" aria-label="我的持仓" tabindex="-1">
+        <div class="section-head portfolio-head">
+          <div>
+            <h2>我的持仓</h2>
+            <p id="portfolio-blurb">自定义股票 · 云端同步 · 分时 / 日 / 月 / 季 / 年 · 红涨绿跌</p>
+          </div>
+          <div class="portfolio-actions">
+            <button class="btn ghost" id="btn-portfolio-refresh" type="button" title="刷新行情">刷新</button>
+            <button
+              class="btn ghost"
+              id="btn-portfolio-manage"
+              type="button"
+              aria-expanded="false"
+              aria-controls="portfolio-manage"
+            >
+              管理持仓
+            </button>
+          </div>
+        </div>
+
+        <div class="portfolio-manage" id="portfolio-manage" hidden>
+          <form class="portfolio-add" id="portfolio-add-form">
+            <label>
+              <span>股票代码</span>
+              <input id="portfolio-symbol" name="symbol" type="text" placeholder="如 AAPL / NVDA / TSLA" autocomplete="off" required />
+            </label>
+            <label>
+              <span>备注名（可选）</span>
+              <input id="portfolio-name" name="name" type="text" placeholder="苹果" autocomplete="off" />
+            </label>
+            <button class="btn primary" type="submit">添加持仓</button>
+            <button class="btn ghost" id="btn-portfolio-remove" type="button">删除当前</button>
+          </form>
+          <div class="portfolio-manage-tools">
+            <button class="btn ghost" id="btn-portfolio-export" type="button">导出备份</button>
+            <label class="btn ghost file-btn">
+              导入备份
+              <input id="portfolio-import" type="file" accept="application/json,.json" hidden />
+            </label>
+            <p class="portfolio-manage-hint">↑↓ 切换持仓 · 1–5 切周期 · 云端同步跨设备</p>
+          </div>
+        </div>
+
+        <div class="portfolio-body">
+          <div class="portfolio-list-pane">
+            <div class="holding-list-head">
+              <span>名称 / 代码</span>
+              <span>走势</span>
+              <button type="button" class="sort-btn" data-psort="price" aria-label="按价格排序">
+                价格 <span class="sort-mark" aria-hidden="true"></span>
+              </button>
+              <button type="button" class="sort-btn is-active" data-psort="change_pct" aria-label="按涨跌幅排序">
+                涨跌幅 <span class="sort-mark" aria-hidden="true">↓</span>
+              </button>
+            </div>
+            <div class="holding-list" id="holding-rail" role="listbox" aria-label="持仓列表">
+              <p class="empty">还没有持仓，先添加一只美股代码。</p>
+            </div>
+            <p class="chart-tf-note" id="portfolio-tf-note">悬停预览 · 点击锁定详情图</p>
+          </div>
+          <div class="portfolio-chart-pane">
+            <div class="portfolio-chart-sticky">
+              <div class="portfolio-chart-toolbar">
+                <div class="tf-filters" id="portfolio-tf-filters" role="tablist" aria-label="持仓走势周期">
+                  <button type="button" class="filter is-active" data-ptf="intraday" aria-selected="true">分时</button>
+                  <button type="button" class="filter" data-ptf="day" aria-selected="false">日图</button>
+                  <button type="button" class="filter" data-ptf="month" aria-selected="false">月图</button>
+                  <button type="button" class="filter" data-ptf="quarter" aria-selected="false">季图</button>
+                  <button type="button" class="filter" data-ptf="year" aria-selected="false">年图</button>
+                </div>
+              </div>
+              <div class="portfolio-chart" id="portfolio-chart">
+                <p class="chart-placeholder">添加持仓后，右侧将显示分时 / K 线详情</p>
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+        </div>
+      </div>
+{% endblock %}

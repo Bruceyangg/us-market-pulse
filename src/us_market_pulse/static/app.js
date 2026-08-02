@@ -32,6 +32,7 @@ const state = {
 };
 
 const PORTFOLIO_TF_KEYS = ["intraday", "day", "month", "quarter", "year"];
+const PAGE = document.body?.dataset?.page || "desk";
 
 const els = {
   status: document.getElementById("status-line"),
@@ -142,6 +143,7 @@ function daysLabel(days) {
 }
 
 function renderIndicators(rows) {
+  if (!els.indicators) return;
   if (!rows?.length) {
     els.indicators.innerHTML =
       '<p class="empty">暂时无法读取 FRED 指标，请稍后刷新。</p>';
@@ -834,7 +836,8 @@ async function portfolioPost(path, body) {
 }
 
 function renderAgenda(events, nextFomc) {
-  if (nextFomc) {
+  if (!els.agenda) return;
+  if (nextFomc && els.agendaBlurb) {
     const sep = nextFomc.sep ? "，含点阵图/SEP" : "";
     const mood = nextFomc.sentiment_label
       ? ` · 会前评判 ${nextFomc.sentiment_label}`
@@ -882,6 +885,7 @@ function renderAgenda(events, nextFomc) {
 }
 
 function renderDigest(digest) {
+  if (!els.digest) return;
   if (!digest?.summary) {
     els.digest.textContent = "暂无主题简报";
     return;
@@ -905,11 +909,14 @@ function listLinks(rows) {
 }
 
 function renderMood(summary) {
+  if (!els.moodBoard) return;
   if (!summary) {
     els.moodBoard.innerHTML = '<p class="empty">暂无情绪统计</p>';
     return;
   }
-  els.moodBlurb.textContent = summary.blurb || "对近端情报做美股风险偏好启发式打分";
+  if (els.moodBlurb) {
+    els.moodBlurb.textContent = summary.blurb || "对近端情报做美股风险偏好启发式打分";
+  }
   const counts = summary.counts || {};
   els.moodBoard.innerHTML = `
     <div class="mood-card ${summary.tilt || "neutral"}">
@@ -929,19 +936,22 @@ function renderMood(summary) {
 }
 
 function fillSettingsForm(settings) {
-  if (!settings) return;
+  if (!settings || !els.cfgWebhook) return;
   els.cfgWebhook.value = settings.webhook_url || "";
-  els.cfgFormat.value = settings.webhook_format || "auto";
+  if (els.cfgFormat) els.cfgFormat.value = settings.webhook_format || "auto";
   if (els.cfgInterval) {
     els.cfgInterval.value = String(settings.push_interval_minutes ?? 15);
   }
-  els.cfgTimes.value = (settings.push_times || []).join(",");
-  els.cfgTz.value = settings.push_timezone || "Asia/Shanghai";
-  els.cfgEnabled.checked = Boolean(settings.push_enabled);
-  els.cfgKeywords.value = (settings.watch_keywords || []).join(",");
+  if (els.cfgTimes) els.cfgTimes.value = (settings.push_times || []).join(",");
+  if (els.cfgTz) els.cfgTz.value = settings.push_timezone || "Asia/Shanghai";
+  if (els.cfgEnabled) els.cfgEnabled.checked = Boolean(settings.push_enabled);
+  if (els.cfgKeywords) {
+    els.cfgKeywords.value = (settings.watch_keywords || []).join(",");
+  }
 }
 
 function renderPush(push) {
+  if (!els.pushStatus) return;
   if (!push) {
     els.pushStatus.textContent = "暂无推送状态";
     return;
@@ -966,9 +976,11 @@ function renderPush(push) {
   const interval = Number(push.interval_minutes || settings.push_interval_minutes || 0);
   const intervalText = interval > 0 ? `每 ${interval} 分钟` : "未设置间隔";
   const extraTimes = (push.times || []).join("、");
-  els.pushBlurb.textContent = push.enabled
-    ? `已启用定时推送：${intervalText}${extraTimes ? `；额外定点 ${extraTimes}` : ""}（${push.timezone}）`
-    : "定时推送未启用：勾选并保存后生效";
+  if (els.pushBlurb) {
+    els.pushBlurb.textContent = push.enabled
+      ? `已启用定时推送：${intervalText}${extraTimes ? `；额外定点 ${extraTimes}` : ""}（${push.timezone}）`
+      : "定时推送未启用：勾选并保存后生效";
+  }
   els.pushStatus.innerHTML = `
     <div><strong>渠道</strong>：${escapeHtml(channelText)}</div>
     <div><strong>间隔</strong>：${escapeHtml(intervalText)} · ${escapeHtml(push.timezone || "")}</div>
@@ -976,10 +988,13 @@ function renderPush(push) {
     <div><strong>盯盘词</strong>：${escapeHtml((push.watch_keywords || []).join("、") || "未设置")}</div>
     <div><strong>最近一次</strong>：${escapeHtml(lastText)}</div>
   `;
-  els.pushTest.disabled = !push.webhook_configured && !push.email_configured;
+  if (els.pushTest) {
+    els.pushTest.disabled = !push.webhook_configured && !push.email_configured;
+  }
 }
 
 function renderWatchHits(hits) {
+  if (!els.watchHits) return;
   if (!hits?.length) {
     els.watchHits.hidden = true;
     els.watchHits.innerHTML = "";
@@ -1413,6 +1428,7 @@ async function openEventById(eventId) {
 }
 
 function renderFeed(items) {
+  if (!els.feed) return;
   if (!items?.length) {
     els.feed.innerHTML =
       '<p class="empty">这个分类下暂时没有匹配结果，试试换个关键词或分类。</p>';
@@ -1489,6 +1505,37 @@ function escapeHtml(text) {
     .replaceAll('"', "&quot;");
 }
 
+function setStatus(text) {
+  if (els.status) els.status.textContent = text;
+}
+
+async function loadMarketsDesk({ force = false } = {}) {
+  setStatus(force ? "正在刷新市场…" : "同步指数与读数…");
+  if (els.refresh) els.refresh.disabled = true;
+  try {
+    const res = await fetch(`/api/markets${force ? "?refresh=true" : ""}`);
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const data = await res.json();
+    renderMarkets(data.markets);
+    renderIndicators(data.indicators);
+    renderAgenda(data.calendar, data.next_fomc);
+    const when = data.fetched_at
+      ? new Date(data.fetched_at * 1000).toLocaleTimeString("zh-CN", {
+          hour: "2-digit",
+          minute: "2-digit",
+        })
+      : "";
+    const cacheNote = data.cached ? "缓存" : "实时";
+    const errNote = data.errors?.length ? ` · ${data.errors.length} 条提示` : "";
+    setStatus(`${cacheNote}市场 ${when}${errNote}`);
+  } catch (err) {
+    console.error(err);
+    setStatus("市场同步失败，请稍后重试");
+  } finally {
+    if (els.refresh) els.refresh.disabled = false;
+  }
+}
+
 async function loadIntel({ force = false } = {}) {
   const params = new URLSearchParams({
     category: state.category,
@@ -1499,8 +1546,8 @@ async function loadIntel({ force = false } = {}) {
   if (state.watchOnly) params.set("watch_only", "true");
   if (force) params.set("refresh", "true");
 
-  els.status.textContent = force ? "正在强制刷新…" : "同步情报源中…";
-  els.refresh.disabled = true;
+  setStatus(force ? "正在强制刷新…" : "同步情报源中…");
+  if (els.refresh) els.refresh.disabled = true;
 
   try {
     const res = await fetch(`/api/intel?${params.toString()}`);
@@ -1516,23 +1563,29 @@ async function loadIntel({ force = false } = {}) {
       if (event?.id) state.eventsById[event.id] = event;
     }
 
-    renderMarkets(data.markets);
-    renderIndicators(data.indicators);
-    renderAgenda(data.calendar, data.next_fomc);
-    renderDigest(data.digest);
-    renderMood(data.sentiment_summary);
-    renderLiveBriefing(data.live_briefing);
-    renderSpotlight(data.bearish_spotlight);
-    renderBriefStrip(data);
-    renderEventThreads(data.event_threads);
-    renderDayTimeline(data.timeline);
-    renderPush(data.push);
-    renderWatchHits(data.watch_hits);
-    renderFeed(data.items);
+    if (PAGE === "markets") {
+      renderMarkets(data.markets);
+      renderIndicators(data.indicators);
+      renderAgenda(data.calendar, data.next_fomc);
+    } else {
+      renderMood(data.sentiment_summary);
+      renderLiveBriefing(data.live_briefing);
+      renderSpotlight(data.bearish_spotlight);
+      renderBriefStrip(data);
+      renderEventThreads(data.event_threads);
+      renderDayTimeline(data.timeline);
+      renderWatchHits(data.watch_hits);
+      renderFeed(data.items);
+      renderDigest(data.digest);
+      if (PAGE === "settings") renderPush(data.push);
+    }
+
     const sortNote =
       state.sort === "bearish" ? " · 利空优先" : state.sort === "bullish" ? " · 利多优先" : " · 最新优先";
-    els.blurb.textContent =
-      (CATEGORY_LABELS[state.category] || CATEGORY_LABELS.all) + sortNote;
+    if (els.blurb) {
+      els.blurb.textContent =
+        (CATEGORY_LABELS[state.category] || CATEGORY_LABELS.all) + sortNote;
+    }
 
     const when = data.fetched_at
       ? new Date(data.fetched_at * 1000).toLocaleTimeString("zh-CN", {
@@ -1543,14 +1596,34 @@ async function loadIntel({ force = false } = {}) {
     const cacheNote = data.cached ? "缓存" : "实时";
     const errNote = data.errors?.length ? ` · ${data.errors.length} 个源暂不可用` : "";
     const watchNote = data.watch_hits?.length ? ` · 盯盘 ${data.watch_hits.length}` : "";
-    els.status.textContent = `${cacheNote}更新 ${when} · ${data.count} 条${watchNote}${errNote}`;
+    setStatus(`${cacheNote}更新 ${when} · ${data.count} 条${watchNote}${errNote}`);
   } catch (err) {
     console.error(err);
-    els.status.textContent = "同步失败，请检查网络后重试";
-    els.feed.innerHTML =
-      '<p class="error-note">情报流加载失败。确认服务已启动，并可以访问外网 RSS / FRED。</p>';
+    setStatus("同步失败，请检查网络后重试");
+    if (els.feed) {
+      els.feed.innerHTML =
+        '<p class="error-note">情报流加载失败。确认服务已启动，并可以访问外网 RSS / FRED。</p>';
+    }
   } finally {
-    els.refresh.disabled = false;
+    if (els.refresh) els.refresh.disabled = false;
+  }
+}
+
+async function loadSettingsPage() {
+  setStatus("读取配置…");
+  try {
+    const [settingsRes, pushRes] = await Promise.all([
+      fetch("/api/settings"),
+      fetch("/api/push/status"),
+    ]);
+    const settings = settingsRes.ok ? await settingsRes.json() : null;
+    const push = pushRes.ok ? await pushRes.json() : null;
+    if (settings) fillSettingsForm(settings);
+    if (push) renderPush(push);
+    else if (settings) renderPush({ settings, ...push });
+    setStatus("设置已加载");
+  } catch (err) {
+    setStatus(`设置读取失败：${err.message || err}`);
   }
 }
 
@@ -1635,6 +1708,7 @@ els.holdingRail?.addEventListener("mouseleave", () => {
 });
 
 document.addEventListener("keydown", (event) => {
+  if (PAGE !== "desk") return;
   if (event.metaKey || event.ctrlKey || event.altKey) return;
   const tag = (event.target?.tagName || "").toLowerCase();
   if (tag === "input" || tag === "textarea" || event.target?.isContentEditable) {
@@ -1758,7 +1832,7 @@ els.portfolioImport?.addEventListener("change", async (event) => {
   }
 });
 
-els.filters.addEventListener("click", (event) => {
+els.filters?.addEventListener("click", (event) => {
   const btn = event.target.closest("[data-category]");
   if (!btn) return;
   state.category = btn.dataset.category;
@@ -1770,7 +1844,7 @@ els.filters.addEventListener("click", (event) => {
   loadIntel();
 });
 
-els.sortFilters.addEventListener("click", (event) => {
+els.sortFilters?.addEventListener("click", (event) => {
   const btn = event.target.closest("[data-sort]");
   if (!btn) return;
   state.sort = btn.dataset.sort;
@@ -1782,7 +1856,7 @@ els.sortFilters.addEventListener("click", (event) => {
   loadIntel();
 });
 
-els.sentimentFilters.addEventListener("click", (event) => {
+els.sentimentFilters?.addEventListener("click", (event) => {
   const watchBtn = event.target.closest("[data-watch]");
   if (watchBtn) {
     state.watchOnly = !state.watchOnly;
@@ -1803,35 +1877,39 @@ els.sentimentFilters.addEventListener("click", (event) => {
   loadIntel();
 });
 
-els.searchForm.addEventListener("submit", (event) => {
+els.searchForm?.addEventListener("submit", (event) => {
   event.preventDefault();
-  state.q = els.searchInput.value.trim();
+  state.q = (els.searchInput?.value || "").trim();
   loadIntel();
 });
 
 let searchTimer;
-els.searchInput.addEventListener("input", () => {
+els.searchInput?.addEventListener("input", () => {
   clearTimeout(searchTimer);
   searchTimer = setTimeout(() => {
-    state.q = els.searchInput.value.trim();
+    state.q = (els.searchInput?.value || "").trim();
     loadIntel();
   }, 320);
 });
 
-els.refresh.addEventListener("click", () => loadIntel({ force: true }));
+els.refresh?.addEventListener("click", () => {
+  if (PAGE === "markets") loadMarketsDesk({ force: true });
+  else loadIntel({ force: true });
+});
 
-els.saveSettings.addEventListener("click", async () => {
+els.saveSettings?.addEventListener("click", async () => {
+  if (!els.saveSettings || !els.cfgWebhook) return;
   els.saveSettings.disabled = true;
-  els.pushStatus.textContent = "正在保存设置…";
+  if (els.pushStatus) els.pushStatus.textContent = "正在保存设置…";
   try {
     const body = {
       webhook_url: els.cfgWebhook.value.trim(),
-      webhook_format: els.cfgFormat.value,
+      webhook_format: els.cfgFormat?.value || "auto",
       push_interval_minutes: Number(els.cfgInterval?.value || 15),
-      push_times: els.cfgTimes.value,
-      push_timezone: els.cfgTz.value.trim() || "Asia/Shanghai",
-      push_enabled: els.cfgEnabled.checked,
-      watch_keywords: els.cfgKeywords.value,
+      push_times: els.cfgTimes?.value || "",
+      push_timezone: (els.cfgTz?.value || "").trim() || "Asia/Shanghai",
+      push_enabled: Boolean(els.cfgEnabled?.checked),
+      watch_keywords: els.cfgKeywords?.value || "",
     };
     const res = await fetch("/api/settings", {
       method: "PUT",
@@ -1841,19 +1919,24 @@ els.saveSettings.addEventListener("click", async () => {
     const data = await res.json();
     if (!res.ok) throw new Error(data.detail || `HTTP ${res.status}`);
     renderPush(data.push);
-    els.pushStatus.innerHTML =
-      `<div><strong>已保存</strong>到本地配置。${els.pushStatus.innerHTML}</div>`;
-    await loadIntel({ force: true });
+    if (els.pushStatus) {
+      els.pushStatus.innerHTML =
+        `<div><strong>已保存</strong>到本地配置。${els.pushStatus.innerHTML}</div>`;
+    }
+    setStatus("设置已保存");
   } catch (err) {
-    els.pushStatus.textContent = `保存失败：${err.message || err}`;
+    if (els.pushStatus) {
+      els.pushStatus.textContent = `保存失败：${err.message || err}`;
+    }
   } finally {
     els.saveSettings.disabled = false;
   }
 });
 
-els.pushTest.addEventListener("click", async () => {
+els.pushTest?.addEventListener("click", async () => {
+  if (!els.pushTest) return;
   els.pushTest.disabled = true;
-  els.pushStatus.textContent = "正在发送测试推送…";
+  if (els.pushStatus) els.pushStatus.textContent = "正在发送测试推送…";
   try {
     const headers = { "Content-Type": "application/json" };
     const secret = window.localStorage.getItem("PULSE_PUSH_SECRET");
@@ -1863,12 +1946,16 @@ els.pushTest.addEventListener("click", async () => {
     if (!res.ok) {
       throw new Error(data.detail || `HTTP ${res.status}`);
     }
-    els.pushStatus.textContent = data.ok
-      ? `测试推送成功：${(data.channels || []).join(", ")}`
-      : `推送失败：${data.error || "未知错误"}`;
-    loadIntel();
+    if (els.pushStatus) {
+      els.pushStatus.textContent = data.ok
+        ? `测试推送成功：${(data.channels || []).join(", ")}`
+        : `推送失败：${data.error || "未知错误"}`;
+    }
+    await loadSettingsPage();
   } catch (err) {
-    els.pushStatus.textContent = `推送失败：${err.message || err}`;
+    if (els.pushStatus) {
+      els.pushStatus.textContent = `推送失败：${err.message || err}`;
+    }
   } finally {
     els.pushTest.disabled = false;
   }
@@ -2013,8 +2100,22 @@ document.addEventListener("keydown", (event) => {
   if (event.key === "Escape") closeEventDrawer();
 });
 
-loadIntel();
-loadPortfolio();
-loadAccessTip();
-setInterval(() => loadIntel(), 5 * 60 * 1000);
-setInterval(() => loadPortfolio({ refresh: true }), 90 * 1000);
+function bootPage() {
+  if (PAGE === "desk") {
+    loadPortfolio();
+    setInterval(() => loadPortfolio({ refresh: true }), 90 * 1000);
+  } else if (PAGE === "markets") {
+    loadMarketsDesk();
+    setInterval(() => loadMarketsDesk(), 90 * 1000);
+  } else if (PAGE === "intel") {
+    loadIntel();
+    setInterval(() => loadIntel(), 5 * 60 * 1000);
+  } else if (PAGE === "settings") {
+    loadSettingsPage();
+    loadAccessTip();
+  } else {
+    loadPortfolio();
+  }
+}
+
+bootPage();

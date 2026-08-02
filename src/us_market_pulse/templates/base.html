@@ -1,0 +1,103 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta
+      name="viewport"
+      content="width=device-width, initial-scale=1, viewport-fit=cover"
+    />
+    <meta name="theme-color" content="#102033" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="default" />
+    <meta name="apple-mobile-web-app-title" content="Pulse Desk" />
+    <title>{% block title %}Pulse Desk · 美股情报台{% endblock %}</title>
+    <meta
+      name="description"
+      content="{% block description %}追踪美股、时政、政策、美联储与国债动态的实时情报台。{% endblock %}"
+    />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,500;9..144,700&family=Sora:wght@400;500;600;700&display=swap"
+      rel="stylesheet"
+    />
+    <link rel="stylesheet" href="/static/styles.css" />
+    {% block head %}{% endblock %}
+  </head>
+  <body class="page-{{ page }}" data-page="{{ page }}">
+    <div class="atmosphere" aria-hidden="true">
+      <div class="orbit orbit-a"></div>
+      <div class="orbit orbit-b"></div>
+      <svg class="yield-wave" viewBox="0 0 1440 420" preserveAspectRatio="none">
+        <path
+          class="wave-path"
+          d="M0,260 C180,210 280,320 460,270 C640,220 760,140 940,180 C1120,220 1260,300 1440,240 L1440,420 L0,420 Z"
+        />
+      </svg>
+    </div>
+
+    <header class="site-header">
+      <a class="brand" href="/" aria-label="Pulse Desk 持仓台">
+        <span class="brand-mark" aria-hidden="true"></span>
+        <span class="brand-text">Pulse Desk</span>
+      </a>
+      <nav class="desk-nav" aria-label="台面导航">
+        <a href="/" class="{% if page == 'desk' %}is-active{% endif %}">持仓</a>
+        <a href="/markets" class="{% if page == 'markets' %}is-active{% endif %}">市场</a>
+        <a href="/intel" class="{% if page == 'intel' %}is-active{% endif %}">情报</a>
+        <a href="/settings" class="{% if page == 'settings' %}is-active{% endif %}">设置</a>
+      </nav>
+      <div class="header-meta">
+        <span class="live-dot" aria-hidden="true"></span>
+        <span id="status-line">{% block status_default %}就绪{% endblock %}</span>
+      </div>
+    </header>
+
+    <main class="page-main page-main-{{ page }}">
+      {% block content %}{% endblock %}
+    </main>
+
+    <nav class="mobile-tabbar" aria-label="移动端导航">
+      <a href="/" class="{% if page == 'desk' %}is-active{% endif %}">
+        <span class="tab-label">持仓</span>
+      </a>
+      <a href="/markets" class="{% if page == 'markets' %}is-active{% endif %}">
+        <span class="tab-label">市场</span>
+      </a>
+      <a href="/intel" class="{% if page == 'intel' %}is-active{% endif %}">
+        <span class="tab-label">情报</span>
+      </a>
+      <a href="/settings" class="{% if page == 'settings' %}is-active{% endif %}">
+        <span class="tab-label">设置</span>
+      </a>
+    </nav>
+
+    <footer class="site-footer">
+      <div>
+        <span>Pulse Desk</span>
+        <span>美股 · 时政 · 政策 · 美联储 · 国债</span>
+      </div>
+      {% block footer_extra %}{% endblock %}
+    </footer>
+
+    {% block drawer %}
+    <div class="event-drawer" id="event-drawer" hidden>
+      <div class="event-drawer-panel" role="dialog" aria-modal="true" aria-labelledby="event-drawer-title">
+        <div class="event-drawer-head">
+          <div>
+            <p class="event-drawer-kicker">事件时间线</p>
+            <h3 id="event-drawer-title">事件详情</h3>
+          </div>
+          <button type="button" class="btn ghost" id="event-drawer-close">关闭</button>
+        </div>
+        <div class="event-drawer-meta" id="event-drawer-meta"></div>
+        <ol class="event-drawer-timeline" id="event-drawer-timeline"></ol>
+      </div>
+    </div>
+    {% endblock %}
+
+    <script src="/static/app.js" type="module"></script>
+    {% block scripts %}{% endblock %}
+  </body>
+</html>

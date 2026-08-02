@@ -1,0 +1,79 @@
+{% extends "base.html" %}
+{% block title %}Pulse Desk · 设置{% endblock %}
+{% block status_default %}读取配置…{% endblock %}
+{% block content %}
+      <section class="page-intro">
+        <p class="page-kicker">系统</p>
+        <h1>推送、盯盘与分享</h1>
+        <p class="lede compact">Webhook / 关键词定时推送，以及手机访问与公网分享。</p>
+      </section>
+      <div class="workspace workspace-single">
+        <div class="workspace-main">
+<section class="push-panel" id="push" aria-label="定时推送与盯盘">
+        <div class="section-head push-head">
+          <div>
+            <h2>推送与盯盘</h2>
+            <p id="push-blurb">页面保存 Webhook / 关键词后即可定时推送；支持 Server酱、钉钉、飞书、企微</p>
+          </div>
+          <div class="cta-row">
+            <button class="btn ghost" id="btn-push-test" type="button">立即推送测试</button>
+            <button class="btn primary" id="btn-save-settings" type="button">保存设置</button>
+          </div>
+        </div>
+
+        <form class="settings-form" id="settings-form">
+          <label>
+            <span>Webhook URL</span>
+            <input id="cfg-webhook" name="webhook_url" type="url" placeholder="https://…" autocomplete="off" />
+          </label>
+          <label>
+            <span>渠道格式</span>
+            <select id="cfg-format" name="webhook_format">
+              <option value="auto">自动识别</option>
+              <option value="serverchan">Server酱</option>
+              <option value="dingtalk">钉钉</option>
+              <option value="feishu">飞书</option>
+              <option value="wecom">企业微信</option>
+              <option value="discord">Discord</option>
+              <option value="markdown">通用 Markdown</option>
+            </select>
+          </label>
+          <label>
+            <span>推送间隔（分钟）</span>
+            <input id="cfg-interval" name="push_interval_minutes" type="number" min="1" step="1" value="15" placeholder="15" />
+          </label>
+          <label>
+            <span>时区</span>
+            <input id="cfg-tz" name="push_timezone" type="text" placeholder="Asia/Shanghai" />
+          </label>
+          <label class="wide">
+            <span>额外定点推送（可选，逗号分隔，如 09:00,16:30）</span>
+            <input id="cfg-times" name="push_times" type="text" placeholder="留空则仅按间隔推送" />
+          </label>
+          <label class="check">
+            <input id="cfg-enabled" name="push_enabled" type="checkbox" />
+            <span>启用定时推送</span>
+          </label>
+          <label class="wide">
+            <span>盯盘关键词（逗号分隔，如：降息,关税,NVDA,债务上限）</span>
+            <input id="cfg-keywords" name="watch_keywords" type="text" placeholder="FOMC,关税,yield" />
+          </label>
+        </form>
+
+        <div class="push-status" id="push-status">读取推送配置中…</div>
+        <div class="watch-hits" id="watch-hits" hidden></div>
+      </section>
+        </div>
+      </div>
+{% endblock %}
+{% block footer_extra %}
+      <div class="share-bar" id="share-bar">
+        <p class="access-tip" id="access-tip">手机访问：与电脑同一 Wi-Fi 后打开下方地址</p>
+        <div class="share-actions">
+          <button class="btn primary" id="btn-share-start" type="button">开启公网分享</button>
+          <button class="btn ghost" id="btn-share-stop" type="button" hidden>关闭公网</button>
+          <button class="btn ghost" id="btn-share-copy" type="button" hidden>复制链接</button>
+        </div>
+        <p class="share-url" id="share-url" hidden></p>
+      </div>
+{% endblock %}
