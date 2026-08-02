@@ -243,6 +243,7 @@ async def build_portfolio_view(
                 "change_pct": board.get("change_pct"),
                 "as_of": board.get("as_of"),
                 "points": board.get("points") or [],
+                "series": board.get("series") or {},
                 "label": board.get("label") or h.get("name") or h["symbol"],
                 "url": board.get("url")
                 or f"https://finance.yahoo.com/quote/{h['symbol']}",

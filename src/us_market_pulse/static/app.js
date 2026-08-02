@@ -410,6 +410,61 @@ function renderMarkets(markets) {
   renderMarketCharts(data);
 }
 
+function miniCandleSvg(points, { width = 140, height = 42 } = {}) {
+  const bars = (points || []).filter(
+    (p) => p && [p.o, p.h, p.l, p.c].every((n) => n != null && !Number.isNaN(Number(n)))
+  );
+  if (bars.length < 2) return "";
+  const highs = bars.map((b) => Number(b.h));
+  const lows = bars.map((b) => Number(b.l));
+  const min = Math.min(...lows);
+  const max = Math.max(...highs);
+  const span = max - min || 1;
+  const padY = 2;
+  const slot = width / bars.length;
+  const bodyW = Math.max(1.2, Math.min(4.5, slot * 0.55));
+  const yOf = (price) => padY + (1 - (price - min) / span) * (height - padY * 2);
+  const shapes = bars
+    .map((b, i) => {
+      const o = Number(b.o);
+      const h = Number(b.h);
+      const l = Number(b.l);
+      const c = Number(b.c);
+      const up = c >= o;
+      const color = up ? TAPE_UP : TAPE_DOWN;
+      const x = i * slot + slot / 2;
+      const top = Math.min(yOf(o), yOf(c));
+      const bodyH = Math.max(1, Math.abs(yOf(c) - yOf(o)));
+      return `<line x1="${x.toFixed(1)}" y1="${yOf(h).toFixed(1)}" x2="${x.toFixed(
+        1
+      )}" y2="${yOf(l).toFixed(1)}" stroke="${color}" stroke-width="1"></line>
+      <rect x="${(x - bodyW / 2).toFixed(1)}" y="${top.toFixed(1)}" width="${bodyW.toFixed(
+        1
+      )}" height="${bodyH.toFixed(1)}" fill="${color}"></rect>`;
+    })
+    .join("");
+  return `<svg class="spark" viewBox="0 0 ${width} ${height}" preserveAspectRatio="none" aria-hidden="true">${shapes}</svg>`;
+}
+
+function holdingSparkSvg(holding, tf) {
+  const series = holding?.series?.[tf];
+  const points = series?.points || holding?.points || [];
+  const kind = series?.chart || (tf === "intraday" ? "line" : "candle");
+  const pct =
+    series?.change_pct != null ? series.change_pct : holding?.change_pct;
+  const up = !(typeof pct === "number" && pct < 0);
+  if (kind === "candle") {
+    return miniCandleSvg(points) || `<span class="empty">暂无</span>`;
+  }
+  const sparkPoints = points.map((p) =>
+    p && p.c != null && p.v == null ? { t: p.t, v: p.c } : p
+  );
+  const path = sparklinePath(sparkPoints, 140, 42, 2);
+  if (!path) return `<span class="empty">暂无</span>`;
+  const stroke = up ? TAPE_UP : TAPE_DOWN;
+  return `<svg class="spark" viewBox="0 0 140 42" preserveAspectRatio="none" aria-hidden="true"><path d="${path}" fill="none" stroke="${stroke}" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"></path></svg>`;
+}
+
 function renderPortfolioChart() {
   const data = state.portfolio || {};
   const board = data.selected_board;
@@ -423,9 +478,7 @@ function renderPortfolioChart() {
     };
 
   if (els.portfolioTfNote) {
-    els.portfolioTfNote.textContent = board
-      ? `${board.symbol || ""} · ${meta.blurb || meta.label || ""}`
-      : "选择持仓后查看走势";
+    els.portfolioTfNote.textContent = holdingsCountNote(data, meta);
   }
   if (els.portfolioTfFilters) {
     els.portfolioTfFilters.querySelectorAll("[data-ptf]").forEach((btn) => {
@@ -436,8 +489,8 @@ function renderPortfolioChart() {
   }
   if (!els.portfolioChart) return;
   if (!board) {
-    els.portfolioChart.innerHTML =
-      '<p class="empty">添加并点选持仓后，这里显示分时与 K 线。</p>';
+    els.portfolioChart.hidden = true;
+    els.portfolioChart.innerHTML = "";
     return;
   }
   const series = board.series?.[tf];
@@ -451,6 +504,7 @@ function renderPortfolioChart() {
     kind === "candle"
       ? renderCandleSvg(points)
       : renderChartSvg(points, { up });
+  els.portfolioChart.hidden = false;
   els.portfolioChart.innerHTML = `
     <div class="chart-head">
       <h3>${escapeHtml(board.label || board.symbol || "")} · ${escapeHtml(
@@ -468,10 +522,22 @@ function renderPortfolioChart() {
   `;
 }
 
+function holdingsCountNote(data, meta) {
+  const n = (data?.holdings || []).length;
+  if (!n) return "添加持仓后，这里会同时显示全部走势";
+  return `全部 ${n} 只持仓 · ${meta?.label || ""}（红涨绿跌）`;
+}
+
 function renderPortfolio(data) {
   state.portfolio = data || null;
   const holdings = data?.holdings || [];
   const selected = data?.selected || "";
+  const tf = state.portfolioTf || data?.default_tf || "intraday";
+  const meta =
+    (data?.timeframes || []).find((t) => t.id === tf) || {
+      id: tf,
+      label: tf,
+    };
 
   if (els.portfolioBlurb) {
     els.portfolioBlurb.textContent =
@@ -486,27 +552,36 @@ function renderPortfolio(data) {
     } else {
       els.holdingRail.innerHTML = holdings
         .map((h) => {
-          const pct = h.change_pct;
+          const series = h.series?.[tf];
+          const pct =
+            series?.change_pct != null ? series.change_pct : h.change_pct;
           const cls =
             pct == null || Number.isNaN(pct) ? "" : pct >= 0 ? "up" : "down";
           const pctText =
             pct == null || Number.isNaN(pct)
-              ? ""
-              : ` ${pct >= 0 ? "+" : ""}${pct.toFixed(2)}%`;
+              ? "—"
+              : `${pct >= 0 ? "+" : ""}${pct.toFixed(2)}%`;
           return `
-            <button type="button" class="holding-chip ${
+            <button type="button" class="holding-row ${
               h.symbol === selected ? "is-active" : ""
             }" data-holding="${escapeHtml(h.symbol)}">
-              <span class="sym">${escapeHtml(h.symbol)}</span>
-              <span class="nm">${escapeHtml(h.name || h.label || "")}</span>
-              <span class="px ${cls}">${
+              <span class="meta">
+                <span class="nm">${escapeHtml(h.name || h.label || h.symbol)}</span>
+                <span class="sym">${escapeHtml(h.symbol)}</span>
+              </span>
+              <span class="spark-wrap">${holdingSparkSvg(h, tf)}</span>
+              <span class="price ${cls}">${
                 h.price == null ? "—" : formatNumber(h.price, "")
-              }${pctText}</span>
+              }</span>
+              <span class="chg ${cls}">${pctText}</span>
             </button>
           `;
         })
         .join("");
     }
+  }
+  if (els.portfolioTfNote) {
+    els.portfolioTfNote.textContent = holdingsCountNote(data, meta);
   }
   renderPortfolioChart();
 }
@@ -1286,7 +1361,8 @@ els.portfolioTfFilters?.addEventListener("click", (event) => {
   const btn = event.target.closest("[data-ptf]");
   if (!btn) return;
   state.portfolioTf = btn.dataset.ptf;
-  renderPortfolioChart();
+  if (state.portfolio) renderPortfolio(state.portfolio);
+  else renderPortfolioChart();
 });
 
 els.holdingRail?.addEventListener("click", async (event) => {
