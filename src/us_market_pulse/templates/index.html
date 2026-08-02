@@ -97,6 +97,52 @@
         </div>
       </section>
 
+      <section class="portfolio" id="portfolio" aria-label="我的持仓">
+        <div class="section-head portfolio-head">
+          <div>
+            <h2>我的持仓</h2>
+            <p id="portfolio-blurb">自定义股票 · 云端同步 · 分时 / 日 / 月 / 季 / 年</p>
+          </div>
+          <div class="portfolio-actions">
+            <button class="btn ghost" id="btn-portfolio-refresh" type="button">刷新行情</button>
+            <button class="btn ghost" id="btn-portfolio-export" type="button">导出备份</button>
+            <label class="btn ghost file-btn">
+              导入备份
+              <input id="portfolio-import" type="file" accept="application/json,.json" hidden />
+            </label>
+          </div>
+        </div>
+
+        <form class="portfolio-add" id="portfolio-add-form">
+          <label>
+            <span>股票代码</span>
+            <input id="portfolio-symbol" name="symbol" type="text" placeholder="如 AAPL / NVDA / TSLA" autocomplete="off" required />
+          </label>
+          <label>
+            <span>备注名（可选）</span>
+            <input id="portfolio-name" name="name" type="text" placeholder="苹果" autocomplete="off" />
+          </label>
+          <button class="btn primary" type="submit">添加持仓</button>
+          <button class="btn ghost" id="btn-portfolio-remove" type="button">删除当前</button>
+        </form>
+
+        <div class="holding-rail" id="holding-rail">
+          <p class="empty">还没有持仓，先添加一只美股代码。</p>
+        </div>
+
+        <div class="tf-filters" id="portfolio-tf-filters" role="tablist" aria-label="持仓走势周期">
+          <button type="button" class="filter is-active" data-ptf="intraday" aria-selected="true">分时</button>
+          <button type="button" class="filter" data-ptf="day" aria-selected="false">日图</button>
+          <button type="button" class="filter" data-ptf="month" aria-selected="false">月图</button>
+          <button type="button" class="filter" data-ptf="quarter" aria-selected="false">季图</button>
+          <button type="button" class="filter" data-ptf="year" aria-selected="false">年图</button>
+        </div>
+        <p class="chart-tf-note" id="portfolio-tf-note">选择持仓后查看走势</p>
+        <div class="portfolio-chart" id="portfolio-chart">
+          <p class="empty">添加并点选持仓后，这里显示分时与 K 线。</p>
+        </div>
+      </section>
+
       <section class="desk" id="desk" aria-label="关键利率与风险指标">
         <div class="section-head">
           <h2>交易台读数</h2>

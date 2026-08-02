@@ -11,5 +11,6 @@ build/
 data/settings.json
 data/translate_cache.json
 data/share.json
+data/portfolio.json
 .tools/
 .env

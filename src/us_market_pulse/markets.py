@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+from datetime import datetime, timezone
 from typing import Any
 from urllib.parse import quote
 
@@ -97,6 +98,50 @@ TIMEFRAMES: list[dict[str, Any]] = [
 ]
 
 CHART_INDEX_IDS = {"spx", "dji", "ixic", "vix", "tnx"}
+
+# Holdings: 分时 / 日 / 月 / 季 / 年
+PORTFOLIO_TIMEFRAMES: list[dict[str, Any]] = [
+    {
+        "id": "intraday",
+        "label": "分时",
+        "blurb": "当日分时（含盘前盘后，约 5 分钟点，延迟报价）",
+        "range": "1d",
+        "interval": "5m",
+        "max_points": 160,
+        "chart": "line",
+        "prepost": True,
+    },
+    {
+        "id": "day",
+        "label": "日图",
+        "blurb": "近 1 年日 K 线（红涨绿跌）",
+        "range": "1y",
+        "interval": "1d",
+        "max_points": 160,
+        "chart": "candle",
+        "prepost": False,
+    },
+    {
+        "id": "month",
+        "label": "月图",
+        "blurb": "历史月 K 线（红涨绿跌）",
+        "range": "max",
+        "interval": "1mo",
+        "max_points": 180,
+        "chart": "candle",
+        "prepost": False,
+    },
+    {
+        "id": "quarter",
+        "label": "季图",
+        "blurb": "历史季 K 线（红涨绿跌）",
+        "range": "max",
+        "interval": "3mo",
+        "max_points": 120,
+        "chart": "candle",
+        "prepost": False,
+    },
+]
 
 
 def _yahoo_chart_url(
@@ -259,17 +304,65 @@ async def _fetch_yahoo_series(
         return None, f"{spec['label']}/{tf['label']}: {exc}"
 
 
-async def _fetch_index_bundle(
-    client: httpx.AsyncClient, spec: dict[str, str]
+def _aggregate_yearly_candles(month_points: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Build yearly OHLC bars from monthly candles."""
+    buckets: dict[int, list[dict[str, Any]]] = {}
+    for bar in month_points:
+        if bar.get("c") is None or not bar.get("t"):
+            continue
+        year = datetime.fromtimestamp(int(bar["t"]), tz=timezone.utc).year
+        buckets.setdefault(year, []).append(bar)
+    yearly: list[dict[str, Any]] = []
+    for year in sorted(buckets):
+        rows = buckets[year]
+        o = float(rows[0]["o"])
+        c = float(rows[-1]["c"])
+        h = max(float(r["h"]) for r in rows)
+        l = min(float(r["l"]) for r in rows)
+        vol = sum(float(r["v"] or 0) for r in rows) or None
+        yearly.append(
+            {
+                "t": int(rows[0]["t"]),
+                "o": round(o, 6),
+                "h": round(h, 6),
+                "l": round(l, 6),
+                "c": round(c, 6),
+                "v": round(vol, 2) if vol is not None else None,
+            }
+        )
+    return yearly
+
+
+async def fetch_symbol_bundle(
+    client: httpx.AsyncClient,
+    *,
+    symbol: str,
+    label: str | None = None,
+    short: str | None = None,
+    unit: str = "",
+    timeframes: list[dict[str, Any]] | None = None,
+    include_yearly: bool = False,
 ) -> tuple[dict[str, Any] | None, list[str]]:
+    """Fetch multi-timeframe board row for any Yahoo symbol."""
+    sym = (symbol or "").strip().upper()
+    if not sym:
+        return None, ["empty symbol"]
+    spec = {
+        "id": sym.lower().replace("^", "").replace(".", "-"),
+        "symbol": sym,
+        "label": (label or sym).strip() or sym,
+        "short": (short or sym).strip() or sym,
+        "unit": unit,
+    }
+    frames = list(timeframes or TIMEFRAMES)
     errors: list[str] = []
     results = await asyncio.gather(
-        *[_fetch_yahoo_series(client, spec, tf) for tf in TIMEFRAMES]
+        *[_fetch_yahoo_series(client, spec, tf) for tf in frames]
     )
 
     series: dict[str, Any] = {}
     quote_seed: dict[str, Any] | None = None
-    for (row, err), tf in zip(results, TIMEFRAMES, strict=True):
+    for (row, err), tf in zip(results, frames, strict=True):
         if err:
             errors.append(err)
         if not row:
@@ -287,6 +380,22 @@ async def _fetch_index_bundle(
         }
         if quote_seed is None or tf["id"] == "intraday":
             quote_seed = row
+
+    if include_yearly and series.get("month", {}).get("points"):
+        year_points = _aggregate_yearly_candles(series["month"]["points"])
+        if year_points:
+            change, change_pct = _series_change(year_points, "candle")
+            series["year"] = {
+                "tf": "year",
+                "label": "年图",
+                "blurb": "按年聚合 K 线（红涨绿跌）",
+                "range": "max",
+                "interval": "1y",
+                "chart": "candle",
+                "points": year_points,
+                "change": change,
+                "change_pct": change_pct,
+            }
 
     if not series or quote_seed is None:
         return None, errors or [f"{spec['label']}: no series"]
@@ -310,6 +419,20 @@ async def _fetch_index_bundle(
         "series": series,
         "url": f"https://finance.yahoo.com/quote/{quote(spec['symbol'], safe='')}",
     }, errors
+
+
+async def _fetch_index_bundle(
+    client: httpx.AsyncClient, spec: dict[str, str]
+) -> tuple[dict[str, Any] | None, list[str]]:
+    return await fetch_symbol_bundle(
+        client,
+        symbol=spec["symbol"],
+        label=spec.get("label"),
+        short=spec.get("short"),
+        unit=spec.get("unit") or "",
+        timeframes=TIMEFRAMES,
+        include_yearly=False,
+    )
 
 
 async def fetch_market_board(client: httpx.AsyncClient) -> tuple[dict[str, Any], list[str]]:

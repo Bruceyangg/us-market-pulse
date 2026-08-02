@@ -445,6 +445,7 @@ main,
 }
 
 .workspace-main .markets,
+.workspace-main .portfolio,
 .workspace-main .desk,
 .workspace-main .agenda,
 .workspace-main .mood,
@@ -578,6 +579,7 @@ main,
 }
 
 .markets,
+.portfolio,
 .desk,
 .agenda,
 .mood,
@@ -751,6 +753,146 @@ main,
   );
   background-size: 200% 100%;
   animation: shimmer 1.4s linear infinite;
+}
+
+.portfolio-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 0.85rem 1rem;
+}
+
+.portfolio-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.45rem;
+}
+
+.file-btn {
+  display: inline-flex;
+  align-items: center;
+  cursor: pointer;
+}
+
+.portfolio-add {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr)) auto auto;
+  gap: 0.65rem;
+  margin: 0 0 1rem;
+  align-items: end;
+}
+
+.portfolio-add label {
+  display: grid;
+  gap: 0.3rem;
+}
+
+.portfolio-add label span {
+  font-size: 0.78rem;
+  color: var(--ink-soft);
+}
+
+.portfolio-add input {
+  width: 100%;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  padding: 0.7rem 0.85rem;
+  font: inherit;
+  background: rgba(255, 255, 255, 0.75);
+}
+
+.holding-rail {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.55rem;
+  margin-bottom: 0.9rem;
+}
+
+.holding-chip {
+  appearance: none;
+  border: 1px solid var(--line);
+  background: rgba(255, 255, 255, 0.78);
+  border-radius: 14px;
+  padding: 0.65rem 0.8rem;
+  min-width: 7.5rem;
+  text-align: left;
+  cursor: pointer;
+  font: inherit;
+  transition: border-color 0.2s ease, transform 0.2s ease;
+}
+
+.holding-chip:hover {
+  transform: translateY(-1px);
+}
+
+.holding-chip.is-active {
+  border-color: rgba(180, 35, 24, 0.35);
+  box-shadow: 0 0 0 3px var(--bear-soft);
+}
+
+.holding-chip .sym {
+  display: block;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+}
+
+.holding-chip .nm {
+  display: block;
+  margin-top: 0.15rem;
+  font-size: 0.75rem;
+  color: var(--ink-soft);
+}
+
+.holding-chip .px {
+  display: block;
+  margin-top: 0.35rem;
+  font-variant-numeric: tabular-nums;
+  font-size: 0.9rem;
+}
+
+.holding-chip .px.up {
+  color: #d92b2b;
+}
+
+.holding-chip .px.down {
+  color: var(--signal);
+}
+
+.portfolio-chart {
+  margin-top: 0.75rem;
+  padding: 1rem 1.1rem 0.95rem;
+  border-radius: calc(var(--radius) + 2px);
+  background: var(--panel);
+  border: 1px solid var(--line);
+  box-shadow: var(--shadow);
+  min-height: 12rem;
+}
+
+.portfolio-chart .chart-head {
+  display: flex;
+  justify-content: space-between;
+  gap: 0.75rem;
+  align-items: baseline;
+  margin-bottom: 0.55rem;
+}
+
+.portfolio-chart .chart-head h3 {
+  margin: 0;
+  font-family: var(--font-display);
+  font-size: 1.15rem;
+}
+
+.portfolio-chart svg {
+  width: 100%;
+  height: 180px;
+  display: block;
+}
+
+@media (max-width: 800px) {
+  .portfolio-add {
+    grid-template-columns: 1fr;
+  }
 }
 
 @media (max-width: 1100px) {
@@ -2102,6 +2244,7 @@ main,
   .live-brief-pin,
   .workspace,
   .markets,
+  .portfolio,
   .desk,
   .agenda,
   .mood,

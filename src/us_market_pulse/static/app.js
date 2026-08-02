@@ -24,6 +24,8 @@ const state = {
   eventsById: {},
   marketTf: "intraday",
   markets: null,
+  portfolio: null,
+  portfolioTf: "intraday",
 };
 
 const els = {
@@ -34,6 +36,18 @@ const els = {
   marketsBlurb: document.getElementById("markets-blurb"),
   chartTfNote: document.getElementById("chart-tf-note"),
   tfFilters: document.getElementById("tf-filters"),
+  portfolioBlurb: document.getElementById("portfolio-blurb"),
+  holdingRail: document.getElementById("holding-rail"),
+  portfolioChart: document.getElementById("portfolio-chart"),
+  portfolioTfFilters: document.getElementById("portfolio-tf-filters"),
+  portfolioTfNote: document.getElementById("portfolio-tf-note"),
+  portfolioAddForm: document.getElementById("portfolio-add-form"),
+  portfolioSymbol: document.getElementById("portfolio-symbol"),
+  portfolioName: document.getElementById("portfolio-name"),
+  portfolioRemove: document.getElementById("btn-portfolio-remove"),
+  portfolioRefresh: document.getElementById("btn-portfolio-refresh"),
+  portfolioExport: document.getElementById("btn-portfolio-export"),
+  portfolioImport: document.getElementById("portfolio-import"),
   agenda: document.getElementById("agenda-rail"),
   agendaBlurb: document.getElementById("agenda-blurb"),
   digest: document.getElementById("digest-line"),
@@ -394,6 +408,148 @@ function renderMarkets(markets) {
   }
 
   renderMarketCharts(data);
+}
+
+function renderPortfolioChart() {
+  const data = state.portfolio || {};
+  const board = data.selected_board;
+  const tf = state.portfolioTf || data.default_tf || "intraday";
+  const meta =
+    (data.timeframes || []).find((t) => t.id === tf) || {
+      id: tf,
+      label: tf,
+      blurb: "",
+      chart: tf === "intraday" ? "line" : "candle",
+    };
+
+  if (els.portfolioTfNote) {
+    els.portfolioTfNote.textContent = board
+      ? `${board.symbol || ""} · ${meta.blurb || meta.label || ""}`
+      : "选择持仓后查看走势";
+  }
+  if (els.portfolioTfFilters) {
+    els.portfolioTfFilters.querySelectorAll("[data-ptf]").forEach((btn) => {
+      const on = btn.getAttribute("data-ptf") === tf;
+      btn.classList.toggle("is-active", on);
+      btn.setAttribute("aria-selected", on ? "true" : "false");
+    });
+  }
+  if (!els.portfolioChart) return;
+  if (!board) {
+    els.portfolioChart.innerHTML =
+      '<p class="empty">添加并点选持仓后，这里显示分时与 K 线。</p>';
+    return;
+  }
+  const series = board.series?.[tf];
+  const points = series?.points || [];
+  const pct = series?.change_pct;
+  const up = !(typeof pct === "number" && pct < 0);
+  const pctText =
+    typeof pct === "number" ? `${pct >= 0 ? "+" : ""}${pct.toFixed(2)}%` : "—";
+  const kind = series?.chart || meta.chart || (tf === "intraday" ? "line" : "candle");
+  const svg =
+    kind === "candle"
+      ? renderCandleSvg(points)
+      : renderChartSvg(points, { up });
+  els.portfolioChart.innerHTML = `
+    <div class="chart-head">
+      <h3>${escapeHtml(board.label || board.symbol || "")} · ${escapeHtml(
+        board.symbol || ""
+      )}</h3>
+      <span class="range chg ${up ? "up" : "down"}">${escapeHtml(
+        meta.label || ""
+      )} · 区间 ${pctText}</span>
+    </div>
+    ${svg}
+    <div class="chart-foot">${escapeHtml(series?.blurb || meta.blurb || "")} · 现价 ${formatNumber(
+      board.price,
+      board.unit || ""
+    )}</div>
+  `;
+}
+
+function renderPortfolio(data) {
+  state.portfolio = data || null;
+  const holdings = data?.holdings || [];
+  const selected = data?.selected || "";
+
+  if (els.portfolioBlurb) {
+    els.portfolioBlurb.textContent =
+      data?.note ||
+      `自定义股票 · 云端同步 · 最多 ${data?.max_holdings || 20} 只`;
+  }
+
+  if (els.holdingRail) {
+    if (!holdings.length) {
+      els.holdingRail.innerHTML =
+        '<p class="empty">还没有持仓，先添加一只美股代码。</p>';
+    } else {
+      els.holdingRail.innerHTML = holdings
+        .map((h) => {
+          const pct = h.change_pct;
+          const cls =
+            pct == null || Number.isNaN(pct) ? "" : pct >= 0 ? "up" : "down";
+          const pctText =
+            pct == null || Number.isNaN(pct)
+              ? ""
+              : ` ${pct >= 0 ? "+" : ""}${pct.toFixed(2)}%`;
+          return `
+            <button type="button" class="holding-chip ${
+              h.symbol === selected ? "is-active" : ""
+            }" data-holding="${escapeHtml(h.symbol)}">
+              <span class="sym">${escapeHtml(h.symbol)}</span>
+              <span class="nm">${escapeHtml(h.name || h.label || "")}</span>
+              <span class="px ${cls}">${
+                h.price == null ? "—" : formatNumber(h.price, "")
+              }${pctText}</span>
+            </button>
+          `;
+        })
+        .join("");
+    }
+  }
+  renderPortfolioChart();
+}
+
+async function loadPortfolio({ refresh = false } = {}) {
+  try {
+    const res = await fetch(`/api/portfolio${refresh ? "?refresh=true" : ""}`);
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const data = await res.json();
+    renderPortfolio(data);
+    // mirror for same-browser recovery
+    try {
+      localStorage.setItem(
+        "pulse_portfolio_backup",
+        JSON.stringify({
+          holdings: (data.holdings || []).map((h) => ({
+            symbol: h.symbol,
+            name: h.name,
+            note: h.note,
+          })),
+          selected: data.selected || "",
+          saved_at: Date.now(),
+        })
+      );
+    } catch {
+      /* ignore */
+    }
+  } catch (err) {
+    if (els.portfolioBlurb) {
+      els.portfolioBlurb.textContent = `持仓加载失败：${err.message || err}`;
+    }
+  }
+}
+
+async function portfolioPost(path, body) {
+  const res = await fetch(path, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data.detail || `HTTP ${res.status}`);
+  return data;
 }
 
 function renderAgenda(events, nextFomc) {
@@ -1126,6 +1282,106 @@ els.tfFilters?.addEventListener("click", (event) => {
   }
 });
 
+els.portfolioTfFilters?.addEventListener("click", (event) => {
+  const btn = event.target.closest("[data-ptf]");
+  if (!btn) return;
+  state.portfolioTf = btn.dataset.ptf;
+  renderPortfolioChart();
+});
+
+els.holdingRail?.addEventListener("click", async (event) => {
+  const btn = event.target.closest("[data-holding]");
+  if (!btn) return;
+  const symbol = btn.getAttribute("data-holding");
+  try {
+    const data = await portfolioPost("/api/portfolio/select", { symbol });
+    renderPortfolio(data.portfolio);
+  } catch (err) {
+    if (els.portfolioBlurb) {
+      els.portfolioBlurb.textContent = `切换失败：${err.message || err}`;
+    }
+  }
+});
+
+els.portfolioAddForm?.addEventListener("submit", async (event) => {
+  event.preventDefault();
+  const symbol = (els.portfolioSymbol?.value || "").trim();
+  const name = (els.portfolioName?.value || "").trim();
+  if (!symbol) return;
+  try {
+    const data = await portfolioPost("/api/portfolio/add", { symbol, name });
+    if (els.portfolioSymbol) els.portfolioSymbol.value = "";
+    if (els.portfolioName) els.portfolioName.value = "";
+    state.portfolioTf = "intraday";
+    renderPortfolio(data.portfolio);
+  } catch (err) {
+    if (els.portfolioBlurb) {
+      els.portfolioBlurb.textContent = `添加失败：${err.message || err}`;
+    }
+  }
+});
+
+els.portfolioRemove?.addEventListener("click", async () => {
+  const symbol = state.portfolio?.selected;
+  if (!symbol) return;
+  if (!confirm(`确定删除持仓 ${symbol}？`)) return;
+  try {
+    const data = await portfolioPost("/api/portfolio/remove", { symbol });
+    renderPortfolio(data.portfolio);
+  } catch (err) {
+    if (els.portfolioBlurb) {
+      els.portfolioBlurb.textContent = `删除失败：${err.message || err}`;
+    }
+  }
+});
+
+els.portfolioRefresh?.addEventListener("click", () => loadPortfolio({ refresh: true }));
+
+els.portfolioExport?.addEventListener("click", async () => {
+  try {
+    const res = await fetch("/api/portfolio/export");
+    const data = await res.json();
+    const blob = new Blob([JSON.stringify(data.portfolio || {}, null, 2)], {
+      type: "application/json",
+    });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = "pulse-portfolio.json";
+    a.click();
+    URL.revokeObjectURL(url);
+  } catch (err) {
+    if (els.portfolioBlurb) {
+      els.portfolioBlurb.textContent = `导出失败：${err.message || err}`;
+    }
+  }
+});
+
+els.portfolioImport?.addEventListener("change", async (event) => {
+  const file = event.target.files?.[0];
+  if (!file) return;
+  try {
+    const text = await file.text();
+    const parsed = JSON.parse(text);
+    const holdings = parsed.holdings || parsed.portfolio?.holdings || [];
+    const selected = parsed.selected || parsed.portfolio?.selected || "";
+    const res = await fetch("/api/portfolio", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ holdings, selected }),
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.detail || `HTTP ${res.status}`);
+    renderPortfolio(data.portfolio);
+  } catch (err) {
+    if (els.portfolioBlurb) {
+      els.portfolioBlurb.textContent = `导入失败：${err.message || err}`;
+    }
+  } finally {
+    event.target.value = "";
+  }
+});
+
 els.filters.addEventListener("click", (event) => {
   const btn = event.target.closest("[data-category]");
   if (!btn) return;
@@ -1382,5 +1638,7 @@ document.addEventListener("keydown", (event) => {
 });
 
 loadIntel();
+loadPortfolio();
 loadAccessTip();
 setInterval(() => loadIntel(), 5 * 60 * 1000);
+setInterval(() => loadPortfolio({ refresh: true }), 90 * 1000);

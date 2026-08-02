@@ -24,6 +24,14 @@ from us_market_pulse.feeds import (
     get_event,
     refresh_intel,
 )
+from us_market_pulse.portfolio import (
+    add_holding,
+    build_portfolio_view,
+    load_portfolio,
+    remove_holding,
+    replace_holdings,
+    select_holding,
+)
 from us_market_pulse.push import push_status, scheduler_loop, send_digest
 from us_market_pulse import share as public_share
 
@@ -50,6 +58,17 @@ class SettingsUpdate(BaseModel):
     smtp_to: str | None = None
     smtp_from: str | None = None
     watch_keywords: list[str] | str | None = None
+
+
+class HoldingIn(BaseModel):
+    symbol: str
+    name: str | None = None
+    note: str | None = None
+
+
+class PortfolioReplace(BaseModel):
+    holdings: list[HoldingIn]
+    selected: str | None = None
 
 
 @asynccontextmanager
@@ -185,6 +204,55 @@ async def api_push_test(
             detail="未配置推送渠道。请先在页面保存 Webhook 或邮件设置。",
         )
     return await send_digest(force_refresh=True, settings=settings, slot="manual")
+
+
+@app.get("/api/portfolio")
+async def api_portfolio(refresh: bool = Query(default=False)) -> dict[str, Any]:
+    return await build_portfolio_view(force_refresh=refresh)
+
+
+@app.post("/api/portfolio/add")
+async def api_portfolio_add(body: HoldingIn) -> dict[str, Any]:
+    try:
+        add_holding(body.symbol, name=body.name or "", note=body.note or "")
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    view = await build_portfolio_view(force_refresh=True)
+    return {"ok": True, "portfolio": view}
+
+
+@app.post("/api/portfolio/remove")
+async def api_portfolio_remove(body: HoldingIn) -> dict[str, Any]:
+    try:
+        remove_holding(body.symbol)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    view = await build_portfolio_view(force_refresh=False)
+    return {"ok": True, "portfolio": view}
+
+
+@app.post("/api/portfolio/select")
+async def api_portfolio_select(body: HoldingIn) -> dict[str, Any]:
+    try:
+        select_holding(body.symbol)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    view = await build_portfolio_view(force_refresh=False)
+    return {"ok": True, "portfolio": view}
+
+
+@app.put("/api/portfolio")
+async def api_portfolio_replace(body: PortfolioReplace) -> dict[str, Any]:
+    rows = [h.model_dump() for h in body.holdings]
+    replace_holdings(rows, selected=body.selected or "")
+    view = await build_portfolio_view(force_refresh=True)
+    return {"ok": True, "portfolio": view}
+
+
+@app.get("/api/portfolio/export")
+async def api_portfolio_export() -> dict[str, Any]:
+    data = load_portfolio()
+    return {"ok": True, "portfolio": data}
 
 
 @app.get("/api/health")
