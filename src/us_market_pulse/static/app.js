@@ -22,6 +22,8 @@ const state = {
   watchOnly: false,
   q: "",
   eventsById: {},
+  marketTf: "h24",
+  markets: null,
 };
 
 const els = {
@@ -30,6 +32,8 @@ const els = {
   indexGrid: document.getElementById("index-grid"),
   chartGrid: document.getElementById("chart-grid"),
   marketsBlurb: document.getElementById("markets-blurb"),
+  chartTfNote: document.getElementById("chart-tf-note"),
+  tfFilters: document.getElementById("tf-filters"),
   agenda: document.getElementById("agenda-rail"),
   agendaBlurb: document.getElementById("agenda-blurb"),
   digest: document.getElementById("digest-line"),
@@ -185,14 +189,81 @@ function renderChartSvg(points, { up = true } = {}) {
   `;
 }
 
+function activeMarketTf(data) {
+  const tf = state.marketTf || data?.default_tf || "h24";
+  const known = (data?.timeframes || []).map((t) => t.id);
+  if (known.length && !known.includes(tf)) return data.default_tf || known[0];
+  return tf;
+}
+
+function tfMeta(data, tfId) {
+  return (data?.timeframes || []).find((t) => t.id === tfId) || {
+    id: tfId,
+    label: tfId,
+    blurb: "",
+  };
+}
+
+function renderMarketCharts(data) {
+  if (!els.chartGrid) return;
+  const tf = activeMarketTf(data);
+  const meta = tfMeta(data, tf);
+  const charts =
+    (data?.charts_by_tf && data.charts_by_tf[tf]) ||
+    data?.charts ||
+    [];
+
+  if (els.chartTfNote) {
+    els.chartTfNote.textContent = meta.blurb || meta.label || "";
+  }
+
+  if (els.tfFilters) {
+    els.tfFilters.querySelectorAll("[data-tf]").forEach((btn) => {
+      const on = btn.getAttribute("data-tf") === tf;
+      btn.classList.toggle("is-active", on);
+      btn.setAttribute("aria-selected", on ? "true" : "false");
+    });
+  }
+
+  if (!charts.length) {
+    els.chartGrid.innerHTML =
+      '<p class="empty">该周期暂无走势数据，请稍后刷新或切换其他周期。</p>';
+    return;
+  }
+
+  els.chartGrid.innerHTML = charts
+    .map((chart) => {
+      const pct = chart.change_pct;
+      const up = !(typeof pct === "number" && pct < 0);
+      const pctText =
+        typeof pct === "number"
+          ? `${pct >= 0 ? "+" : ""}${pct.toFixed(2)}%`
+          : "—";
+      return `
+        <article class="chart-card">
+          <div class="chart-head">
+            <h3>${escapeHtml(chart.label || chart.short || "")}</h3>
+            <span class="range">${escapeHtml(meta.label || "")} · 区间 ${pctText}</span>
+          </div>
+          ${renderChartSvg(chart.points || [], { up })}
+          <div class="chart-foot">${escapeHtml(chart.blurb || meta.blurb || "")}</div>
+        </article>
+      `;
+    })
+    .join("");
+}
+
 function renderMarkets(markets) {
   const data = markets || {};
+  state.markets = data;
+  if (!state.marketTf) state.marketTf = data.default_tf || "h24";
   const indices = data.indices || [];
-  const charts = data.charts || [];
+  const tf = activeMarketTf(data);
+
   if (els.marketsBlurb) {
     els.marketsBlurb.textContent = data.source
-      ? `来源 ${data.source} · 近 3 个月日线走势（延迟报价，仅供研究）`
-      : "标普 / 道指 / 纳指 / VIX 与近 3 个月走势";
+      ? `来源 ${data.source} · 可切换 24小时 / 日 / 周 / 月 / 年（延迟报价，仅供研究）`
+      : "24 小时分时 · 日 / 周 / 月 / 年走势";
   }
 
   if (els.indexGrid) {
@@ -215,7 +286,13 @@ function renderMarkets(markets) {
               : ` · ${row.change >= 0 ? "+" : ""}${Number(row.change).toFixed(
                   row.unit === "%" ? 3 : 2
                 )}`;
-          const path = sparklinePath(row.points || []);
+          const sparkPoints =
+            row.series?.[tf]?.points ||
+            row.series?.h24?.points ||
+            row.series?.day?.points ||
+            row.points ||
+            [];
+          const path = sparklinePath(sparkPoints);
           const stroke = cls === "down" ? "#b42318" : "#0f8a6a";
           return `
             <a class="index-card" href="${escapeHtml(
@@ -237,32 +314,7 @@ function renderMarkets(markets) {
     }
   }
 
-  if (els.chartGrid) {
-    if (!charts.length) {
-      els.chartGrid.innerHTML = "";
-      return;
-    }
-    els.chartGrid.innerHTML = charts
-      .map((chart) => {
-        const pct = chart.change_pct;
-        const up = !(typeof pct === "number" && pct < 0);
-        const pctText =
-          typeof pct === "number"
-            ? `${pct >= 0 ? "+" : ""}${pct.toFixed(2)}%`
-            : "—";
-        return `
-          <article class="chart-card">
-            <div class="chart-head">
-              <h3>${escapeHtml(chart.label || chart.short || "")}</h3>
-              <span class="range">近 3 个月 · ${pctText}</span>
-            </div>
-            ${renderChartSvg(chart.points || [], { up })}
-            <div class="chart-foot">${escapeHtml(chart.short || "")} 日线收盘走势</div>
-          </article>
-        `;
-      })
-      .join("");
-  }
+  renderMarketCharts(data);
 }
 
 function renderAgenda(events, nextFomc) {
@@ -985,6 +1037,15 @@ async function loadIntel({ force = false } = {}) {
     els.refresh.disabled = false;
   }
 }
+
+els.tfFilters?.addEventListener("click", (event) => {
+  const btn = event.target.closest("[data-tf]");
+  if (!btn) return;
+  state.marketTf = btn.dataset.tf;
+  if (state.markets) {
+    renderMarkets(state.markets);
+  }
+});
 
 els.filters.addEventListener("click", (event) => {
   const btn = event.target.closest("[data-category]");

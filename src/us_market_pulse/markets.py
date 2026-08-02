@@ -1,7 +1,8 @@
-"""US equity index quotes and sparkline histories (Yahoo chart API)."""
+"""US equity index quotes and multi-timeframe chart histories."""
 
 from __future__ import annotations
 
+import asyncio
 from typing import Any
 from urllib.parse import quote
 
@@ -41,21 +42,69 @@ INDEX_SPECS: list[dict[str, str]] = [
     },
 ]
 
-CHART_RANGE = "3mo"
-CHART_INTERVAL = "1d"
+# UI timeframes: 24h / daily / weekly / monthly / yearly
+TIMEFRAMES: list[dict[str, str]] = [
+    {
+        "id": "h24",
+        "label": "24小时",
+        "blurb": "近 24 小时分时（约 5 分钟点）",
+        "range": "1d",
+        "interval": "5m",
+        "max_points": 120,
+    },
+    {
+        "id": "day",
+        "label": "日图",
+        "blurb": "近 1 年日线",
+        "range": "1y",
+        "interval": "1d",
+        "max_points": 160,
+    },
+    {
+        "id": "week",
+        "label": "周图",
+        "blurb": "近 5 年周线",
+        "range": "5y",
+        "interval": "1wk",
+        "max_points": 160,
+    },
+    {
+        "id": "month",
+        "label": "月图",
+        "blurb": "历史月线",
+        "range": "max",
+        "interval": "1mo",
+        "max_points": 180,
+    },
+    {
+        "id": "year",
+        "label": "年图",
+        "blurb": "历史季线（年景）",
+        "range": "max",
+        "interval": "3mo",
+        "max_points": 120,
+    },
+]
+
+CHART_INDEX_IDS = {"spx", "dji", "ixic", "vix", "tnx"}
 
 
-def _yahoo_chart_url(symbol: str) -> str:
+def _yahoo_chart_url(symbol: str, *, range_: str, interval: str) -> str:
     enc = quote(symbol, safe="")
     return (
         f"https://query1.finance.yahoo.com/v8/finance/chart/{enc}"
-        f"?range={CHART_RANGE}&interval={CHART_INTERVAL}&includePrePost=false"
+        f"?range={range_}&interval={interval}&includePrePost=false"
     )
 
 
-def _compact_points(closes: list[float | None], timestamps: list[int], *, max_points: int = 48) -> list[dict[str, Any]]:
+def _compact_points(
+    closes: list[float | None],
+    timestamps: list[int],
+    *,
+    max_points: int = 120,
+) -> list[dict[str, Any]]:
     pairs = [
-        {"t": ts, "v": float(close)}
+        {"t": int(ts), "v": float(close)}
         for ts, close in zip(timestamps, closes, strict=False)
         if close is not None
     ]
@@ -68,14 +117,26 @@ def _compact_points(closes: list[float | None], timestamps: list[int], *, max_po
     return trimmed[:max_points]
 
 
-async def _fetch_yahoo_chart(
-    client: httpx.AsyncClient, spec: dict[str, str]
+def _series_change(points: list[dict[str, Any]]) -> tuple[float | None, float | None]:
+    if len(points) < 2:
+        return None, None
+    first = float(points[0]["v"])
+    last = float(points[-1]["v"])
+    if first == 0:
+        return round(last - first, 4), None
+    return round(last - first, 4), round((last - first) / first * 100.0, 3)
+
+
+async def _fetch_yahoo_series(
+    client: httpx.AsyncClient,
+    spec: dict[str, str],
+    tf: dict[str, str],
 ) -> tuple[dict[str, Any] | None, str | None]:
-    url = _yahoo_chart_url(spec["symbol"])
+    url = _yahoo_chart_url(spec["symbol"], range_=tf["range"], interval=tf["interval"])
     try:
         resp = await client.get(
             url,
-            timeout=20.0,
+            timeout=25.0,
             headers={
                 "User-Agent": "Mozilla/5.0 (compatible; PulseDesk/1.0)",
                 "Accept": "application/json",
@@ -85,81 +146,135 @@ async def _fetch_yahoo_chart(
         payload = resp.json()
         result = ((payload.get("chart") or {}).get("result") or [None])[0]
         if not result:
-            return None, f"{spec['label']}: empty chart"
+            return None, f"{spec['label']}/{tf['label']}: empty chart"
 
         meta = result.get("meta") or {}
         timestamps = result.get("timestamp") or []
         quote_block = ((result.get("indicators") or {}).get("quote") or [{}])[0]
         closes = quote_block.get("close") or []
+        max_points = int(tf.get("max_points") or 120)
+        points = _compact_points(closes, timestamps, max_points=max_points)
+        if not points:
+            return None, f"{spec['label']}/{tf['label']}: no points"
 
+        change, change_pct = _series_change(points)
         price = meta.get("regularMarketPrice")
-        if price is None and closes:
-            for value in reversed(closes):
-                if value is not None:
-                    price = float(value)
-                    break
-        prev = meta.get("chartPreviousClose") or meta.get("previousClose")
-        if prev is None and len(closes) >= 2:
-            for value in reversed(closes[:-1]):
-                if value is not None:
-                    prev = float(value)
-                    break
-
         if price is None:
-            return None, f"{spec['label']}: no price"
+            price = points[-1]["v"]
+        prev = meta.get("chartPreviousClose") or meta.get("previousClose")
+        day_change = None
+        day_change_pct = None
+        if prev not in (None, 0):
+            day_change = round(float(price) - float(prev), 4)
+            day_change_pct = round((float(price) - float(prev)) / float(prev) * 100.0, 3)
 
-        price_f = float(price)
-        prev_f = float(prev) if prev is not None else None
-        change = None if prev_f is None else round(price_f - prev_f, 4)
-        change_pct = (
-            None
-            if prev_f in (None, 0)
-            else round((price_f - prev_f) / prev_f * 100.0, 3)
-        )
-
-        points = _compact_points(closes, timestamps)
         return {
-            "id": spec["id"],
-            "symbol": spec["symbol"],
-            "label": spec["label"],
-            "short": spec["short"],
-            "unit": spec.get("unit") or "",
-            "price": round(price_f, 4 if spec.get("unit") == "%" else 2),
-            "prev_close": round(prev_f, 4) if prev_f is not None else None,
+            "tf": tf["id"],
+            "label": tf["label"],
+            "blurb": tf["blurb"],
+            "range": tf["range"],
+            "interval": tf["interval"],
+            "points": points,
             "change": change,
             "change_pct": change_pct,
-            "currency": meta.get("currency") or "USD",
-            "as_of": meta.get("regularMarketTime") or (timestamps[-1] if timestamps else None),
-            "range": CHART_RANGE,
-            "points": points,
-            "url": f"https://finance.yahoo.com/quote/{quote(spec['symbol'], safe='')}",
+            "price": round(float(price), 4 if spec.get("unit") == "%" else 2),
+            "day_change": day_change,
+            "day_change_pct": day_change_pct,
+            "as_of": meta.get("regularMarketTime") or points[-1]["t"],
         }, None
     except Exception as exc:  # noqa: BLE001
-        return None, f"{spec['label']}: {exc}"
+        return None, f"{spec['label']}/{tf['label']}: {exc}"
+
+
+async def _fetch_index_bundle(
+    client: httpx.AsyncClient, spec: dict[str, str]
+) -> tuple[dict[str, Any] | None, list[str]]:
+    errors: list[str] = []
+    tasks = [_fetch_yahoo_series(client, spec, tf) for tf in TIMEFRAMES]
+    results = await asyncio.gather(*tasks)
+
+    series: dict[str, Any] = {}
+    quote_seed: dict[str, Any] | None = None
+    for (row, err), tf in zip(results, TIMEFRAMES, strict=True):
+        if err:
+            errors.append(err)
+        if not row:
+            continue
+        series[tf["id"]] = {
+            "tf": row["tf"],
+            "label": row["label"],
+            "blurb": row["blurb"],
+            "range": row["range"],
+            "interval": row["interval"],
+            "points": row["points"],
+            "change": row["change"],
+            "change_pct": row["change_pct"],
+        }
+        if quote_seed is None:
+            quote_seed = row
+
+    if not series or quote_seed is None:
+        return None, errors or [f"{spec['label']}: no series"]
+
+    # Prefer 24h / day for quote fields
+    preferred = series.get("h24") or series.get("day") or next(iter(series.values()))
+    day_series = series.get("day") or preferred
+
+    return {
+        "id": spec["id"],
+        "symbol": spec["symbol"],
+        "label": spec["label"],
+        "short": spec["short"],
+        "unit": spec.get("unit") or "",
+        "price": quote_seed["price"],
+        "change": quote_seed.get("day_change"),
+        "change_pct": quote_seed.get("day_change_pct"),
+        "as_of": quote_seed.get("as_of"),
+        "points": (day_series.get("points") or [])[-48:],
+        "series": series,
+        "url": f"https://finance.yahoo.com/quote/{quote(spec['symbol'], safe='')}",
+    }, errors
 
 
 async def fetch_market_board(client: httpx.AsyncClient) -> tuple[dict[str, Any], list[str]]:
-    """Fetch index board + 3M sparkline points."""
+    """Fetch index board + multi-timeframe chart series."""
+    bundles = await asyncio.gather(*[_fetch_index_bundle(client, spec) for spec in INDEX_SPECS])
     errors: list[str] = []
     indices: list[dict[str, Any]] = []
-    for spec in INDEX_SPECS:
-        row, err = await _fetch_yahoo_chart(client, spec)
+    for row, errs in bundles:
+        errors.extend(errs)
         if row:
             indices.append(row)
-        if err:
-            errors.append(err)
 
-    charts = [
-        {
-            "id": row["id"],
-            "label": row["label"],
-            "short": row["short"],
-            "unit": row.get("unit") or "",
-            "change_pct": row.get("change_pct"),
-            "points": row.get("points") or [],
-        }
-        for row in indices
-        if row.get("id") in {"spx", "dji", "ixic", "vix"}
-    ]
+    charts_by_tf: dict[str, list[dict[str, Any]]] = {tf["id"]: [] for tf in TIMEFRAMES}
+    for row in indices:
+        if row["id"] not in CHART_INDEX_IDS:
+            continue
+        for tf in TIMEFRAMES:
+            series = (row.get("series") or {}).get(tf["id"])
+            if not series:
+                continue
+            charts_by_tf[tf["id"]].append(
+                {
+                    "id": row["id"],
+                    "label": row["label"],
+                    "short": row["short"],
+                    "unit": row.get("unit") or "",
+                    "price": row.get("price"),
+                    "change_pct": series.get("change_pct"),
+                    "points": series.get("points") or [],
+                    "blurb": series.get("blurb") or tf["blurb"],
+                }
+            )
 
-    return {"indices": indices, "charts": charts, "source": "Yahoo Finance"}, errors
+    return {
+        "indices": indices,
+        "timeframes": [
+            {"id": tf["id"], "label": tf["label"], "blurb": tf["blurb"]} for tf in TIMEFRAMES
+        ],
+        "default_tf": "h24",
+        "charts_by_tf": charts_by_tf,
+        # back-compat for older UI
+        "charts": charts_by_tf.get("h24") or charts_by_tf.get("day") or [],
+        "source": "Yahoo Finance",
+    }, errors

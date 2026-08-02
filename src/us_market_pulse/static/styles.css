@@ -592,6 +592,26 @@ main,
   padding: 0 1.25rem 4rem;
 }
 
+.markets-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 0.85rem 1.25rem;
+}
+
+.tf-filters {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+}
+
+.chart-tf-note {
+  margin: 0 0 0.75rem;
+  color: var(--ink-soft);
+  font-size: 0.85rem;
+}
+
 .index-grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
