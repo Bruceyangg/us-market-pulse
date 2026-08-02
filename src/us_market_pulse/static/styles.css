@@ -965,6 +965,7 @@ body {
 .workspace-main .mood,
 .workspace-main .push-panel,
 .workspace-main .spotlight,
+.workspace-main .war-desk,
 .workspace-main .event-section,
 .workspace-main .timeline-section,
 .workspace-main .brief-strip,
@@ -2272,6 +2273,132 @@ body {
   right: 0.85rem;
 }
 
+.war-desk {
+  max-width: var(--max);
+  margin: 0 auto 2.5rem;
+  padding: 0 1.25rem;
+}
+
+.war-columns {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 1rem;
+  margin-bottom: 1.25rem;
+}
+
+.war-column {
+  border: 1px solid var(--line);
+  border-radius: calc(var(--radius) + 2px);
+  background: var(--elevated-soft);
+  box-shadow: var(--shadow);
+  padding: 0.95rem 0.95rem 1.05rem;
+}
+
+.war-column-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 0.75rem;
+  margin-bottom: 0.75rem;
+}
+
+.war-column-head h3 {
+  margin: 0;
+  font-family: var(--font-display);
+  font-size: 1.2rem;
+  letter-spacing: -0.02em;
+}
+
+.war-column-head p {
+  margin: 0;
+  color: var(--ink-soft);
+  font-size: 0.8rem;
+  font-weight: 600;
+}
+
+.war-latest {
+  gap: 0.65rem;
+}
+
+.war-latest .spotlight-card {
+  padding-right: 4.4rem;
+}
+
+.war-card-meta {
+  font-size: 0.78rem !important;
+  opacity: 0.9;
+}
+
+.war-bearish {
+  border: 1px solid rgba(194, 59, 59, 0.22);
+  border-radius: calc(var(--radius) + 2px);
+  background: linear-gradient(180deg, rgba(194, 59, 59, 0.08), var(--elevated-soft));
+  padding: 1rem 1rem 1.1rem;
+}
+
+.war-bearish-head {
+  margin-bottom: 0.85rem;
+}
+
+.war-bearish-head h3 {
+  margin: 0 0 0.25rem;
+  font-family: var(--font-display);
+  font-size: 1.2rem;
+}
+
+.war-bearish-head p {
+  margin: 0;
+  color: var(--ink-soft);
+  font-size: 0.84rem;
+}
+
+.war-bearish-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.9rem;
+}
+
+.war-analysis-card {
+  display: grid;
+  gap: 0.55rem;
+  padding: 0.95rem 1rem;
+  border-radius: var(--radius);
+  border: 1px solid var(--line);
+  background: var(--elevated);
+}
+
+.war-analysis-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.6rem;
+}
+
+.war-analysis-head h3 {
+  margin: 0;
+  font-family: var(--font-display);
+  font-size: 1.08rem;
+}
+
+.war-assessment,
+.war-factors {
+  margin: 0;
+  color: var(--ink-soft);
+  font-size: 0.86rem;
+  line-height: 1.5;
+}
+
+.war-analysis-spot {
+  margin-top: 0.15rem;
+}
+
+@media (max-width: 860px) {
+  .war-columns,
+  .war-bearish-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
 .sort-filters {
   margin-bottom: 0.55rem;
 }
@@ -3356,10 +3483,17 @@ html[data-theme="dark"] .story,
 html[data-theme="dark"] .story-verdict,
 html[data-theme="dark"] .agenda-logic,
 html[data-theme="dark"] .digest-line,
-html[data-theme="dark"] .portfolio-stats {
+html[data-theme="dark"] .portfolio-stats,
+html[data-theme="dark"] .war-column,
+html[data-theme="dark"] .war-bearish,
+html[data-theme="dark"] .war-analysis-card {
   background: var(--elevated);
   color: var(--ink);
   border-color: var(--line);
+}
+
+html[data-theme="dark"] .war-bearish {
+  background: linear-gradient(180deg, rgba(240, 113, 103, 0.12), var(--elevated));
 }
 
 html[data-theme="dark"] .holding-row:hover,

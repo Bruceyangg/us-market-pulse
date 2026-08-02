@@ -76,6 +76,11 @@ const els = {
   moodBlurb: document.getElementById("mood-blurb"),
   spotlight: document.getElementById("spotlight-list"),
   spotlightBlurb: document.getElementById("spotlight-blurb"),
+  warDeskBlurb: document.getElementById("war-desk-blurb"),
+  warLatestUsIran: document.getElementById("war-latest-us-iran"),
+  warLatestUkraine: document.getElementById("war-latest-ukraine"),
+  warBearishGrid: document.getElementById("war-bearish-grid"),
+  warBearishBlurb: document.getElementById("war-bearish-blurb"),
   briefGrid: document.getElementById("brief-grid"),
   briefBlurb: document.getElementById("brief-blurb"),
   eventRail: document.getElementById("event-rail"),
@@ -1211,6 +1216,31 @@ function verdictBadge(item) {
   )}">${escapeHtml(label)}</span>`;
 }
 
+function spotlightCardHtml(item) {
+  const titleZh = item.title_zh || item.title || "";
+  const titleEn = item.title || "";
+  const showEn = titleEn && titleEn !== titleZh;
+  const factors = (item.sentiment_factors || []).join("、");
+  const metaBits = [
+    item.source || "",
+    item.published ? formatClock(item.published) : "",
+  ].filter(Boolean);
+  return `
+    <a class="spotlight-card" href="${item.url || "#"}" target="_blank" rel="noopener noreferrer">
+      ${verdictBadge(item)}
+      <h3>${escapeHtml(titleZh)}</h3>
+      ${showEn ? `<p class="story-title-en">${escapeHtml(titleEn)}</p>` : ""}
+      <p>${escapeHtml(item.sentiment_logic || item.sentiment_reason || item.brief_zh || "")}</p>
+      ${factors ? `<p>因子：${escapeHtml(factors)}</p>` : ""}
+      ${
+        metaBits.length
+          ? `<p class="war-card-meta">${escapeHtml(metaBits.join(" · "))}</p>`
+          : ""
+      }
+    </a>
+  `;
+}
+
 function renderSpotlight(rows) {
   if (!els.spotlight) return;
   if (!rows?.length) {
@@ -1221,23 +1251,122 @@ function renderSpotlight(rows) {
   if (els.spotlightBlurb) {
     els.spotlightBlurb.textContent = `共 ${rows.length} 条重点利空/偏空（按得分从低到高）`;
   }
-  els.spotlight.innerHTML = rows
-    .map((item) => {
-      const titleZh = item.title_zh || item.title || "";
-      const titleEn = item.title || "";
-      const showEn = titleEn && titleEn !== titleZh;
-      const factors = (item.sentiment_factors || []).join("、");
+  els.spotlight.innerHTML = rows.map((item) => spotlightCardHtml(item)).join("");
+}
+
+function renderWarLatest(container, rows, emptyText) {
+  if (!container) return;
+  if (!rows?.length) {
+    container.innerHTML = `<p class="empty">${escapeHtml(emptyText)}</p>`;
+    return;
+  }
+  container.innerHTML = rows
+    .slice(0, 5)
+    .map((item) => spotlightCardHtml(item))
+    .join("");
+}
+
+function renderWarDesk(desk) {
+  const data = desk || {};
+  const columns = data.columns || {};
+  const usIran = columns.us_iran || {};
+  const ukraine = columns.ukraine || {};
+  const analyses = data.bearish_analysis || [];
+
+  if (els.warDeskBlurb) {
+    const nIran = usIran.counts?.total || 0;
+    const nUa = ukraine.counts?.total || 0;
+    els.warDeskBlurb.textContent =
+      data.updated_hint ||
+      `美伊 ${nIran} 条 · 俄乌 ${nUa} 条 · 与情报流同源`;
+  }
+
+  renderWarLatest(
+    els.warLatestUsIran,
+    usIran.latest || [],
+    "暂无美伊冲突相关最新进展。"
+  );
+  renderWarLatest(
+    els.warLatestUkraine,
+    ukraine.latest || [],
+    "暂无俄乌战争相关最新进展。"
+  );
+
+  if (!els.warBearishGrid) return;
+  if (!analyses.length) {
+    els.warBearishGrid.innerHTML =
+      '<p class="empty">暂无冲突利空分析样本。</p>';
+    return;
+  }
+
+  if (els.warBearishBlurb) {
+    const totalBear = analyses.reduce(
+      (sum, row) => sum + (row.counts?.bearish || 0),
+      0
+    );
+    els.warBearishBlurb.textContent = `两线合计利空 ${totalBear} 条 · 按压制强度拆解`;
+  }
+
+  els.warBearishGrid.innerHTML = analyses
+    .map((row) => {
+      const counts = row.counts || {};
+      const factors = (row.top_factors || []).slice(0, 4).join("、");
+      const score =
+        typeof row.avg_score === "number" ? row.avg_score.toFixed(2) : "0.00";
+      const q = row.query || row.label || "";
+      const spot = (row.spotlight || [])
+        .slice(0, 2)
+        .map((item) => spotlightCardHtml(item))
+        .join("");
       return `
-        <a class="spotlight-card" href="${item.url}" target="_blank" rel="noopener noreferrer">
-          ${verdictBadge(item)}
-          <h3>${escapeHtml(titleZh)}</h3>
-          ${showEn ? `<p class="story-title-en">${escapeHtml(titleEn)}</p>` : ""}
-          <p>${escapeHtml(item.sentiment_logic || item.sentiment_reason || "")}</p>
-          ${factors ? `<p>因子：${escapeHtml(factors)}</p>` : ""}
-        </a>
+        <article class="war-analysis-card">
+          <div class="war-analysis-head">
+            <h3>${escapeHtml(row.label || "")}</h3>
+            <button type="button" class="btn ghost btn-compact war-filter-link" data-war-q="${escapeHtml(
+              q
+            )}">在情报流查看</button>
+          </div>
+          <div class="brief-meta-row">
+            <span class="brief-chip bias-bearish">利空 ${counts.bearish || 0}</span>
+            <span class="brief-chip">利多 ${counts.bullish || 0}</span>
+            <span class="brief-chip score">均分 ${escapeHtml(score)}</span>
+            <span class="brief-chip">样本 ${counts.total || 0}</span>
+          </div>
+          <p class="war-assessment">${escapeHtml(row.assessment || "")}</p>
+          ${
+            factors
+              ? `<p class="war-factors">核心利空因子：${escapeHtml(factors)}</p>`
+              : ""
+          }
+          <div class="spotlight-list war-analysis-spot">${
+            spot || '<p class="empty">暂无强利空头条</p>'
+          }</div>
+        </article>
       `;
     })
     .join("");
+
+  els.warBearishGrid.querySelectorAll(".war-filter-link").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      const q = btn.getAttribute("data-war-q") || "";
+      if (els.searchInput) els.searchInput.value = q;
+      state.q = q;
+      state.category = "all";
+      state.sentiment = "all";
+      document
+        .querySelectorAll("#filters .filter")
+        .forEach((el) =>
+          el.classList.toggle("is-active", el.dataset.category === "all")
+        );
+      document
+        .querySelectorAll("#sentiment-filters .filter[data-sentiment]")
+        .forEach((el) =>
+          el.classList.toggle("is-active", el.dataset.sentiment === "all")
+        );
+      document.getElementById("feed")?.scrollIntoView({ behavior: "smooth" });
+      loadIntel();
+    });
+  });
 }
 
 function formatClock(iso) {
@@ -1775,6 +1904,7 @@ async function loadIntel({ force = false } = {}) {
       renderMood(data.sentiment_summary);
       renderLiveBriefing(data.live_briefing);
       renderSpotlight(data.bearish_spotlight);
+      renderWarDesk(data.war_desk);
       renderBriefStrip(data);
       renderEventThreads(data.event_threads);
       renderDayTimeline(data.timeline);

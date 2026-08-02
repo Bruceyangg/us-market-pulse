@@ -135,6 +135,28 @@ FEED_SOURCES: list[dict[str, str]] = [
         "category": "politics",
         "url": "https://feeds.bbci.co.uk/news/world/us_and_canada/rss.xml",
     },
+    {
+        "id": "gn-us-iran",
+        "name": "美伊局势",
+        "category": "politics",
+        "url": (
+            "https://news.google.com/rss/search?q="
+            "Iran+OR+Tehran+OR+%22Strait+of+Hormuz%22+OR+%22US+Iran%22+"
+            "OR+%22Israel+Iran%22+war+OR+strike+OR+sanctions"
+            "&hl=en-US&gl=US&ceid=US:en"
+        ),
+    },
+    {
+        "id": "gn-ukraine",
+        "name": "俄乌局势",
+        "category": "politics",
+        "url": (
+            "https://news.google.com/rss/search?q="
+            "Ukraine+OR+Kyiv+OR+%22Russia+Ukraine%22+OR+Zelensky+OR+Putin+"
+            "war+OR+offensive+OR+ceasefire"
+            "&hl=en-US&gl=US&ceid=US:en"
+        ),
+    },
 ]
 
 # FRED series (public CSV, no API key)
@@ -459,8 +481,8 @@ async def refresh_intel(force: bool = False) -> dict[str, Any]:
         seen.add(key)
         unique.append(item)
 
-    unique = enrich_sentiment(enrich_items(unique[:120]))
-    unique = await enrich_titles(unique, online=True, online_limit=80)
+    unique = enrich_sentiment(enrich_items(unique[:160]))
+    unique = await enrich_titles(unique, online=True, online_limit=100)
     bundle = build_event_bundle(unique)
     unique = bundle["items"]
     settings = load_settings()

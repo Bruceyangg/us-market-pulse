@@ -32,6 +32,22 @@ THEME_RULES: list[tuple[re.Pattern[str], str, str]] = [
         "官方或官员沟通，重点看政策路径措辞变化。",
     ),
     (
+        re.compile(
+            r"\b(iran|tehran|hormuz|hezbollah|houthi|israel[- ]iran|us[- ]iran)\b",
+            re.I,
+        ),
+        "美伊冲突",
+        "中东军事与制裁风险，关注原油、航运与避险资产定价。",
+    ),
+    (
+        re.compile(
+            r"\b(ukraine|ukrainian|kyiv|zelensky|putin|crimea|donbas|russia[- ]ukraine)\b",
+            re.I,
+        ),
+        "俄乌战争",
+        "欧洲地缘与能源供应链风险，关注防务、天然气与风险偏好。",
+    ),
+    (
         re.compile(r"\b(tariff|trade war|sanctions|geopolit)\b", re.I),
         "贸易/地缘",
         "政策与地缘冲击，常通过风险溢价与供应链预期传导。",

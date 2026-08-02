@@ -36,6 +36,7 @@ from us_market_pulse.feeds import (
     refresh_intel,
     refresh_market_desk,
 )
+from us_market_pulse.topics import build_war_desk
 from us_market_pulse.portfolio import (
     add_holding,
     build_portfolio_view,
@@ -278,6 +279,10 @@ async def api_intel(
         for e in (data.get("event_threads") or [])
         if e.get("id") in item_event_ids or not item_event_ids
     ][:16]
+    war_desk = build_war_desk(
+        data.get("items") or [],
+        data.get("event_threads") or [],
+    )
     return {
         "category": category,
         "sentiment": sentiment,
@@ -286,6 +291,7 @@ async def api_intel(
         "count": len(items),
         "items": items,
         "bearish_spotlight": spotlight,
+        "war_desk": war_desk,
         "indicators": data["indicators"],
         "calendar": data.get("calendar", []),
         "digest": data.get("digest", {}),
