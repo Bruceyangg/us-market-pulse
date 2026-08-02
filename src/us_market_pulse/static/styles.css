@@ -204,31 +204,59 @@ main,
 }
 
 .holding-intel {
-  margin-top: 2.25rem;
-  padding-top: 0.25rem;
+  margin: 0;
+  min-width: 0;
+}
+
+.holding-intel-sticky {
+  position: sticky;
+  top: 0.85rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.55rem;
+  max-height: calc(100vh - 1.5rem);
+  padding: 0.85rem 0.9rem;
+  border-radius: calc(var(--radius) + 2px);
+  border: 1px solid var(--line);
+  background:
+    linear-gradient(180deg, rgba(255, 250, 248, 0.96), rgba(255, 255, 255, 0.9));
+  box-shadow: var(--shadow);
 }
 
 .holding-intel-head {
   display: flex;
   flex-wrap: wrap;
-  align-items: flex-end;
+  align-items: flex-start;
   justify-content: space-between;
-  gap: 0.85rem 1rem;
-  margin-bottom: 0.85rem;
+  gap: 0.45rem 0.65rem;
+  margin-bottom: 0;
+}
+
+.holding-intel-head h2 {
+  margin: 0 0 0.2rem;
+  font-family: var(--font-display);
+  font-size: 1.2rem;
+}
+
+.holding-intel-head p {
+  margin: 0;
+  font-size: 0.78rem;
+  color: var(--ink-soft);
+  line-height: 1.4;
 }
 
 .holding-intel-actions {
   display: flex;
   flex-wrap: wrap;
-  gap: 0.45rem;
+  gap: 0.35rem;
 }
 
 .holding-intel-chips,
 .intel-holding-chips {
   display: flex;
   flex-wrap: wrap;
-  gap: 0.4rem;
-  margin: 0 0 0.85rem;
+  gap: 0.35rem;
+  margin: 0;
 }
 
 .holding-chip {
@@ -237,9 +265,9 @@ main,
   background: rgba(255, 255, 255, 0.72);
   color: var(--ink-soft);
   border-radius: 999px;
-  padding: 0.4rem 0.75rem;
+  padding: 0.3rem 0.55rem;
   font: inherit;
-  font-size: 0.8rem;
+  font-size: 0.72rem;
   font-weight: 600;
   cursor: pointer;
   transition: border-color 0.18s ease, background 0.18s ease, color 0.18s ease;
@@ -265,16 +293,20 @@ main,
 
 .holding-intel-list {
   display: grid;
-  gap: 0.65rem;
+  gap: 0.5rem;
+  overflow-y: auto;
+  min-height: 0;
+  padding-right: 0.1rem;
+  scrollbar-gutter: stable;
 }
 
 .holding-intel-card {
   display: grid;
-  gap: 0.45rem;
-  padding: 0.9rem 1rem;
-  border-radius: 14px;
+  gap: 0.35rem;
+  padding: 0.7rem 0.75rem;
+  border-radius: 12px;
   border: 1px solid var(--line);
-  background: rgba(255, 255, 255, 0.82);
+  background: rgba(255, 255, 255, 0.88);
   text-decoration: none;
   color: inherit;
   transition: border-color 0.18s ease, box-shadow 0.18s ease;
@@ -305,22 +337,30 @@ main,
 
 .holding-intel-card h3 {
   margin: 0;
-  font-size: 1rem;
+  font-size: 0.9rem;
   line-height: 1.35;
 }
 
 .holding-intel-card .en {
   margin: 0;
-  font-size: 0.82rem;
+  font-size: 0.76rem;
   color: var(--ink-soft);
-  line-height: 1.4;
+  line-height: 1.35;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
 }
 
 .holding-intel-card .logic {
   margin: 0;
-  font-size: 0.82rem;
+  font-size: 0.76rem;
   color: var(--ink-soft);
-  line-height: 1.45;
+  line-height: 1.4;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
 }
 
 .chip.holding {
@@ -1155,10 +1195,14 @@ body {
   background: rgba(47, 111, 159, 0.08);
 }
 
+.page-desk .workspace {
+  max-width: min(1480px, calc(100vw - 1.5rem));
+}
+
 .portfolio-body {
   display: grid;
-  grid-template-columns: minmax(0, 1.05fr) minmax(0, 1.1fr);
-  gap: 0.9rem 1.15rem;
+  grid-template-columns: minmax(0, 1.05fr) minmax(0, 1.15fr) minmax(16rem, 0.95fr);
+  gap: 0.85rem 0.95rem;
   align-items: start;
   min-height: 24rem;
 }
@@ -1452,13 +1496,33 @@ body {
   font-size: 0.82rem;
 }
 
+@media (max-width: 1200px) {
+  .portfolio-body {
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1.05fr);
+  }
+
+  .holding-intel {
+    grid-column: 1 / -1;
+  }
+
+  .holding-intel-sticky {
+    position: static;
+    max-height: none;
+  }
+
+  .holding-intel-list {
+    max-height: min(22rem, 48vh);
+  }
+}
+
 @media (max-width: 960px) {
   .portfolio-body {
     grid-template-columns: 1fr;
     min-height: 0;
   }
 
-  .portfolio-chart-sticky {
+  .portfolio-chart-sticky,
+  .holding-intel-sticky {
     position: static;
   }
 
