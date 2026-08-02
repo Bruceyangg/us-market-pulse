@@ -1486,7 +1486,7 @@ function renderDayTimeline(timeline) {
     )} 条`;
   }
   els.dayTimeline.innerHTML = days
-    .map((day) => {
+    .map((day, index) => {
       const items = (day.items || [])
         .slice(0, 8)
         .map((item) => {
@@ -1517,8 +1517,9 @@ function renderDayTimeline(timeline) {
           `;
         })
         .join("");
+      const tone = index === 0 ? "today" : `tone-${(index - 1) % 4}`;
       return `
-        <div class="day-bucket">
+        <div class="day-bucket is-${tone}">
           <div class="day-bucket-head">
             <h3>${escapeHtml(day.label)} · ${escapeHtml(day.date)}</h3>
             <span>${day.count} 条 · 利空 ${day.bearish || 0} · 利多 ${day.bullish || 0}</span>

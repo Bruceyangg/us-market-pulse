@@ -1722,8 +1722,8 @@ body {
 }
 
 .day-bucket {
-  border-left: 2px solid rgba(47, 111, 159, 0.35);
-  padding-left: 1rem;
+  border-left: 3px solid rgba(47, 111, 159, 0.35);
+  padding-left: 0.85rem;
 }
 
 .day-bucket.skeleton {
@@ -1743,20 +1743,110 @@ body {
 .day-bucket-head {
   display: flex;
   flex-wrap: wrap;
-  gap: 0.55rem;
+  gap: 0.45rem 0.75rem;
   align-items: baseline;
-  margin-bottom: 0.55rem;
+  margin: 0 0 0.65rem;
+  padding: 0.55rem 0.8rem;
+  border-radius: 12px;
+  border: 1px solid transparent;
 }
 
 .day-bucket-head h3 {
   margin: 0;
   font-family: var(--font-display);
-  font-size: 1.2rem;
+  font-size: 1.15rem;
+  letter-spacing: -0.02em;
 }
 
 .day-bucket-head span {
+  font-size: 0.8rem;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
+.day-bucket.is-today {
+  border-left-color: #d92b2b;
+}
+
+.day-bucket.is-today .day-bucket-head {
+  background: rgba(217, 43, 43, 0.1);
+  border-color: rgba(217, 43, 43, 0.18);
+}
+
+.day-bucket.is-today .day-bucket-head h3 {
+  color: #b42318;
+}
+
+.day-bucket.is-today .day-bucket-head span {
+  color: rgba(180, 35, 24, 0.78);
+}
+
+.day-bucket.is-tone-0 {
+  border-left-color: var(--sky);
+}
+
+.day-bucket.is-tone-0 .day-bucket-head {
+  background: rgba(47, 111, 159, 0.1);
+  border-color: rgba(47, 111, 159, 0.16);
+}
+
+.day-bucket.is-tone-0 .day-bucket-head h3 {
+  color: #1f557c;
+}
+
+.day-bucket.is-tone-0 .day-bucket-head span {
+  color: rgba(31, 85, 124, 0.78);
+}
+
+.day-bucket.is-tone-1 {
+  border-left-color: var(--signal);
+}
+
+.day-bucket.is-tone-1 .day-bucket-head {
+  background: rgba(15, 138, 106, 0.1);
+  border-color: rgba(15, 138, 106, 0.16);
+}
+
+.day-bucket.is-tone-1 .day-bucket-head h3 {
+  color: #0b6b53;
+}
+
+.day-bucket.is-tone-1 .day-bucket-head span {
+  color: rgba(11, 107, 83, 0.78);
+}
+
+.day-bucket.is-tone-2 {
+  border-left-color: var(--amber);
+}
+
+.day-bucket.is-tone-2 .day-bucket-head {
+  background: rgba(196, 122, 22, 0.12);
+  border-color: rgba(196, 122, 22, 0.18);
+}
+
+.day-bucket.is-tone-2 .day-bucket-head h3 {
+  color: #8f5a10;
+}
+
+.day-bucket.is-tone-2 .day-bucket-head span {
+  color: rgba(143, 90, 16, 0.8);
+}
+
+.day-bucket.is-tone-3 {
+  border-left-color: #3a4d63;
+}
+
+.day-bucket.is-tone-3 .day-bucket-head {
+  background: rgba(16, 32, 51, 0.07);
+  border-color: rgba(16, 32, 51, 0.12);
+}
+
+.day-bucket.is-tone-3 .day-bucket-head h3 {
+  color: var(--ink);
+}
+
+.day-bucket.is-tone-3 .day-bucket-head span {
   color: var(--ink-soft);
-  font-size: 0.82rem;
 }
 
 .day-item {
