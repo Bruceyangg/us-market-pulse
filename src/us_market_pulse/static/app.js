@@ -27,6 +27,9 @@ const state = {
 const els = {
   status: document.getElementById("status-line"),
   indicators: document.getElementById("indicator-grid"),
+  indexGrid: document.getElementById("index-grid"),
+  chartGrid: document.getElementById("chart-grid"),
+  marketsBlurb: document.getElementById("markets-blurb"),
   agenda: document.getElementById("agenda-rail"),
   agendaBlurb: document.getElementById("agenda-blurb"),
   digest: document.getElementById("digest-line"),
@@ -132,6 +135,134 @@ function renderIndicators(rows) {
       `;
     })
     .join("");
+}
+
+function sparklinePath(points, width = 120, height = 36, pad = 2) {
+  const vals = (points || []).map((p) => Number(p.v)).filter((v) => !Number.isNaN(v));
+  if (vals.length < 2) return "";
+  const min = Math.min(...vals);
+  const max = Math.max(...vals);
+  const span = max - min || 1;
+  const stepX = (width - pad * 2) / (vals.length - 1);
+  return vals
+    .map((v, i) => {
+      const x = pad + i * stepX;
+      const y = pad + (1 - (v - min) / span) * (height - pad * 2);
+      return `${i === 0 ? "M" : "L"}${x.toFixed(2)},${y.toFixed(2)}`;
+    })
+    .join(" ");
+}
+
+function renderChartSvg(points, { up = true } = {}) {
+  const width = 320;
+  const height = 140;
+  const padX = 8;
+  const padY = 12;
+  const vals = (points || []).map((p) => Number(p.v)).filter((v) => !Number.isNaN(v));
+  if (vals.length < 2) {
+    return `<svg viewBox="0 0 ${width} ${height}" role="img" aria-label="暂无走势"><text x="16" y="72" fill="#3a4d63" font-size="13">暂无走势数据</text></svg>`;
+  }
+  const min = Math.min(...vals);
+  const max = Math.max(...vals);
+  const span = max - min || 1;
+  const stepX = (width - padX * 2) / (vals.length - 1);
+  const coords = vals.map((v, i) => {
+    const x = padX + i * stepX;
+    const y = padY + (1 - (v - min) / span) * (height - padY * 2);
+    return [x, y];
+  });
+  const line = coords
+    .map(([x, y], i) => `${i === 0 ? "M" : "L"}${x.toFixed(2)},${y.toFixed(2)}`)
+    .join(" ");
+  const area = `${line} L${coords[coords.length - 1][0].toFixed(2)},${height} L${coords[0][0].toFixed(2)},${height} Z`;
+  const stroke = up ? "#0f8a6a" : "#b42318";
+  const fill = up ? "rgba(15,138,106,0.14)" : "rgba(180,35,24,0.12)";
+  return `
+    <svg viewBox="0 0 ${width} ${height}" preserveAspectRatio="none" role="img" aria-label="走势图">
+      <path d="${area}" fill="${fill}"></path>
+      <path d="${line}" fill="none" stroke="${stroke}" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"></path>
+    </svg>
+  `;
+}
+
+function renderMarkets(markets) {
+  const data = markets || {};
+  const indices = data.indices || [];
+  const charts = data.charts || [];
+  if (els.marketsBlurb) {
+    els.marketsBlurb.textContent = data.source
+      ? `来源 ${data.source} · 近 3 个月日线走势（延迟报价，仅供研究）`
+      : "标普 / 道指 / 纳指 / VIX 与近 3 个月走势";
+  }
+
+  if (els.indexGrid) {
+    if (!indices.length) {
+      els.indexGrid.innerHTML =
+        '<p class="empty">暂时无法读取指数报价，请稍后刷新。</p>';
+    } else {
+      els.indexGrid.innerHTML = indices
+        .map((row) => {
+          const pct = row.change_pct;
+          const cls =
+            pct == null || Number.isNaN(pct) ? "" : pct >= 0 ? "up" : "down";
+          const pctText =
+            pct == null || Number.isNaN(pct)
+              ? "—"
+              : `${pct >= 0 ? "+" : ""}${pct.toFixed(2)}%`;
+          const chg =
+            row.change == null || Number.isNaN(row.change)
+              ? ""
+              : ` · ${row.change >= 0 ? "+" : ""}${Number(row.change).toFixed(
+                  row.unit === "%" ? 3 : 2
+                )}`;
+          const path = sparklinePath(row.points || []);
+          const stroke = cls === "down" ? "#b42318" : "#0f8a6a";
+          return `
+            <a class="index-card" href="${escapeHtml(
+              row.url || "#"
+            )}" target="_blank" rel="noopener noreferrer">
+              <div class="label">${escapeHtml(row.label || "")}</div>
+              <span class="short">${escapeHtml(row.short || "")}</span>
+              <div class="value">${formatNumber(row.price, row.unit || "")}</div>
+              <div class="chg ${cls}">${pctText}${chg}</div>
+              ${
+                path
+                  ? `<svg class="mini-spark" viewBox="0 0 120 36" preserveAspectRatio="none" aria-hidden="true"><path d="${path}" fill="none" stroke="${stroke}" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"></path></svg>`
+                  : ""
+              }
+            </a>
+          `;
+        })
+        .join("");
+    }
+  }
+
+  if (els.chartGrid) {
+    if (!charts.length) {
+      els.chartGrid.innerHTML = "";
+      return;
+    }
+    els.chartGrid.innerHTML = charts
+      .map((chart) => {
+        const pct = chart.change_pct;
+        const up = !(typeof pct === "number" && pct < 0);
+        const pctText =
+          typeof pct === "number"
+            ? `${pct >= 0 ? "+" : ""}${pct.toFixed(2)}%`
+            : "—";
+        return `
+          <article class="chart-card">
+            <div class="chart-head">
+              <h3>${escapeHtml(chart.label || chart.short || "")}</h3>
+              <span class="range">近 3 个月 · ${pctText}</span>
+            </div>
+            ${renderChartSvg(chart.points || [], { up })}
+            <div class="chart-foot">${escapeHtml(chart.short || "")} 日线收盘走势</div>
+          </article>
+        `;
+      })
+      .join("");
+  }
 }
 
 function renderAgenda(events, nextFomc) {
@@ -817,6 +948,7 @@ async function loadIntel({ force = false } = {}) {
       if (event?.id) state.eventsById[event.id] = event;
     }
 
+    renderMarkets(data.markets);
     renderIndicators(data.indicators);
     renderAgenda(data.calendar, data.next_fomc);
     renderDigest(data.digest);

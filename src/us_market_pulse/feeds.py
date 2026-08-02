@@ -19,6 +19,7 @@ from us_market_pulse.calendar import next_fomc, upcoming_calendar
 from us_market_pulse.config import load_settings
 from us_market_pulse.briefing import build_live_briefing
 from us_market_pulse.events import build_event_bundle
+from us_market_pulse.markets import fetch_market_board
 from us_market_pulse.sentiment import enrich_sentiment, sentiment_summary
 from us_market_pulse.translate import enrich_titles
 from us_market_pulse.watch import match_watchlist
@@ -157,6 +158,7 @@ _CACHE: dict[str, Any] = {
     "event_threads": [],
     "timeline": [],
     "live_briefing": {},
+    "markets": {"indices": [], "charts": [], "source": ""},
     "next_fomc": None,
     "fetched_at": 0.0,
     "errors": [],
@@ -314,6 +316,7 @@ async def refresh_intel(force: bool = False) -> dict[str, Any]:
             "event_threads": _CACHE["event_threads"],
             "timeline": _CACHE["timeline"],
             "live_briefing": live_briefing,
+            "markets": _CACHE.get("markets") or {"indices": [], "charts": [], "source": ""},
             "next_fomc": _CACHE["next_fomc"],
             "fetched_at": _CACHE["fetched_at"],
             "errors": _CACHE["errors"],
@@ -324,9 +327,10 @@ async def refresh_intel(force: bool = False) -> dict[str, Any]:
     async with httpx.AsyncClient(headers=headers, follow_redirects=True) as client:
         feed_tasks = [_fetch_feed(client, src) for src in FEED_SOURCES]
         fred_tasks = [_fetch_fred_series(client, s) for s in FRED_SERIES]
-        feed_results, fred_results = await asyncio.gather(
+        feed_results, fred_results, market_bundle = await asyncio.gather(
             asyncio.gather(*feed_tasks),
             asyncio.gather(*fred_tasks),
+            fetch_market_board(client),
         )
 
     items: list[dict[str, Any]] = []
@@ -342,6 +346,9 @@ async def refresh_intel(force: bool = False) -> dict[str, Any]:
             indicators.append(row)
         if err:
             errors.append(err)
+
+    markets, market_errors = market_bundle
+    errors.extend(market_errors)
 
     items.sort(key=lambda x: x.get("published_ts") or 0.0, reverse=True)
     # Deduplicate by normalized title
@@ -382,6 +389,7 @@ async def refresh_intel(force: bool = False) -> dict[str, Any]:
             "event_threads": bundle["event_threads"],
             "timeline": bundle["timeline"],
             "live_briefing": live_briefing,
+            "markets": markets,
             "next_fomc": next_fomc(),
             "fetched_at": now,
             "errors": errors,
@@ -398,6 +406,7 @@ async def refresh_intel(force: bool = False) -> dict[str, Any]:
         "event_threads": bundle["event_threads"],
         "timeline": bundle["timeline"],
         "live_briefing": live_briefing,
+        "markets": markets,
         "next_fomc": next_fomc(),
         "fetched_at": now,
         "errors": errors,

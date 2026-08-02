@@ -126,6 +126,7 @@ async def api_intel(
         "event_threads": event_threads,
         "timeline": data.get("timeline", []),
         "live_briefing": data.get("live_briefing") or {},
+        "markets": data.get("markets") or {"indices": [], "charts": []},
         "next_fomc": data.get("next_fomc"),
         "fetched_at": data["fetched_at"],
         "cached": data["cached"],
