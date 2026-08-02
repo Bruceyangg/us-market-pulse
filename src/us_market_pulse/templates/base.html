@@ -42,12 +42,12 @@
         <span class="brand-mark" aria-hidden="true"></span>
         <span class="brand-text">Pulse Desk</span>
       </a>
-      <nav class="desk-nav" aria-label="台面导航">
-        <a href="/" class="{% if page == 'desk' %}is-active{% endif %}">持仓</a>
-        <a href="/#holding-intel">持仓情报</a>
-        <a href="/markets" class="{% if page == 'markets' %}is-active{% endif %}">市场</a>
-        <a href="/intel" class="{% if page == 'intel' %}is-active{% endif %}">情报</a>
-        <a href="/settings" class="{% if page == 'settings' %}is-active{% endif %}">设置</a>
+      <nav class="desk-nav" aria-label="台面导航" data-nav-cycle="1">
+        <a href="/" data-nav="desk" class="{% if page == 'desk' %}is-active{% endif %}">持仓</a>
+        <a href="/#holding-intel" data-nav="holding-intel">持仓情报</a>
+        <a href="/markets" data-nav="markets" class="{% if page == 'markets' %}is-active{% endif %}">市场</a>
+        <a href="/intel" data-nav="intel" class="{% if page == 'intel' %}is-active{% endif %}">情报</a>
+        <a href="/settings" data-nav="settings" class="{% if page == 'settings' %}is-active{% endif %}">设置</a>
       </nav>
       <div class="header-meta">
         <span class="live-dot" aria-hidden="true"></span>
@@ -65,22 +65,22 @@
       {% block content %}{% endblock %}
     </main>
 
-    <nav class="mobile-tabbar" aria-label="移动端导航">
-      <a href="/" class="{% if page == 'desk' %}is-active{% endif %}">
+    <nav class="mobile-tabbar" aria-label="移动端导航" data-nav-cycle="1">
+      <a href="/" data-nav="desk" class="{% if page == 'desk' %}is-active{% endif %}">
         <span class="tab-label">持仓</span>
       </a>
-      <a href="/markets" class="{% if page == 'markets' %}is-active{% endif %}">
+      <a href="/markets" data-nav="markets" class="{% if page == 'markets' %}is-active{% endif %}">
         <span class="tab-label">市场</span>
       </a>
-      <a href="/intel" class="{% if page == 'intel' %}is-active{% endif %}">
+      <a href="/intel" data-nav="intel" class="{% if page == 'intel' %}is-active{% endif %}">
         <span class="tab-label">情报</span>
       </a>
       {% if user %}
-      <a href="/settings" class="{% if page == 'settings' %}is-active{% endif %}">
+      <a href="/settings" data-nav="settings" class="{% if page == 'settings' %}is-active{% endif %}">
         <span class="tab-label">设置</span>
       </a>
       {% else %}
-      <a href="/login" class="{% if page == 'login' %}is-active{% endif %}">
+      <a href="/login" data-nav="login" class="{% if page == 'login' %}is-active{% endif %}">
         <span class="tab-label">登录</span>
       </a>
       {% endif %}

@@ -2464,4 +2464,275 @@ function bootPage() {
   }
 }
 
+/** Persist / restore scroll per route so tab switches don't jump to top. */
+function scrollStorageKey(pathname = location.pathname, hash = location.hash) {
+  return `pulse_scroll:${pathname}${hash || ""}`;
+}
+
+function saveScrollPosition() {
+  try {
+    sessionStorage.setItem(
+      scrollStorageKey(),
+      String(window.scrollY || window.pageYOffset || 0)
+    );
+  } catch {
+    /* ignore quota / private mode */
+  }
+}
+
+function restoreScrollPosition() {
+  let raw = null;
+  try {
+    raw = sessionStorage.getItem(scrollStorageKey());
+  } catch {
+    return;
+  }
+  const html = document.documentElement;
+  const prevBehavior = html.style.scrollBehavior;
+  html.style.scrollBehavior = "auto";
+  const finish = () => {
+    html.style.scrollBehavior = prevBehavior;
+  };
+  if (raw == null) {
+    if (location.hash === "#holding-intel") {
+      document.getElementById("holding-intel")?.scrollIntoView({ block: "start" });
+    }
+    setTimeout(finish, 50);
+    return;
+  }
+  const y = Number(raw);
+  if (!Number.isFinite(y)) {
+    finish();
+    return;
+  }
+  const apply = () => window.scrollTo(0, y);
+  requestAnimationFrame(() => requestAnimationFrame(apply));
+  setTimeout(apply, 100);
+  setTimeout(() => {
+    apply();
+    finish();
+  }, 350);
+}
+
+function navCycleRoutes() {
+  const settingsHref = AUTHED ? "/settings" : "/login";
+  return [
+    {
+      id: "desk",
+      href: "/",
+      match: (p, h) => p === "/" && h !== "#holding-intel",
+    },
+    {
+      id: "holding-intel",
+      href: "/#holding-intel",
+      match: (p, h) => p === "/" && h === "#holding-intel",
+    },
+    {
+      id: "markets",
+      href: "/markets",
+      match: (p) => p === "/markets",
+    },
+    {
+      id: "intel",
+      href: "/intel",
+      match: (p) => p === "/intel",
+    },
+    {
+      id: AUTHED ? "settings" : "login",
+      href: settingsHref,
+      match: (p) => p === "/settings" || p === "/login",
+    },
+  ];
+}
+
+function currentNavIndex() {
+  const routes = navCycleRoutes();
+  const path = location.pathname;
+  const hash = location.hash || "";
+  const idx = routes.findIndex((r) => r.match(path, hash));
+  return idx >= 0 ? idx : 0;
+}
+
+function syncNavActive() {
+  const routes = navCycleRoutes();
+  const idx = currentNavIndex();
+  const activeId = routes[idx]?.id;
+  document.querySelectorAll("[data-nav-cycle] a[data-nav]").forEach((a) => {
+    a.classList.toggle("is-active", a.dataset.nav === activeId);
+  });
+}
+
+function navigateToHref(href) {
+  saveScrollPosition();
+  const url = new URL(href, location.origin);
+  const samePath = url.pathname === location.pathname;
+
+  if (samePath) {
+    if (url.hash) {
+      history.pushState(null, "", `${url.pathname}${url.hash}`);
+      syncNavActive();
+      restoreScrollPosition();
+      return;
+    }
+    if (location.hash) {
+      history.pushState(null, "", url.pathname);
+      syncNavActive();
+      restoreScrollPosition();
+      return;
+    }
+    restoreScrollPosition();
+    return;
+  }
+
+  location.href = `${url.pathname}${url.hash || ""}`;
+}
+
+function cycleNav(delta) {
+  if (PAGE === "login") return;
+  const routes = navCycleRoutes();
+  if (!routes.length) return;
+  const next = (currentNavIndex() + delta + routes.length) % routes.length;
+  navigateToHref(routes[next].href);
+}
+
+function isEditableTarget(el) {
+  if (!el || !(el instanceof Element)) return false;
+  if (el.closest("input, textarea, select, [contenteditable='true']")) return true;
+  return false;
+}
+
+function canConsumeHorizontalScroll(el, dir) {
+  let node = el instanceof Element ? el : null;
+  while (node && node !== document.documentElement) {
+    const style = getComputedStyle(node);
+    const ox = style.overflowX;
+    if (
+      (ox === "auto" || ox === "scroll" || ox === "overlay") &&
+      node.scrollWidth > node.clientWidth + 1
+    ) {
+      if (dir > 0 && node.scrollLeft + node.clientWidth < node.scrollWidth - 1) {
+        return true;
+      }
+      if (dir < 0 && node.scrollLeft > 1) return true;
+    }
+    node = node.parentElement;
+  }
+  return false;
+}
+
+function bindStickyNavChrome() {
+  syncNavActive();
+  restoreScrollPosition();
+
+  document.querySelectorAll("[data-nav-cycle] a[data-nav]").forEach((a) => {
+    a.addEventListener("click", (event) => {
+      const href = a.getAttribute("href");
+      if (!href) return;
+      event.preventDefault();
+      navigateToHref(href);
+    });
+  });
+
+  window.addEventListener("pagehide", saveScrollPosition);
+  window.addEventListener("beforeunload", saveScrollPosition);
+  let scrollSaveTimer = 0;
+  window.addEventListener(
+    "scroll",
+    () => {
+      clearTimeout(scrollSaveTimer);
+      scrollSaveTimer = window.setTimeout(saveScrollPosition, 120);
+    },
+    { passive: true }
+  );
+  window.addEventListener("hashchange", () => {
+    syncNavActive();
+    restoreScrollPosition();
+  });
+  window.addEventListener("popstate", () => {
+    syncNavActive();
+    restoreScrollPosition();
+  });
+
+  let touchStartX = 0;
+  let touchStartY = 0;
+  let touchActive = false;
+  const swipeThreshold = 64;
+
+  document.addEventListener(
+    "touchstart",
+    (event) => {
+      if (PAGE === "login" || event.touches.length !== 1) return;
+      if (isEditableTarget(event.target)) return;
+      touchActive = true;
+      touchStartX = event.touches[0].clientX;
+      touchStartY = event.touches[0].clientY;
+    },
+    { passive: true }
+  );
+
+  document.addEventListener(
+    "touchend",
+    (event) => {
+      if (!touchActive) return;
+      touchActive = false;
+      const touch = event.changedTouches[0];
+      if (!touch) return;
+      const dx = touch.clientX - touchStartX;
+      const dy = touch.clientY - touchStartY;
+      if (Math.abs(dx) < swipeThreshold || Math.abs(dx) < Math.abs(dy) * 1.2) return;
+      if (canConsumeHorizontalScroll(event.target, dx > 0 ? -1 : 1)) return;
+      cycleNav(dx < 0 ? 1 : -1);
+    },
+    { passive: true }
+  );
+
+  document.addEventListener(
+    "touchcancel",
+    () => {
+      touchActive = false;
+    },
+    { passive: true }
+  );
+
+  /* Trackpad two-finger horizontal swipe (dominant deltaX). */
+  let wheelAcc = 0;
+  let wheelLocked = false;
+  let wheelResetTimer = 0;
+
+  window.addEventListener(
+    "wheel",
+    (event) => {
+      if (PAGE === "login" || wheelLocked) return;
+      if (isEditableTarget(event.target)) return;
+      const absX = Math.abs(event.deltaX);
+      const absY = Math.abs(event.deltaY);
+      if (absX < 18 || absX <= absY) {
+        wheelAcc = 0;
+        return;
+      }
+      if (canConsumeHorizontalScroll(event.target, event.deltaX > 0 ? 1 : -1)) {
+        wheelAcc = 0;
+        return;
+      }
+      wheelAcc += event.deltaX;
+      clearTimeout(wheelResetTimer);
+      wheelResetTimer = window.setTimeout(() => {
+        wheelAcc = 0;
+      }, 180);
+      if (Math.abs(wheelAcc) < 90) return;
+      const dir = wheelAcc > 0 ? 1 : -1;
+      wheelAcc = 0;
+      wheelLocked = true;
+      document.body.classList.add("nav-swiping");
+      cycleNav(dir);
+      window.setTimeout(() => {
+        wheelLocked = false;
+        document.body.classList.remove("nav-swiping");
+      }, 650);
+    },
+    { passive: true }
+  );
+}
+
 bootPage();
+bindStickyNavChrome();

@@ -27,6 +27,7 @@
 
 html {
   scroll-behavior: smooth;
+  scroll-padding-top: 4.75rem;
 }
 
 body {
@@ -109,7 +110,6 @@ body {
   }
 }
 
-.site-header,
 main,
 .site-footer {
   position: relative;
@@ -117,13 +117,26 @@ main,
 }
 
 .site-header {
+  position: sticky;
+  top: 0;
+  z-index: 80;
   max-width: var(--workspace);
   margin: 0 auto;
-  padding: 1.25rem 1.25rem 0;
+  padding: 0.85rem 1.25rem;
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 1rem;
+  background: rgba(247, 250, 252, 0.9);
+  backdrop-filter: blur(16px) saturate(1.15);
+  -webkit-backdrop-filter: blur(16px) saturate(1.15);
+  border-bottom: 1px solid rgba(16, 32, 51, 0.06);
+  box-shadow: 0 8px 24px rgba(16, 32, 51, 0.04);
+}
+
+body.nav-swiping {
+  cursor: grabbing;
+  user-select: none;
 }
 
 .desk-nav {
@@ -3031,7 +3044,7 @@ body {
   }
 
   .site-header {
-    padding: 0.85rem 1rem 0;
+    padding: 0.7rem 1rem;
     align-items: flex-start;
   }
 
