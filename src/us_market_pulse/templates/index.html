@@ -137,17 +137,24 @@
           <p class="chart-tf-note" id="portfolio-tf-note">全部持仓同时显示走势</p>
         </div>
 
-        <div class="holding-list-head" aria-hidden="true">
-          <span>名称 / 代码</span>
-          <span>走势</span>
-          <span>价格</span>
-          <span>涨跌幅</span>
+        <div class="portfolio-body">
+          <div class="portfolio-list-pane">
+            <div class="holding-list-head" aria-hidden="true">
+              <span>名称 / 代码</span>
+              <span>走势</span>
+              <span>价格</span>
+              <span>涨跌幅</span>
+            </div>
+            <div class="holding-list" id="holding-rail">
+              <p class="empty">还没有持仓，先添加一只美股代码。</p>
+            </div>
+          </div>
+          <div class="portfolio-chart-pane">
+            <div class="portfolio-chart" id="portfolio-chart">
+              <p class="chart-placeholder">点击左侧持仓，在此查看分时 / K 线详情</p>
+            </div>
+          </div>
         </div>
-        <div class="holding-list" id="holding-rail">
-          <p class="empty">还没有持仓，先添加一只美股代码。</p>
-        </div>
-
-        <div class="portfolio-chart" id="portfolio-chart" hidden></div>
       </section>
 
       <section class="desk" id="desk" aria-label="关键利率与风险指标">

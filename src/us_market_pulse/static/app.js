@@ -489,8 +489,9 @@ function renderPortfolioChart() {
   }
   if (!els.portfolioChart) return;
   if (!board) {
-    els.portfolioChart.hidden = true;
-    els.portfolioChart.innerHTML = "";
+    els.portfolioChart.classList.add("is-empty");
+    els.portfolioChart.innerHTML =
+      '<p class="chart-placeholder">点击左侧持仓，在此查看分时 / K 线详情</p>';
     return;
   }
   const series = board.series?.[tf];
@@ -504,7 +505,7 @@ function renderPortfolioChart() {
     kind === "candle"
       ? renderCandleSvg(points)
       : renderChartSvg(points, { up });
-  els.portfolioChart.hidden = false;
+  els.portfolioChart.classList.remove("is-empty");
   els.portfolioChart.innerHTML = `
     <div class="chart-head">
       <h3>${escapeHtml(board.label || board.symbol || "")} · ${escapeHtml(
