@@ -26,7 +26,12 @@ const state = {
   markets: null,
   portfolio: null,
   portfolioTf: "intraday",
+  portfolioSort: { key: "change_pct", dir: "desc" },
+  portfolioPreview: null,
+  portfolioSelectBusy: false,
 };
+
+const PORTFOLIO_TF_KEYS = ["intraday", "day", "month", "quarter", "year"];
 
 const els = {
   status: document.getElementById("status-line"),
@@ -36,11 +41,14 @@ const els = {
   marketsBlurb: document.getElementById("markets-blurb"),
   chartTfNote: document.getElementById("chart-tf-note"),
   tfFilters: document.getElementById("tf-filters"),
+  portfolioSection: document.getElementById("portfolio"),
   portfolioBlurb: document.getElementById("portfolio-blurb"),
   holdingRail: document.getElementById("holding-rail"),
   portfolioChart: document.getElementById("portfolio-chart"),
   portfolioTfFilters: document.getElementById("portfolio-tf-filters"),
   portfolioTfNote: document.getElementById("portfolio-tf-note"),
+  portfolioManage: document.getElementById("portfolio-manage"),
+  portfolioManageBtn: document.getElementById("btn-portfolio-manage"),
   portfolioAddForm: document.getElementById("portfolio-add-form"),
   portfolioSymbol: document.getElementById("portfolio-symbol"),
   portfolioName: document.getElementById("portfolio-name"),
@@ -48,6 +56,7 @@ const els = {
   portfolioRefresh: document.getElementById("btn-portfolio-refresh"),
   portfolioExport: document.getElementById("btn-portfolio-export"),
   portfolioImport: document.getElementById("portfolio-import"),
+  portfolioListHead: document.querySelector("#portfolio .holding-list-head"),
   agenda: document.getElementById("agenda-rail"),
   agendaBlurb: document.getElementById("agenda-blurb"),
   digest: document.getElementById("digest-line"),
@@ -454,20 +463,138 @@ function holdingSparkSvg(holding, tf) {
     series?.change_pct != null ? series.change_pct : holding?.change_pct;
   const up = !(typeof pct === "number" && pct < 0);
   if (kind === "candle") {
-    return miniCandleSvg(points) || `<span class="empty">暂无</span>`;
+    return (
+      miniCandleSvg(points, { width: 120, height: 30 }) ||
+      `<span class="empty">暂无</span>`
+    );
   }
   const sparkPoints = points.map((p) =>
     p && p.c != null && p.v == null ? { t: p.t, v: p.c } : p
   );
-  const path = sparklinePath(sparkPoints, 140, 42, 2);
+  const path = sparklinePath(sparkPoints, 120, 30, 2);
   if (!path) return `<span class="empty">暂无</span>`;
   const stroke = up ? TAPE_UP : TAPE_DOWN;
-  return `<svg class="spark" viewBox="0 0 140 42" preserveAspectRatio="none" aria-hidden="true"><path d="${path}" fill="none" stroke="${stroke}" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"></path></svg>`;
+  return `<svg class="spark" viewBox="0 0 120 30" preserveAspectRatio="none" aria-hidden="true"><path d="${path}" fill="none" stroke="${stroke}" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"></path></svg>`;
+}
+
+function holdingTfPct(holding, tf) {
+  const series = holding?.series?.[tf];
+  const pct = series?.change_pct != null ? series.change_pct : holding?.change_pct;
+  return typeof pct === "number" && !Number.isNaN(pct) ? pct : null;
+}
+
+function sortedHoldings(holdings, tf) {
+  const { key, dir } = state.portfolioSort || { key: "change_pct", dir: "desc" };
+  const mul = dir === "asc" ? 1 : -1;
+  return [...(holdings || [])].sort((a, b) => {
+    let av;
+    let bv;
+    if (key === "price") {
+      av = a.price;
+      bv = b.price;
+    } else {
+      av = holdingTfPct(a, tf);
+      bv = holdingTfPct(b, tf);
+    }
+    if (av == null && bv == null) return 0;
+    if (av == null) return 1;
+    if (bv == null) return -1;
+    if (av === bv) return String(a.symbol).localeCompare(String(b.symbol));
+    return av > bv ? mul : -mul;
+  });
+}
+
+function updatePortfolioSortMarks() {
+  if (!els.portfolioListHead) return;
+  const { key, dir } = state.portfolioSort || {};
+  els.portfolioListHead.querySelectorAll("[data-psort]").forEach((btn) => {
+    const on = btn.getAttribute("data-psort") === key;
+    btn.classList.toggle("is-active", on);
+    const mark = btn.querySelector(".sort-mark");
+    if (mark) mark.textContent = on ? (dir === "asc" ? "↑" : "↓") : "";
+  });
+}
+
+function seriesStats(points, kind) {
+  const bars = (points || []).filter(Boolean);
+  if (!bars.length) {
+    return { open: null, high: null, low: null, last: null, volume: null };
+  }
+  if (kind === "candle") {
+    const opens = bars.map((b) => Number(b.o)).filter((n) => !Number.isNaN(n));
+    const highs = bars.map((b) => Number(b.h)).filter((n) => !Number.isNaN(n));
+    const lows = bars.map((b) => Number(b.l)).filter((n) => !Number.isNaN(n));
+    const closes = bars.map((b) => Number(b.c)).filter((n) => !Number.isNaN(n));
+    const vols = bars
+      .map((b) => Number(b.v))
+      .filter((n) => !Number.isNaN(n) && n != null);
+    return {
+      open: opens[0] ?? null,
+      high: highs.length ? Math.max(...highs) : null,
+      low: lows.length ? Math.min(...lows) : null,
+      last: closes[closes.length - 1] ?? null,
+      volume: vols.length ? vols.reduce((s, n) => s + n, 0) : null,
+    };
+  }
+  const vals = bars
+    .map((b) => Number(b.v != null ? b.v : b.c))
+    .filter((n) => !Number.isNaN(n));
+  if (!vals.length) {
+    return { open: null, high: null, low: null, last: null, volume: null };
+  }
+  return {
+    open: vals[0],
+    high: Math.max(...vals),
+    low: Math.min(...vals),
+    last: vals[vals.length - 1],
+    volume: null,
+  };
+}
+
+function formatCompact(n) {
+  if (n == null || Number.isNaN(Number(n))) return "—";
+  const v = Number(n);
+  const abs = Math.abs(v);
+  if (abs >= 1e9) return `${(v / 1e9).toFixed(2)}B`;
+  if (abs >= 1e6) return `${(v / 1e6).toFixed(2)}M`;
+  if (abs >= 1e3) return `${(v / 1e3).toFixed(1)}K`;
+  return formatNumber(v, "");
+}
+
+function boardFromHolding(holding) {
+  if (!holding) return null;
+  return {
+    symbol: holding.symbol,
+    label: holding.label || holding.name || holding.symbol,
+    price: holding.price,
+    change: holding.change,
+    change_pct: holding.change_pct,
+    unit: holding.unit || "",
+    series: holding.series || {},
+    points: holding.points || [],
+  };
+}
+
+function activePortfolioBoard(data) {
+  const previewSym = state.portfolioPreview;
+  if (previewSym) {
+    const hit = (data?.holdings || []).find((h) => h.symbol === previewSym);
+    if (hit) return { board: boardFromHolding(hit), preview: true };
+  }
+  if (data?.selected_board) {
+    return { board: data.selected_board, preview: false };
+  }
+  const selected = data?.selected;
+  const hit = (data?.holdings || []).find((h) => h.symbol === selected);
+  if (hit) return { board: boardFromHolding(hit), preview: false };
+  const first = (data?.holdings || [])[0];
+  return first
+    ? { board: boardFromHolding(first), preview: false }
+    : { board: null, preview: false };
 }
 
 function renderPortfolioChart() {
   const data = state.portfolio || {};
-  const board = data.selected_board;
   const tf = state.portfolioTf || data.default_tf || "intraday";
   const meta =
     (data.timeframes || []).find((t) => t.id === tf) || {
@@ -488,84 +615,119 @@ function renderPortfolioChart() {
     });
   }
   if (!els.portfolioChart) return;
+
+  const { board, preview } = activePortfolioBoard(data);
   if (!board) {
     els.portfolioChart.classList.add("is-empty");
+    els.portfolioChart.classList.remove("is-preview");
     els.portfolioChart.innerHTML =
-      '<p class="chart-placeholder">点击左侧持仓，在此查看分时 / K 线详情</p>';
+      '<p class="chart-placeholder">添加持仓后，右侧将显示分时 / K 线详情</p>';
     return;
   }
+
   const series = board.series?.[tf];
-  const points = series?.points || [];
-  const pct = series?.change_pct;
+  const points = series?.points || board.points || [];
+  const pct =
+    series?.change_pct != null ? series.change_pct : board.change_pct;
   const up = !(typeof pct === "number" && pct < 0);
   const pctText =
     typeof pct === "number" ? `${pct >= 0 ? "+" : ""}${pct.toFixed(2)}%` : "—";
-  const kind = series?.chart || meta.chart || (tf === "intraday" ? "line" : "candle");
+  const kind =
+    series?.chart || meta.chart || (tf === "intraday" ? "line" : "candle");
+  const stats = seriesStats(points, kind);
+  const price = board.price != null ? board.price : stats.last;
   const svg =
     kind === "candle"
       ? renderCandleSvg(points)
       : renderChartSvg(points, { up });
+
   els.portfolioChart.classList.remove("is-empty");
+  els.portfolioChart.classList.toggle("is-preview", Boolean(preview));
   els.portfolioChart.innerHTML = `
     <div class="chart-head">
       <h3>${escapeHtml(board.label || board.symbol || "")} · ${escapeHtml(
         board.symbol || ""
-      )}</h3>
+      )}${preview ? '<span class="preview-tag">预览</span>' : ""}</h3>
       <span class="range chg ${up ? "up" : "down"}">${escapeHtml(
         meta.label || ""
       )} · 区间 ${pctText}</span>
     </div>
+    <div class="portfolio-stats" aria-label="区间读数">
+      <span><span class="k">现价</span><span class="v ${
+        up ? "up" : "down"
+      }">${escapeHtml(price == null ? "—" : formatNumber(price, ""))}</span></span>
+      <span><span class="k">开</span><span class="v">${escapeHtml(
+        stats.open == null ? "—" : formatNumber(stats.open, "")
+      )}</span></span>
+      <span><span class="k">高</span><span class="v up">${escapeHtml(
+        stats.high == null ? "—" : formatNumber(stats.high, "")
+      )}</span></span>
+      <span><span class="k">低</span><span class="v down">${escapeHtml(
+        stats.low == null ? "—" : formatNumber(stats.low, "")
+      )}</span></span>
+      <span><span class="k">量</span><span class="v">${escapeHtml(
+        formatCompact(stats.volume)
+      )}</span></span>
+    </div>
     ${svg}
-    <div class="chart-foot">${escapeHtml(series?.blurb || meta.blurb || "")} · 现价 ${formatNumber(
-      board.price,
-      board.unit || ""
-    )}</div>
+    <div class="chart-foot">${escapeHtml(
+      series?.blurb || meta.blurb || ""
+    )} · 红涨绿跌 · 延迟报价</div>
   `;
 }
 
 function holdingsCountNote(data, meta) {
   const n = (data?.holdings || []).length;
-  if (!n) return "添加持仓后，这里会同时显示全部走势";
-  return `全部 ${n} 只持仓 · ${meta?.label || ""}（红涨绿跌）`;
+  if (!n) return "打开「管理持仓」添加代码；支持导出 / 导入备份";
+  return `全部 ${n} 只 · ${meta?.label || ""} · 悬停预览 · 点击锁定 · ↑↓ 切换`;
 }
 
 function renderPortfolio(data) {
   state.portfolio = data || null;
   const holdings = data?.holdings || [];
-  const selected = data?.selected || "";
+  const selected = data?.selected || holdings[0]?.symbol || "";
   const tf = state.portfolioTf || data?.default_tf || "intraday";
   const meta =
     (data?.timeframes || []).find((t) => t.id === tf) || {
       id: tf,
       label: tf,
     };
+  const previewSym = state.portfolioPreview;
 
   if (els.portfolioBlurb) {
     els.portfolioBlurb.textContent =
       data?.note ||
-      `自定义股票 · 云端同步 · 最多 ${data?.max_holdings || 20} 只`;
+      `自定义股票 · 云端同步 · 最多 ${data?.max_holdings || 20} 只 · 红涨绿跌`;
   }
+
+  updatePortfolioSortMarks();
 
   if (els.holdingRail) {
     if (!holdings.length) {
       els.holdingRail.innerHTML =
-        '<p class="empty">还没有持仓，先添加一只美股代码。</p>';
+        '<p class="empty">还没有持仓，点右上角「管理持仓」添加美股代码。</p>';
     } else {
-      els.holdingRail.innerHTML = holdings
+      const rows = sortedHoldings(holdings, tf);
+      els.holdingRail.innerHTML = rows
         .map((h) => {
-          const series = h.series?.[tf];
-          const pct =
-            series?.change_pct != null ? series.change_pct : h.change_pct;
+          const pct = holdingTfPct(h, tf);
           const cls =
             pct == null || Number.isNaN(pct) ? "" : pct >= 0 ? "up" : "down";
           const pctText =
             pct == null || Number.isNaN(pct)
               ? "—"
               : `${pct >= 0 ? "+" : ""}${pct.toFixed(2)}%`;
+          const active = h.symbol === selected ? "is-active" : "";
+          const preview =
+            previewSym && h.symbol === previewSym && h.symbol !== selected
+              ? "is-preview"
+              : "";
           return `
-            <button type="button" class="holding-row ${
-              h.symbol === selected ? "is-active" : ""
-            }" data-holding="${escapeHtml(h.symbol)}">
+            <button type="button" class="holding-row ${cls} ${active} ${preview}" data-holding="${escapeHtml(
+              h.symbol
+            )}" role="option" aria-selected="${
+              h.symbol === selected ? "true" : "false"
+            }">
               <span class="meta">
                 <span class="nm">${escapeHtml(h.name || h.label || h.symbol)}</span>
                 <span class="sym">${escapeHtml(h.symbol)}</span>
@@ -587,13 +749,56 @@ function renderPortfolio(data) {
   renderPortfolioChart();
 }
 
+async function selectPortfolioSymbol(symbol, { quiet = false } = {}) {
+  if (!symbol || state.portfolioSelectBusy) return;
+  if (symbol === state.portfolio?.selected) {
+    state.portfolioPreview = null;
+    renderPortfolio(state.portfolio);
+    return;
+  }
+  state.portfolioSelectBusy = true;
+  try {
+    const data = await portfolioPost("/api/portfolio/select", { symbol });
+    state.portfolioPreview = null;
+    renderPortfolio(data.portfolio);
+  } catch (err) {
+    if (!quiet && els.portfolioBlurb) {
+      els.portfolioBlurb.textContent = `切换失败：${err.message || err}`;
+    }
+  } finally {
+    state.portfolioSelectBusy = false;
+  }
+}
+
+async function ensurePortfolioSelection(data) {
+  const holdings = data?.holdings || [];
+  if (!holdings.length) return data;
+  const selected = data.selected;
+  const hasBoard = Boolean(data.selected_board);
+  const valid = selected && holdings.some((h) => h.symbol === selected);
+  if (valid && hasBoard) return data;
+  const target = (valid && selected) || holdings[0].symbol;
+  try {
+    const res = await portfolioPost("/api/portfolio/select", { symbol: target });
+    return res.portfolio || data;
+  } catch {
+    return {
+      ...data,
+      selected: target,
+      selected_board: boardFromHolding(
+        holdings.find((h) => h.symbol === target) || holdings[0]
+      ),
+    };
+  }
+}
+
 async function loadPortfolio({ refresh = false } = {}) {
   try {
     const res = await fetch(`/api/portfolio${refresh ? "?refresh=true" : ""}`);
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
-    const data = await res.json();
+    let data = await res.json();
+    data = await ensurePortfolioSelection(data);
     renderPortfolio(data);
-    // mirror for same-browser recovery
     try {
       localStorage.setItem(
         "pulse_portfolio_backup",
@@ -1366,18 +1571,106 @@ els.portfolioTfFilters?.addEventListener("click", (event) => {
   else renderPortfolioChart();
 });
 
+els.portfolioManageBtn?.addEventListener("click", () => {
+  if (!els.portfolioManage || !els.portfolioManageBtn) return;
+  const open = els.portfolioManage.hasAttribute("hidden");
+  if (open) {
+    els.portfolioManage.removeAttribute("hidden");
+    els.portfolioManageBtn.classList.add("is-open");
+    els.portfolioManageBtn.setAttribute("aria-expanded", "true");
+    els.portfolioSymbol?.focus();
+  } else {
+    els.portfolioManage.setAttribute("hidden", "");
+    els.portfolioManageBtn.classList.remove("is-open");
+    els.portfolioManageBtn.setAttribute("aria-expanded", "false");
+  }
+});
+
+els.portfolioListHead?.addEventListener("click", (event) => {
+  const btn = event.target.closest("[data-psort]");
+  if (!btn || !state.portfolio) return;
+  const key = btn.getAttribute("data-psort");
+  if (!key) return;
+  if (state.portfolioSort.key === key) {
+    state.portfolioSort.dir =
+      state.portfolioSort.dir === "desc" ? "asc" : "desc";
+  } else {
+    state.portfolioSort = { key, dir: "desc" };
+  }
+  renderPortfolio(state.portfolio);
+});
+
 els.holdingRail?.addEventListener("click", async (event) => {
   const btn = event.target.closest("[data-holding]");
   if (!btn) return;
   const symbol = btn.getAttribute("data-holding");
-  try {
-    const data = await portfolioPost("/api/portfolio/select", { symbol });
-    renderPortfolio(data.portfolio);
-  } catch (err) {
-    if (els.portfolioBlurb) {
-      els.portfolioBlurb.textContent = `切换失败：${err.message || err}`;
-    }
+  await selectPortfolioSymbol(symbol);
+});
+
+function syncHoldingPreviewClasses() {
+  if (!els.holdingRail) return;
+  const selected = state.portfolio?.selected || "";
+  const preview = state.portfolioPreview;
+  els.holdingRail.querySelectorAll("[data-holding]").forEach((row) => {
+    const sym = row.getAttribute("data-holding");
+    row.classList.toggle("is-preview", Boolean(preview && sym === preview && sym !== selected));
+  });
+}
+
+els.holdingRail?.addEventListener("mouseover", (event) => {
+  const btn = event.target.closest("[data-holding]");
+  if (!btn || !state.portfolio) return;
+  const symbol = btn.getAttribute("data-holding");
+  if (!symbol || symbol === state.portfolioPreview) return;
+  state.portfolioPreview = symbol;
+  syncHoldingPreviewClasses();
+  renderPortfolioChart();
+});
+
+els.holdingRail?.addEventListener("mouseleave", () => {
+  if (!state.portfolioPreview) return;
+  state.portfolioPreview = null;
+  syncHoldingPreviewClasses();
+  renderPortfolioChart();
+});
+
+document.addEventListener("keydown", (event) => {
+  if (event.metaKey || event.ctrlKey || event.altKey) return;
+  const tag = (event.target?.tagName || "").toLowerCase();
+  if (tag === "input" || tag === "textarea" || event.target?.isContentEditable) {
+    return;
   }
+  const holdings = state.portfolio?.holdings || [];
+  if (!holdings.length) return;
+
+  if (event.key >= "1" && event.key <= "5") {
+    const tf = PORTFOLIO_TF_KEYS[Number(event.key) - 1];
+    if (!tf) return;
+    event.preventDefault();
+    state.portfolioTf = tf;
+    renderPortfolio(state.portfolio);
+    return;
+  }
+
+  if (event.key !== "ArrowDown" && event.key !== "ArrowUp") return;
+  const tf = state.portfolioTf || "intraday";
+  const rows = sortedHoldings(holdings, tf);
+  if (!rows.length) return;
+  const current =
+    state.portfolioPreview || state.portfolio?.selected || rows[0].symbol;
+  const idx = Math.max(
+    0,
+    rows.findIndex((h) => h.symbol === current)
+  );
+  const next =
+    event.key === "ArrowDown"
+      ? rows[Math.min(rows.length - 1, idx + 1)]
+      : rows[Math.max(0, idx - 1)];
+  if (!next) return;
+  event.preventDefault();
+  selectPortfolioSymbol(next.symbol, { quiet: true });
+  const el = els.holdingRail?.querySelector(`[data-holding="${next.symbol}"]`);
+  el?.scrollIntoView({ block: "nearest" });
 });
 
 els.portfolioAddForm?.addEventListener("submit", async (event) => {
@@ -1390,7 +1683,9 @@ els.portfolioAddForm?.addEventListener("submit", async (event) => {
     if (els.portfolioSymbol) els.portfolioSymbol.value = "";
     if (els.portfolioName) els.portfolioName.value = "";
     state.portfolioTf = "intraday";
-    renderPortfolio(data.portfolio);
+    state.portfolioPreview = null;
+    const portfolio = await ensurePortfolioSelection(data.portfolio);
+    renderPortfolio(portfolio);
   } catch (err) {
     if (els.portfolioBlurb) {
       els.portfolioBlurb.textContent = `添加失败：${err.message || err}`;
@@ -1404,7 +1699,9 @@ els.portfolioRemove?.addEventListener("click", async () => {
   if (!confirm(`确定删除持仓 ${symbol}？`)) return;
   try {
     const data = await portfolioPost("/api/portfolio/remove", { symbol });
-    renderPortfolio(data.portfolio);
+    state.portfolioPreview = null;
+    const portfolio = await ensurePortfolioSelection(data.portfolio);
+    renderPortfolio(portfolio);
   } catch (err) {
     if (els.portfolioBlurb) {
       els.portfolioBlurb.textContent = `删除失败：${err.message || err}`;
@@ -1449,7 +1746,9 @@ els.portfolioImport?.addEventListener("change", async (event) => {
     });
     const data = await res.json();
     if (!res.ok) throw new Error(data.detail || `HTTP ${res.status}`);
-    renderPortfolio(data.portfolio);
+    state.portfolioPreview = null;
+    const portfolio = await ensurePortfolioSelection(data.portfolio);
+    renderPortfolio(portfolio);
   } catch (err) {
     if (els.portfolioBlurb) {
       els.portfolioBlurb.textContent = `导入失败：${err.message || err}`;
