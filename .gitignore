@@ -12,5 +12,8 @@ data/settings.json
 data/translate_cache.json
 data/share.json
 data/portfolio.json
+data/users.json
+data/secret.key
+data/portfolios/
 .tools/
 .env

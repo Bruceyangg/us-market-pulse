@@ -6,13 +6,32 @@
         <p class="page-kicker">交易台</p>
         <h1>我的持仓</h1>
         <p class="lede compact">
-          持仓走势与关联情报同屏 · 分时 / 日 / 月 / 季 / 年 · 红涨绿跌 · 云端同步
+          {% if user %}
+          当前账户 <strong>{{ user.display_name or user.username }}</strong> · 持仓走势与关联情报同屏 · 红涨绿跌
+          {% else %}
+          登录后查看与管理你的个人持仓；每个账户数据互相隔离。
+          {% endif %}
         </p>
         <div class="cta-row">
+          {% if user %}
           <a class="btn ghost" href="#holding-intel">持仓情报</a>
           <a class="btn ghost" href="/intel?holdings=1">情报页筛选持仓</a>
+          {% else %}
+          <a class="btn primary" href="/login">登录 / 注册</a>
+          <a class="btn ghost" href="/markets">先看市场</a>
+          {% endif %}
         </div>
       </section>
+
+      {% if not user %}
+      <section class="auth-gate" aria-label="需要登录">
+        <div class="auth-gate-card">
+          <h2>登录后显示个人持仓</h2>
+          <p>注册一个用户名与密码，即可保存自己的股票列表，并在其他设备用同一账户打开。</p>
+          <a class="btn primary" href="/login">前往登录</a>
+        </div>
+      </section>
+      {% else %}
       <div class="workspace workspace-single">
         <div class="workspace-main">
 <section class="portfolio" id="portfolio" aria-label="我的持仓" tabindex="-1">
@@ -112,4 +131,5 @@
       </section>
         </div>
       </div>
+      {% endif %}
 {% endblock %}

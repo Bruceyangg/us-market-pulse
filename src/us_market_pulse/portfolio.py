@@ -1,4 +1,4 @@
-"""Personalized holdings list persisted for cross-device viewing."""
+"""Personalized holdings list persisted per logged-in user."""
 
 from __future__ import annotations
 
@@ -7,6 +7,7 @@ import json
 import re
 import threading
 import time
+from pathlib import Path
 from typing import Any
 
 import httpx
@@ -15,8 +16,10 @@ from us_market_pulse.config import DATA_DIR
 from us_market_pulse.markets import PORTFOLIO_TIMEFRAMES, fetch_symbol_bundle
 
 _LOCK = threading.Lock()
-PORTFOLIO_PATH = DATA_DIR / "portfolio.json"
+PORTFOLIOS_DIR = DATA_DIR / "portfolios"
+LEGACY_PORTFOLIO_PATH = DATA_DIR / "portfolio.json"
 _SYMBOL_RE = re.compile(r"^[A-Za-z0-9.\-^]{1,12}$")
+_USER_FILE_RE = re.compile(r"^[a-z0-9_]{3,24}$")
 MAX_HOLDINGS = 20
 
 _CACHE: dict[str, Any] = {
@@ -34,14 +37,14 @@ def _empty() -> dict[str, Any]:
     }
 
 
-def load_portfolio() -> dict[str, Any]:
-    DATA_DIR.mkdir(parents=True, exist_ok=True)
-    if not PORTFOLIO_PATH.exists():
-        return _empty()
-    try:
-        data = json.loads(PORTFOLIO_PATH.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
-        return _empty()
+def portfolio_path(username: str) -> Path:
+    user = str(username or "").strip().lower()
+    if not _USER_FILE_RE.match(user):
+        raise ValueError("无效用户")
+    return PORTFOLIOS_DIR / f"{user}.json"
+
+
+def _normalize_payload(data: dict[str, Any]) -> dict[str, Any]:
     holdings = []
     for row in data.get("holdings") or []:
         symbol = normalize_symbol(row.get("symbol"))
@@ -65,11 +68,33 @@ def load_portfolio() -> dict[str, Any]:
     }
 
 
-def save_portfolio(data: dict[str, Any]) -> dict[str, Any]:
+def load_portfolio(username: str) -> dict[str, Any]:
+    path = portfolio_path(username)
+    PORTFOLIOS_DIR.mkdir(parents=True, exist_ok=True)
+    if not path.exists():
+        # One-time bridge: first account can inherit legacy shared file.
+        if LEGACY_PORTFOLIO_PATH.exists() and not any(PORTFOLIOS_DIR.glob("*.json")):
+            try:
+                legacy = json.loads(LEGACY_PORTFOLIO_PATH.read_text(encoding="utf-8"))
+                cleaned = _normalize_payload(legacy)
+                save_portfolio(username, cleaned)
+                return cleaned
+            except (OSError, json.JSONDecodeError, ValueError):
+                pass
+        return _empty()
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return _empty()
+    return _normalize_payload(data)
+
+
+def save_portfolio(username: str, data: dict[str, Any]) -> dict[str, Any]:
     cleaned = {
         "updated_at": time.time(),
         "selected": normalize_symbol(data.get("selected")) or "",
         "holdings": [],
+        "owner": str(username).strip().lower(),
     }
     seen: set[str] = set()
     for row in data.get("holdings") or []:
@@ -90,12 +115,15 @@ def save_portfolio(data: dict[str, Any]) -> dict[str, Any]:
     if cleaned["selected"] not in {h["symbol"] for h in cleaned["holdings"]}:
         cleaned["selected"] = cleaned["holdings"][0]["symbol"] if cleaned["holdings"] else ""
 
+    path = portfolio_path(username)
     with _LOCK:
-        DATA_DIR.mkdir(parents=True, exist_ok=True)
-        PORTFOLIO_PATH.write_text(
+        PORTFOLIOS_DIR.mkdir(parents=True, exist_ok=True)
+        tmp = path.with_suffix(".tmp")
+        tmp.write_text(
             json.dumps(cleaned, ensure_ascii=False, indent=2) + "\n",
             encoding="utf-8",
         )
+        tmp.replace(path)
     return cleaned
 
 
@@ -106,18 +134,22 @@ def normalize_symbol(raw: Any) -> str:
     return symbol
 
 
-def add_holding(symbol: str, *, name: str = "", note: str = "") -> dict[str, Any]:
+def add_holding(
+    username: str, symbol: str, *, name: str = "", note: str = ""
+) -> dict[str, Any]:
     symbol = normalize_symbol(symbol)
     if not symbol:
         raise ValueError("代码无效。请输入美股代码，如 AAPL、NVDA、TSLA。")
-    data = load_portfolio()
+    data = load_portfolio(username)
     holdings = data["holdings"]
     for row in holdings:
         if row["symbol"] == symbol:
             row["name"] = (name or row["name"] or symbol).strip()[:40]
-            row["note"] = (note if note is not None else row.get("note") or "").strip()[:80]
+            row["note"] = (note if note is not None else row.get("note") or "").strip()[
+                :80
+            ]
             data["selected"] = symbol
-            return save_portfolio(data)
+            return save_portfolio(username, data)
     if len(holdings) >= MAX_HOLDINGS:
         raise ValueError(f"最多添加 {MAX_HOLDINGS} 只持仓。")
     holdings.append(
@@ -130,40 +162,42 @@ def add_holding(symbol: str, *, name: str = "", note: str = "") -> dict[str, Any
     )
     data["holdings"] = holdings
     data["selected"] = symbol
-    return save_portfolio(data)
+    return save_portfolio(username, data)
 
 
-def remove_holding(symbol: str) -> dict[str, Any]:
+def remove_holding(username: str, symbol: str) -> dict[str, Any]:
     symbol = normalize_symbol(symbol)
-    data = load_portfolio()
+    data = load_portfolio(username)
     data["holdings"] = [h for h in data["holdings"] if h["symbol"] != symbol]
     if data.get("selected") == symbol:
         data["selected"] = data["holdings"][0]["symbol"] if data["holdings"] else ""
-    # drop quote cache
     _CACHE["boards"].pop(symbol, None)
-    return save_portfolio(data)
+    return save_portfolio(username, data)
 
 
-def select_holding(symbol: str) -> dict[str, Any]:
+def select_holding(username: str, symbol: str) -> dict[str, Any]:
     symbol = normalize_symbol(symbol)
-    data = load_portfolio()
+    data = load_portfolio(username)
     symbols = {h["symbol"] for h in data["holdings"]}
     if symbol and symbol not in symbols:
         raise ValueError("该代码不在持仓列表中")
     data["selected"] = symbol
-    return save_portfolio(data)
+    return save_portfolio(username, data)
 
 
-def replace_holdings(holdings: list[dict[str, Any]], *, selected: str = "") -> dict[str, Any]:
-    return save_portfolio({"holdings": holdings, "selected": selected})
+def replace_holdings(
+    username: str, holdings: list[dict[str, Any]], *, selected: str = ""
+) -> dict[str, Any]:
+    return save_portfolio(username, {"holdings": holdings, "selected": selected})
 
 
 async def build_portfolio_view(
+    username: str,
     *,
     force_refresh: bool = False,
     client: httpx.AsyncClient | None = None,
 ) -> dict[str, Any]:
-    data = load_portfolio()
+    data = load_portfolio(username)
     holdings = data["holdings"]
     now = time.time()
     boards: dict[str, Any] = dict(_CACHE.get("boards") or {})
@@ -207,13 +241,17 @@ async def build_portfolio_view(
                 await _load(http)
         else:
             await _load(client)
-        _CACHE["boards"] = {s: boards[s] for s in symbols if s in boards}
+        merged = dict(_CACHE.get("boards") or {})
+        merged.update({s: boards[s] for s in symbols if s in boards})
+        _CACHE["boards"] = merged
         _CACHE["quotes_at"] = now
     else:
-        _CACHE["boards"] = {s: boards[s] for s in symbols if s in boards}
+        # keep shared quote cache; ensure selected symbols present
+        _CACHE["boards"] = {**(_CACHE.get("boards") or {}), **{s: boards[s] for s in symbols if s in boards}}
 
+    boards = _CACHE.get("boards") or {}
     selected = data.get("selected") or (symbols[0] if symbols else "")
-    selected_board = _CACHE["boards"].get(selected)
+    selected_board = boards.get(selected)
 
     timeframes = [
         {
@@ -234,7 +272,7 @@ async def build_portfolio_view(
 
     cards = []
     for h in holdings:
-        board = _CACHE["boards"].get(h["symbol"]) or {}
+        board = boards.get(h["symbol"]) or {}
         cards.append(
             {
                 **h,
@@ -258,7 +296,8 @@ async def build_portfolio_view(
         "timeframes": timeframes,
         "default_tf": "intraday",
         "max_holdings": MAX_HOLDINGS,
+        "owner": str(username).strip().lower(),
         "errors": errors,
-        "note": "持仓保存在云端服务，手机/电脑打开同一网站即可同步；部署重建后可用导出备份恢复。",
+        "note": "持仓绑定当前登录账户；换设备用同一账号登录即可同步。部署重建后请用导出备份恢复。",
         "style": {"up": "red", "down": "green"},
     }

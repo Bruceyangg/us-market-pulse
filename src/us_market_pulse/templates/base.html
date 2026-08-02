@@ -52,6 +52,12 @@
       <div class="header-meta">
         <span class="live-dot" aria-hidden="true"></span>
         <span id="status-line">{% block status_default %}就绪{% endblock %}</span>
+        {% if user %}
+        <span class="user-chip" id="user-chip" title="当前账户">{{ user.display_name or user.username }}</span>
+        <button class="btn ghost btn-compact" id="btn-logout" type="button">退出</button>
+        {% else %}
+        <a class="btn ghost btn-compact" id="btn-login" href="/login">登录</a>
+        {% endif %}
       </div>
     </header>
 
@@ -69,9 +75,15 @@
       <a href="/intel" class="{% if page == 'intel' %}is-active{% endif %}">
         <span class="tab-label">情报</span>
       </a>
+      {% if user %}
       <a href="/settings" class="{% if page == 'settings' %}is-active{% endif %}">
         <span class="tab-label">设置</span>
       </a>
+      {% else %}
+      <a href="/login" class="{% if page == 'login' %}is-active{% endif %}">
+        <span class="tab-label">登录</span>
+      </a>
+      {% endif %}
     </nav>
 
     <footer class="site-footer">

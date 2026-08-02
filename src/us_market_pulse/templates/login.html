@@ -1,0 +1,61 @@
+{% extends "base.html" %}
+{% block title %}Pulse Desk · 登录{% endblock %}
+{% block status_default %}登录后查看个人持仓{% endblock %}
+{% block content %}
+      <section class="auth-panel" aria-label="登录与注册">
+        <div class="auth-card">
+          <p class="page-kicker">账户</p>
+          <h1>登录 Pulse Desk</h1>
+          <p class="lede compact">
+            每个账户拥有独立持仓。注册后即可在手机与电脑间同步自己的列表。
+          </p>
+
+          <div class="auth-tabs" role="tablist" aria-label="登录或注册">
+            <button type="button" class="filter is-active" data-auth-tab="login" aria-selected="true">登录</button>
+            <button type="button" class="filter" data-auth-tab="register" aria-selected="false">注册</button>
+          </div>
+
+          <form class="auth-form" id="auth-form">
+            <input type="hidden" name="mode" id="auth-mode" value="login" />
+            <label>
+              <span>用户名</span>
+              <input
+                id="auth-username"
+                name="username"
+                type="text"
+                autocomplete="username"
+                placeholder="字母数字下划线，3–24 位"
+                required
+              />
+            </label>
+            <label id="auth-display-wrap" hidden>
+              <span>显示名（可选）</span>
+              <input
+                id="auth-display"
+                name="display_name"
+                type="text"
+                autocomplete="nickname"
+                placeholder="如：小明"
+              />
+            </label>
+            <label>
+              <span>密码</span>
+              <input
+                id="auth-password"
+                name="password"
+                type="password"
+                autocomplete="current-password"
+                placeholder="至少 6 位"
+                required
+              />
+            </label>
+            <p class="auth-error" id="auth-error" hidden></p>
+            <button class="btn primary" id="auth-submit" type="submit">登录</button>
+          </form>
+
+          <p class="auth-note">
+            持仓按账户保存在服务器本地文件。Render 免费实例重建后可能清空，请定期导出备份。
+          </p>
+        </div>
+      </section>
+{% endblock %}

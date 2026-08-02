@@ -36,6 +36,7 @@ const state = {
 
 const PORTFOLIO_TF_KEYS = ["intraday", "day", "month", "quarter", "year"];
 const PAGE = document.body?.dataset?.page || "desk";
+const AUTHED = Boolean(document.getElementById("user-chip") || document.getElementById("btn-logout"));
 
 const els = {
   status: document.getElementById("status-line"),
@@ -807,8 +808,17 @@ async function ensurePortfolioSelection(data) {
 }
 
 async function loadPortfolio({ refresh = false } = {}) {
+  if (PAGE === "desk" && !AUTHED) return null;
   try {
-    const res = await fetch(`/api/portfolio${refresh ? "?refresh=true" : ""}`);
+    const res = await fetch(`/api/portfolio${refresh ? "?refresh=true" : ""}`, {
+      credentials: "same-origin",
+    });
+    if (res.status === 401) {
+      if (PAGE === "desk") {
+        setStatus("请先登录查看个人持仓");
+      }
+      return null;
+    }
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     let data = await res.json();
     data = await ensurePortfolioSelection(data);
@@ -839,10 +849,15 @@ async function loadPortfolio({ refresh = false } = {}) {
 async function portfolioPost(path, body) {
   const res = await fetch(path, {
     method: "POST",
+    credentials: "same-origin",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body),
   });
   const data = await res.json().catch(() => ({}));
+  if (res.status === 401) {
+    window.location.href = "/login";
+    throw new Error(data.detail || "请先登录");
+  }
   if (!res.ok) throw new Error(data.detail || `HTTP ${res.status}`);
   return data;
 }
@@ -1103,6 +1118,7 @@ function renderHoldingIntel(data) {
 
 async function loadHoldingIntel({ refresh = false, symbol } = {}) {
   if (!els.holdingIntelList && !els.holdingIntelChips) return null;
+  if (!AUTHED) return null;
   const filter =
     symbol !== undefined ? symbol || "" : state.holdingFilter || "";
   state.holdingFilter = filter;
@@ -1115,7 +1131,16 @@ async function loadHoldingIntel({ refresh = false, symbol } = {}) {
     if (refresh) params.set("refresh", "true");
     if (filter) params.set("symbol", filter);
     params.set("limit", "20");
-    const res = await fetch(`/api/portfolio/intel?${params.toString()}`);
+    const res = await fetch(`/api/portfolio/intel?${params.toString()}`, {
+      credentials: "same-origin",
+    });
+    if (res.status === 401) {
+      if (els.holdingIntelList) {
+        els.holdingIntelList.innerHTML =
+          '<p class="empty">登录后可查看持仓关联情报。</p>';
+      }
+      return null;
+    }
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     const data = await res.json();
     renderHoldingIntel(data);
@@ -1997,6 +2022,7 @@ els.portfolioImport?.addEventListener("change", async (event) => {
     const selected = parsed.selected || parsed.portfolio?.selected || "";
     const res = await fetch("/api/portfolio", {
       method: "PUT",
+      credentials: "same-origin",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ holdings, selected }),
     });
@@ -2325,15 +2351,104 @@ function readIntelQueryFlags() {
   syncHoldingsFilterUi();
 }
 
+function bindAuthPage() {
+  const form = document.getElementById("auth-form");
+  if (!form) return;
+  const modeInput = document.getElementById("auth-mode");
+  const submitBtn = document.getElementById("auth-submit");
+  const errorEl = document.getElementById("auth-error");
+  const displayWrap = document.getElementById("auth-display-wrap");
+  const passwordInput = document.getElementById("auth-password");
+
+  document.querySelectorAll("[data-auth-tab]").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      const mode = btn.getAttribute("data-auth-tab") || "login";
+      document.querySelectorAll("[data-auth-tab]").forEach((el) => {
+        const on = el === btn;
+        el.classList.toggle("is-active", on);
+        el.setAttribute("aria-selected", on ? "true" : "false");
+      });
+      if (modeInput) modeInput.value = mode;
+      if (displayWrap) displayWrap.hidden = mode !== "register";
+      if (passwordInput) {
+        passwordInput.autocomplete =
+          mode === "register" ? "new-password" : "current-password";
+      }
+      if (submitBtn) submitBtn.textContent = mode === "register" ? "注册并登录" : "登录";
+      if (errorEl) {
+        errorEl.hidden = true;
+        errorEl.textContent = "";
+      }
+    });
+  });
+
+  form.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const mode = modeInput?.value || "login";
+    const username = document.getElementById("auth-username")?.value.trim() || "";
+    const password = document.getElementById("auth-password")?.value || "";
+    const display_name = document.getElementById("auth-display")?.value.trim() || "";
+    if (submitBtn) submitBtn.disabled = true;
+    if (errorEl) {
+      errorEl.hidden = true;
+      errorEl.textContent = "";
+    }
+    try {
+      const res = await fetch(
+        mode === "register" ? "/api/auth/register" : "/api/auth/login",
+        {
+          method: "POST",
+          credentials: "same-origin",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ username, password, display_name }),
+        }
+      );
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.detail || `HTTP ${res.status}`);
+      const next = new URLSearchParams(window.location.search).get("next") || "/";
+      window.location.href = next.startsWith("/") ? next : "/";
+    } catch (err) {
+      if (errorEl) {
+        errorEl.hidden = false;
+        errorEl.textContent = err.message || String(err);
+      }
+    } finally {
+      if (submitBtn) submitBtn.disabled = false;
+    }
+  });
+}
+
+document.getElementById("btn-logout")?.addEventListener("click", async () => {
+  try {
+    await fetch("/api/auth/logout", {
+      method: "POST",
+      credentials: "same-origin",
+    });
+  } finally {
+    window.location.href = "/login";
+  }
+});
+
 function bootPage() {
+  if (PAGE === "login") {
+    bindAuthPage();
+    setStatus("登录后查看个人持仓");
+    return;
+  }
   if (PAGE === "desk") {
+    if (!AUTHED) {
+      setStatus("未登录 · 持仓需登录后查看");
+      return;
+    }
     loadPortfolio().then(() => {
       const selected = state.portfolio?.selected || "";
       loadHoldingIntel({ symbol: selected || "" });
     });
     setInterval(() => {
       loadPortfolio({ refresh: true });
-      loadHoldingIntel({ symbol: state.holdingFilter || state.portfolio?.selected || "" });
+      loadHoldingIntel({
+        symbol: state.holdingFilter || state.portfolio?.selected || "",
+      });
     }, 90 * 1000);
   } else if (PAGE === "markets") {
     loadMarketsDesk();
@@ -2345,8 +2460,6 @@ function bootPage() {
   } else if (PAGE === "settings") {
     loadSettingsPage();
     loadAccessTip();
-  } else {
-    loadPortfolio();
   }
 }
 

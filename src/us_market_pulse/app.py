@@ -8,12 +8,23 @@ from pathlib import Path
 from typing import Any
 
 from fastapi import FastAPI, Header, HTTPException, Query, Request
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
+from starlette.middleware.sessions import SessionMiddleware
 
 from us_market_pulse import lan_ips
+from us_market_pulse.auth import (
+    authenticate_user,
+    current_user,
+    current_username,
+    login_session,
+    logout_session,
+    register_user,
+    require_user,
+    session_secret,
+)
 from us_market_pulse.config import load_settings, save_settings
 from us_market_pulse.feeds import (
     CATEGORIES,
@@ -73,6 +84,12 @@ class PortfolioReplace(BaseModel):
     selected: str | None = None
 
 
+class AuthForm(BaseModel):
+    username: str
+    password: str = Field(min_length=1)
+    display_name: str | None = None
+
+
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
     stop = asyncio.Event()
@@ -87,8 +104,16 @@ async def lifespan(_app: FastAPI):
 app = FastAPI(
     title="Pulse Desk",
     description="美股 · 政策 · 美联储 · 国债情报台",
-    version="0.3.0",
+    version="0.4.0",
     lifespan=lifespan,
+)
+app.add_middleware(
+    SessionMiddleware,
+    secret_key=session_secret(),
+    session_cookie="pulse_session",
+    max_age=60 * 60 * 24 * 30,
+    same_site="lax",
+    https_only=False,
 )
 app.mount("/static", StaticFiles(directory=BASE_DIR / "static"), name="static")
 templates = Jinja2Templates(directory=str(BASE_DIR / "templates"))
@@ -99,6 +124,7 @@ def _page(request: Request, template: str, page: str, **extra: Any) -> HTMLRespo
         "page": page,
         "categories": CATEGORIES,
         "source_count": len(FEED_SOURCES),
+        "user": current_user(request),
         **extra,
     }
     return templates.TemplateResponse(request, template, ctx)
@@ -107,6 +133,13 @@ def _page(request: Request, template: str, page: str, **extra: Any) -> HTMLRespo
 @app.get("/", response_class=HTMLResponse)
 async def home(request: Request) -> HTMLResponse:
     return _page(request, "desk.html", "desk")
+
+
+@app.get("/login", response_class=HTMLResponse)
+async def login_page(request: Request) -> HTMLResponse:
+    if current_username(request):
+        return RedirectResponse("/", status_code=303)
+    return _page(request, "login.html", "login")
 
 
 @app.get("/markets", response_class=HTMLResponse)
@@ -124,6 +157,40 @@ async def settings_page(request: Request) -> HTMLResponse:
     return _page(request, "settings.html", "settings")
 
 
+@app.get("/api/auth/me")
+async def api_auth_me(request: Request) -> dict[str, Any]:
+    user = current_user(request)
+    return {"ok": True, "authenticated": bool(user), "user": user}
+
+
+@app.post("/api/auth/register")
+async def api_auth_register(request: Request, body: AuthForm) -> dict[str, Any]:
+    try:
+        user = register_user(
+            body.username, body.password, display_name=body.display_name or ""
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    login_session(request, user["username"])
+    return {"ok": True, "user": user}
+
+
+@app.post("/api/auth/login")
+async def api_auth_login(request: Request, body: AuthForm) -> dict[str, Any]:
+    try:
+        user = authenticate_user(body.username, body.password)
+    except ValueError as exc:
+        raise HTTPException(status_code=401, detail=str(exc)) from exc
+    login_session(request, user["username"])
+    return {"ok": True, "user": user}
+
+
+@app.post("/api/auth/logout")
+async def api_auth_logout(request: Request) -> dict[str, Any]:
+    logout_session(request)
+    return {"ok": True}
+
+
 @app.get("/api/markets")
 async def api_markets(refresh: bool = Query(default=False)) -> dict[str, Any]:
     return await refresh_market_desk(force=refresh)
@@ -131,13 +198,15 @@ async def api_markets(refresh: bool = Query(default=False)) -> dict[str, Any]:
 
 @app.get("/api/portfolio/intel")
 async def api_portfolio_intel(
+    request: Request,
     symbol: str | None = Query(default=None),
     refresh: bool = Query(default=False),
     limit: int = Query(default=24, ge=1, le=60),
 ) -> dict[str, Any]:
     """Intel stories linked to current portfolio holdings."""
+    username = require_user(request)
     data = await refresh_intel(force=refresh)
-    portfolio = load_portfolio()
+    portfolio = load_portfolio(username)
     summary = summarize_holding_intel(
         data.get("items") or [],
         portfolio.get("holdings") or [],
@@ -148,6 +217,7 @@ async def api_portfolio_intel(
         "ok": True,
         "holdings": portfolio.get("holdings") or [],
         "portfolio_selected": portfolio.get("selected") or "",
+        "owner": username,
         "fetched_at": data.get("fetched_at"),
         "cached": data.get("cached"),
         "errors": data.get("errors") or [],
@@ -157,6 +227,7 @@ async def api_portfolio_intel(
 
 @app.get("/api/intel")
 async def api_intel(
+    request: Request,
     category: str = Query(default="all"),
     sentiment: str = Query(default="all"),
     sort: str = Query(default="bearish"),
@@ -167,7 +238,8 @@ async def api_intel(
     refresh: bool = Query(default=False),
 ) -> dict:
     data = await refresh_intel(force=refresh)
-    portfolio = load_portfolio()
+    username = current_username(request)
+    portfolio = load_portfolio(username) if username else {"holdings": [], "selected": ""}
     holding_summary = summarize_holding_intel(
         data.get("items") or [],
         portfolio.get("holdings") or [],
@@ -288,52 +360,68 @@ async def api_push_test(
 
 
 @app.get("/api/portfolio")
-async def api_portfolio(refresh: bool = Query(default=False)) -> dict[str, Any]:
-    return await build_portfolio_view(force_refresh=refresh)
+async def api_portfolio(
+    request: Request, refresh: bool = Query(default=False)
+) -> dict[str, Any]:
+    username = require_user(request)
+    view = await build_portfolio_view(username, force_refresh=refresh)
+    view["user"] = current_user(request)
+    return view
 
 
 @app.post("/api/portfolio/add")
-async def api_portfolio_add(body: HoldingIn) -> dict[str, Any]:
+async def api_portfolio_add(request: Request, body: HoldingIn) -> dict[str, Any]:
+    username = require_user(request)
     try:
-        add_holding(body.symbol, name=body.name or "", note=body.note or "")
+        add_holding(username, body.symbol, name=body.name or "", note=body.note or "")
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
-    view = await build_portfolio_view(force_refresh=True)
+    view = await build_portfolio_view(username, force_refresh=True)
+    view["user"] = current_user(request)
     return {"ok": True, "portfolio": view}
 
 
 @app.post("/api/portfolio/remove")
-async def api_portfolio_remove(body: HoldingIn) -> dict[str, Any]:
+async def api_portfolio_remove(request: Request, body: HoldingIn) -> dict[str, Any]:
+    username = require_user(request)
     try:
-        remove_holding(body.symbol)
+        remove_holding(username, body.symbol)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
-    view = await build_portfolio_view(force_refresh=False)
+    view = await build_portfolio_view(username, force_refresh=False)
+    view["user"] = current_user(request)
     return {"ok": True, "portfolio": view}
 
 
 @app.post("/api/portfolio/select")
-async def api_portfolio_select(body: HoldingIn) -> dict[str, Any]:
+async def api_portfolio_select(request: Request, body: HoldingIn) -> dict[str, Any]:
+    username = require_user(request)
     try:
-        select_holding(body.symbol)
+        select_holding(username, body.symbol)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
-    view = await build_portfolio_view(force_refresh=False)
+    view = await build_portfolio_view(username, force_refresh=False)
+    view["user"] = current_user(request)
     return {"ok": True, "portfolio": view}
 
 
 @app.put("/api/portfolio")
-async def api_portfolio_replace(body: PortfolioReplace) -> dict[str, Any]:
+async def api_portfolio_replace(
+    request: Request, body: PortfolioReplace
+) -> dict[str, Any]:
+    username = require_user(request)
     rows = [h.model_dump() for h in body.holdings]
-    replace_holdings(rows, selected=body.selected or "")
-    view = await build_portfolio_view(force_refresh=True)
+    replace_holdings(username, rows, selected=body.selected or "")
+    view = await build_portfolio_view(username, force_refresh=True)
+    view["user"] = current_user(request)
     return {"ok": True, "portfolio": view}
 
 
 @app.get("/api/portfolio/export")
-async def api_portfolio_export() -> dict[str, Any]:
-    data = load_portfolio()
-    return {"ok": True, "portfolio": data}
+async def api_portfolio_export(request: Request) -> dict[str, Any]:
+    username = require_user(request)
+    data = load_portfolio(username)
+    return {"ok": True, "portfolio": data, "owner": username}
 
 
 @app.get("/api/health")
