@@ -459,8 +459,7 @@ main,
 }
 
 .live-brief-rail {
-  position: sticky;
-  top: 5.75rem;
+  position: relative;
   border: 1px solid rgba(180, 35, 24, 0.16);
   border-radius: calc(var(--radius) + 4px);
   background:
