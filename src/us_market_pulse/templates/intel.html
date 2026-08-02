@@ -116,7 +116,10 @@
           <button type="button" class="filter sentiment-bear" data-sentiment="bearish" aria-selected="false">利空</button>
           <button type="button" class="filter" data-sentiment="neutral" aria-selected="false">中性</button>
           <button type="button" class="filter" id="filter-watch" data-watch="1" aria-selected="false">仅盯盘命中</button>
+          <button type="button" class="filter" id="filter-holdings" data-holdings="1" aria-selected="false">仅持仓相关</button>
         </div>
+
+        <div class="holding-intel-chips intel-holding-chips" id="intel-holding-chips" hidden role="tablist" aria-label="按持仓筛选"></div>
 
         <div class="feed-list" id="feed-list" aria-live="polite">
           <article class="story skeleton-story"></article>

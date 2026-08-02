@@ -6,8 +6,12 @@
         <p class="page-kicker">交易台</p>
         <h1>我的持仓</h1>
         <p class="lede compact">
-          全部持仓走势一目了然 · 分时 / 日 / 月 / 季 / 年 · 红涨绿跌 · 云端同步
+          持仓走势与关联情报同屏 · 分时 / 日 / 月 / 季 / 年 · 红涨绿跌 · 云端同步
         </p>
+        <div class="cta-row">
+          <a class="btn ghost" href="#holding-intel">持仓情报</a>
+          <a class="btn ghost" href="/intel?holdings=1">情报页筛选持仓</a>
+        </div>
       </section>
       <div class="workspace workspace-single">
         <div class="workspace-main">
@@ -87,6 +91,23 @@
               </div>
             </div>
           </div>
+        </div>
+      </section>
+
+      <section class="holding-intel" id="holding-intel" aria-label="持仓情报">
+        <div class="section-head holding-intel-head">
+          <div>
+            <h2>持仓情报</h2>
+            <p id="holding-intel-blurb">把信息流与持仓代码 / 备注名关联，利空优先</p>
+          </div>
+          <div class="holding-intel-actions">
+            <button class="btn ghost" id="btn-holding-intel-refresh" type="button">刷新情报</button>
+            <a class="btn ghost" id="holding-intel-all-link" href="/intel?holdings=1">情报页查看</a>
+          </div>
+        </div>
+        <div class="holding-intel-chips" id="holding-intel-chips" role="tablist" aria-label="按持仓筛选情报"></div>
+        <div class="holding-intel-list" id="holding-intel-list">
+          <p class="empty">加载持仓相关情报…</p>
         </div>
       </section>
         </div>

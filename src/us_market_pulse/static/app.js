@@ -29,6 +29,9 @@ const state = {
   portfolioSort: { key: "change_pct", dir: "desc" },
   portfolioPreview: null,
   portfolioSelectBusy: false,
+  holdingsOnly: false,
+  holdingFilter: "",
+  holdingIntel: null,
 };
 
 const PORTFOLIO_TF_KEYS = ["intraday", "day", "month", "quarter", "year"];
@@ -58,6 +61,13 @@ const els = {
   portfolioExport: document.getElementById("btn-portfolio-export"),
   portfolioImport: document.getElementById("portfolio-import"),
   portfolioListHead: document.querySelector("#portfolio .holding-list-head"),
+  holdingIntelBlurb: document.getElementById("holding-intel-blurb"),
+  holdingIntelChips: document.getElementById("holding-intel-chips"),
+  holdingIntelList: document.getElementById("holding-intel-list"),
+  holdingIntelRefresh: document.getElementById("btn-holding-intel-refresh"),
+  holdingIntelAllLink: document.getElementById("holding-intel-all-link"),
+  intelHoldingChips: document.getElementById("intel-holding-chips"),
+  filterHoldings: document.getElementById("filter-holdings"),
   agenda: document.getElementById("agenda-rail"),
   agendaBlurb: document.getElementById("agenda-blurb"),
   digest: document.getElementById("digest-line"),
@@ -756,6 +766,7 @@ async function selectPortfolioSymbol(symbol, { quiet = false } = {}) {
   if (symbol === state.portfolio?.selected) {
     state.portfolioPreview = null;
     renderPortfolio(state.portfolio);
+    if (PAGE === "desk") loadHoldingIntel({ symbol });
     return;
   }
   state.portfolioSelectBusy = true;
@@ -763,6 +774,7 @@ async function selectPortfolioSymbol(symbol, { quiet = false } = {}) {
     const data = await portfolioPost("/api/portfolio/select", { symbol });
     state.portfolioPreview = null;
     renderPortfolio(data.portfolio);
+    if (PAGE === "desk") loadHoldingIntel({ symbol });
   } catch (err) {
     if (!quiet && els.portfolioBlurb) {
       els.portfolioBlurb.textContent = `切换失败：${err.message || err}`;
@@ -990,6 +1002,133 @@ function renderPush(push) {
   `;
   if (els.pushTest) {
     els.pushTest.disabled = !push.webhook_configured && !push.email_configured;
+  }
+}
+
+function holdingIntelCardHtml(item) {
+  const titleZh = item.title_zh || item.title || "";
+  const titleEn = item.title || "";
+  const showEn = titleEn && titleEn !== titleZh;
+  const matches = (item.holding_matches || []).join(" · ");
+  const isBearish = item.sentiment === "bearish";
+  const isBullish = item.sentiment === "bullish";
+  const logic =
+    item.sentiment_logic ||
+    item.brief_zh ||
+    item.summary ||
+    "";
+  return `
+    <a class="holding-intel-card ${isBearish ? "is-bearish" : ""} ${
+      isBullish ? "is-bullish" : ""
+    }" href="${escapeHtml(item.url || "#")}" target="_blank" rel="noopener noreferrer">
+      <div class="holding-intel-meta">
+        ${verdictBadge(item)}
+        ${
+          matches
+            ? `<span class="chip holding">${escapeHtml(matches)}</span>`
+            : ""
+        }
+        <span>${escapeHtml(item.source || "")}</span>
+        <span>${escapeHtml(relativeTime(item.published))}</span>
+      </div>
+      <h3>${escapeHtml(titleZh)}</h3>
+      ${showEn ? `<p class="en">${escapeHtml(titleEn)}</p>` : ""}
+      ${logic ? `<p class="logic">${escapeHtml(logic)}</p>` : ""}
+    </a>
+  `;
+}
+
+function renderHoldingIntelChips(container, symbols, selected, { total = 0 } = {}) {
+  if (!container) return;
+  const rows = symbols || [];
+  if (!rows.length) {
+    container.innerHTML = "";
+    return;
+  }
+  const allActive = !selected;
+  container.innerHTML = [
+    `<button type="button" class="holding-chip ${
+      allActive ? "is-active" : ""
+    }" data-holding-filter="">全部<span class="n">${total}</span></button>`,
+    ...rows.map(
+      (row) => `<button type="button" class="holding-chip ${
+        selected === row.symbol ? "is-active" : ""
+      }" data-holding-filter="${escapeHtml(row.symbol)}">${escapeHtml(
+        row.symbol
+      )}<span class="n">${row.count || 0}</span></button>`
+    ),
+  ].join("");
+}
+
+function renderHoldingIntel(data) {
+  state.holdingIntel = data || null;
+  const symbols = data?.symbols || [];
+  const selected = data?.selected || state.holdingFilter || "";
+  const items = data?.items || [];
+  const total = data?.total ?? items.length;
+
+  if (els.holdingIntelBlurb) {
+    if (!(data?.holdings || symbols).length && !(state.portfolio?.holdings || []).length) {
+      els.holdingIntelBlurb.textContent = "添加持仓后，这里会自动关联相关情报";
+    } else if (!total) {
+      els.holdingIntelBlurb.textContent =
+        "暂无命中持仓代码 / 备注名的情报，可稍后再刷新";
+    } else {
+      els.holdingIntelBlurb.textContent = `已关联 ${total} 条 · 利空优先 · 点击芯片可按标的筛选`;
+    }
+  }
+
+  renderHoldingIntelChips(els.holdingIntelChips, symbols, selected, { total });
+
+  if (els.holdingIntelAllLink) {
+    const qs = selected
+      ? `holdings=1&holding=${encodeURIComponent(selected)}`
+      : "holdings=1";
+    els.holdingIntelAllLink.href = `/intel?${qs}`;
+  }
+
+  if (!els.holdingIntelList) return;
+  if (!(state.portfolio?.holdings || []).length && !(data?.holdings || []).length) {
+    els.holdingIntelList.innerHTML =
+      '<p class="empty">还没有持仓。添加代码后，信息流会自动映射到这里。</p>';
+    return;
+  }
+  if (!items.length) {
+    els.holdingIntelList.innerHTML =
+      '<p class="empty">当前筛选下暂无持仓相关情报。</p>';
+    return;
+  }
+  els.holdingIntelList.innerHTML = items.map(holdingIntelCardHtml).join("");
+}
+
+async function loadHoldingIntel({ refresh = false, symbol } = {}) {
+  if (!els.holdingIntelList && !els.holdingIntelChips) return null;
+  const filter =
+    symbol !== undefined ? symbol || "" : state.holdingFilter || "";
+  state.holdingFilter = filter;
+  if (els.holdingIntelList) {
+    els.holdingIntelList.innerHTML =
+      '<p class="empty">同步持仓相关情报…</p>';
+  }
+  try {
+    const params = new URLSearchParams();
+    if (refresh) params.set("refresh", "true");
+    if (filter) params.set("symbol", filter);
+    params.set("limit", "20");
+    const res = await fetch(`/api/portfolio/intel?${params.toString()}`);
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const data = await res.json();
+    renderHoldingIntel(data);
+    return data;
+  } catch (err) {
+    if (els.holdingIntelBlurb) {
+      els.holdingIntelBlurb.textContent = `持仓情报加载失败：${err.message || err}`;
+    }
+    if (els.holdingIntelList) {
+      els.holdingIntelList.innerHTML =
+        '<p class="empty">持仓情报暂时不可用，请稍后刷新。</p>';
+    }
+    return null;
   }
 }
 
@@ -1439,6 +1578,11 @@ function renderFeed(items) {
       const watchChip = item.watch_hit
         ? `<span class="chip watch">盯盘:${escapeHtml((item.watch_matches || []).join(","))}</span>`
         : "";
+      const holdingChip = item.holding_hit
+        ? `<span class="chip holding">持仓:${escapeHtml(
+            (item.holding_matches || []).join(",")
+          )}</span>`
+        : "";
       const isBearish = item.sentiment === "bearish";
       const isBullish = item.sentiment === "bullish";
       const factors = (item.sentiment_factors || []).join("、") || "暂无强因子";
@@ -1453,10 +1597,11 @@ function renderFeed(items) {
             )}">同事件 ${item.event_count} 条</button>`
           : "";
       return `
-      <article class="story ${item.watch_hit ? "is-watch" : ""} ${isBearish ? "is-bearish" : ""} ${isBullish ? "is-bullish" : ""}">
+      <article class="story ${item.watch_hit ? "is-watch" : ""} ${item.holding_hit ? "is-holding" : ""} ${isBearish ? "is-bearish" : ""} ${isBullish ? "is-bullish" : ""}">
         <div class="story-top">
           <span class="chip ${item.category}">${categoryName(item.category)}</span>
           ${watchChip}
+          ${holdingChip}
           ${item.theme ? `<span class="chip policy">${escapeHtml(item.theme)}</span>` : ""}
           <span>${escapeHtml(item.source)}</span>
           <span>·</span>
@@ -1536,6 +1681,29 @@ async function loadMarketsDesk({ force = false } = {}) {
   }
 }
 
+function syncHoldingsFilterUi() {
+  if (els.filterHoldings) {
+    els.filterHoldings.classList.toggle("is-active", state.holdingsOnly);
+    els.filterHoldings.setAttribute(
+      "aria-selected",
+      state.holdingsOnly ? "true" : "false"
+    );
+  }
+  if (els.intelHoldingChips) {
+    const symbols = state.holdingIntel?.symbols || [];
+    const show = state.holdingsOnly && symbols.length;
+    els.intelHoldingChips.hidden = !show;
+    if (show) {
+      renderHoldingIntelChips(
+        els.intelHoldingChips,
+        symbols,
+        state.holdingFilter,
+        { total: state.holdingIntel?.total || 0 }
+      );
+    }
+  }
+}
+
 async function loadIntel({ force = false } = {}) {
   const params = new URLSearchParams({
     category: state.category,
@@ -1544,6 +1712,8 @@ async function loadIntel({ force = false } = {}) {
     q: state.q,
   });
   if (state.watchOnly) params.set("watch_only", "true");
+  if (state.holdingsOnly) params.set("holdings_only", "true");
+  if (state.holdingFilter) params.set("holding", state.holdingFilter);
   if (force) params.set("refresh", "true");
 
   setStatus(force ? "正在强制刷新…" : "同步情报源中…");
@@ -1580,11 +1750,23 @@ async function loadIntel({ force = false } = {}) {
       if (PAGE === "settings") renderPush(data.push);
     }
 
+    if (data.holding_intel) {
+      state.holdingIntel = data.holding_intel;
+    }
+    syncHoldingsFilterUi();
+
     const sortNote =
       state.sort === "bearish" ? " · 利空优先" : state.sort === "bullish" ? " · 利多优先" : " · 最新优先";
+    const holdNote = state.holdingsOnly
+      ? state.holdingFilter
+        ? ` · 持仓 ${state.holdingFilter}`
+        : " · 仅持仓相关"
+      : "";
     if (els.blurb) {
       els.blurb.textContent =
-        (CATEGORY_LABELS[state.category] || CATEGORY_LABELS.all) + sortNote;
+        (CATEGORY_LABELS[state.category] || CATEGORY_LABELS.all) +
+        sortNote +
+        holdNote;
     }
 
     const when = data.fetched_at
@@ -1866,6 +2048,15 @@ els.sentimentFilters?.addEventListener("click", (event) => {
     return;
   }
 
+  const holdingsBtn = event.target.closest("[data-holdings]");
+  if (holdingsBtn) {
+    state.holdingsOnly = !state.holdingsOnly;
+    if (!state.holdingsOnly) state.holdingFilter = "";
+    syncHoldingsFilterUi();
+    loadIntel();
+    return;
+  }
+
   const btn = event.target.closest("[data-sentiment]");
   if (!btn) return;
   state.sentiment = btn.dataset.sentiment;
@@ -1876,6 +2067,26 @@ els.sentimentFilters?.addEventListener("click", (event) => {
   }
   loadIntel();
 });
+
+els.holdingIntelChips?.addEventListener("click", (event) => {
+  const btn = event.target.closest("[data-holding-filter]");
+  if (!btn) return;
+  const symbol = btn.getAttribute("data-holding-filter") || "";
+  loadHoldingIntel({ symbol });
+});
+
+els.intelHoldingChips?.addEventListener("click", (event) => {
+  const btn = event.target.closest("[data-holding-filter]");
+  if (!btn) return;
+  state.holdingsOnly = true;
+  state.holdingFilter = btn.getAttribute("data-holding-filter") || "";
+  syncHoldingsFilterUi();
+  loadIntel();
+});
+
+els.holdingIntelRefresh?.addEventListener("click", () =>
+  loadHoldingIntel({ refresh: true, symbol: state.holdingFilter || "" })
+);
 
 els.searchForm?.addEventListener("submit", (event) => {
   event.preventDefault();
@@ -2100,14 +2311,35 @@ document.addEventListener("keydown", (event) => {
   if (event.key === "Escape") closeEventDrawer();
 });
 
+function readIntelQueryFlags() {
+  if (PAGE !== "intel") return;
+  const params = new URLSearchParams(window.location.search);
+  if (params.get("holdings") === "1" || params.get("holdings_only") === "1") {
+    state.holdingsOnly = true;
+  }
+  const holding = (params.get("holding") || "").trim().toUpperCase();
+  if (holding) {
+    state.holdingsOnly = true;
+    state.holdingFilter = holding;
+  }
+  syncHoldingsFilterUi();
+}
+
 function bootPage() {
   if (PAGE === "desk") {
-    loadPortfolio();
-    setInterval(() => loadPortfolio({ refresh: true }), 90 * 1000);
+    loadPortfolio().then(() => {
+      const selected = state.portfolio?.selected || "";
+      loadHoldingIntel({ symbol: selected || "" });
+    });
+    setInterval(() => {
+      loadPortfolio({ refresh: true });
+      loadHoldingIntel({ symbol: state.holdingFilter || state.portfolio?.selected || "" });
+    }, 90 * 1000);
   } else if (PAGE === "markets") {
     loadMarketsDesk();
     setInterval(() => loadMarketsDesk(), 90 * 1000);
   } else if (PAGE === "intel") {
+    readIntelQueryFlags();
     loadIntel();
     setInterval(() => loadIntel(), 5 * 60 * 1000);
   } else if (PAGE === "settings") {

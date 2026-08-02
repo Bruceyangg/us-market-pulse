@@ -203,6 +203,131 @@ main,
   padding-top: 0.5rem;
 }
 
+.holding-intel {
+  margin-top: 2.25rem;
+  padding-top: 0.25rem;
+}
+
+.holding-intel-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 0.85rem 1rem;
+  margin-bottom: 0.85rem;
+}
+
+.holding-intel-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.45rem;
+}
+
+.holding-intel-chips,
+.intel-holding-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+  margin: 0 0 0.85rem;
+}
+
+.holding-chip {
+  appearance: none;
+  border: 1px solid var(--line);
+  background: rgba(255, 255, 255, 0.72);
+  color: var(--ink-soft);
+  border-radius: 999px;
+  padding: 0.4rem 0.75rem;
+  font: inherit;
+  font-size: 0.8rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: border-color 0.18s ease, background 0.18s ease, color 0.18s ease;
+}
+
+.holding-chip:hover {
+  border-color: rgba(47, 111, 159, 0.28);
+  color: var(--ink);
+}
+
+.holding-chip.is-active {
+  color: var(--ink);
+  border-color: rgba(180, 35, 24, 0.28);
+  background: rgba(255, 247, 245, 0.95);
+  box-shadow: 0 0 0 3px var(--bear-soft);
+}
+
+.holding-chip .n {
+  margin-left: 0.25rem;
+  color: var(--ink-soft);
+  font-variant-numeric: tabular-nums;
+}
+
+.holding-intel-list {
+  display: grid;
+  gap: 0.65rem;
+}
+
+.holding-intel-card {
+  display: grid;
+  gap: 0.45rem;
+  padding: 0.9rem 1rem;
+  border-radius: 14px;
+  border: 1px solid var(--line);
+  background: rgba(255, 255, 255, 0.82);
+  text-decoration: none;
+  color: inherit;
+  transition: border-color 0.18s ease, box-shadow 0.18s ease;
+}
+
+.holding-intel-card:hover {
+  border-color: rgba(47, 111, 159, 0.28);
+  box-shadow: var(--shadow);
+}
+
+.holding-intel-card.is-bearish {
+  border-color: rgba(180, 35, 24, 0.18);
+  background: linear-gradient(180deg, rgba(255, 247, 245, 0.96), rgba(255, 255, 255, 0.88));
+}
+
+.holding-intel-card.is-bullish {
+  border-color: rgba(15, 138, 106, 0.16);
+}
+
+.holding-intel-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+  align-items: center;
+  font-size: 0.75rem;
+  color: var(--ink-soft);
+}
+
+.holding-intel-card h3 {
+  margin: 0;
+  font-size: 1rem;
+  line-height: 1.35;
+}
+
+.holding-intel-card .en {
+  margin: 0;
+  font-size: 0.82rem;
+  color: var(--ink-soft);
+  line-height: 1.4;
+}
+
+.holding-intel-card .logic {
+  margin: 0;
+  font-size: 0.82rem;
+  color: var(--ink-soft);
+  line-height: 1.45;
+}
+
+.chip.holding {
+  background: rgba(47, 111, 159, 0.12);
+  color: var(--sky);
+}
+
 .workspace-single {
   grid-template-columns: minmax(0, 1fr);
 }

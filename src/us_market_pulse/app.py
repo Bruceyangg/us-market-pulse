@@ -33,6 +33,7 @@ from us_market_pulse.portfolio import (
     replace_holdings,
     select_holding,
 )
+from us_market_pulse.portfolio_intel import summarize_holding_intel
 from us_market_pulse.push import push_status, scheduler_loop, send_digest
 from us_market_pulse import share as public_share
 
@@ -128,6 +129,32 @@ async def api_markets(refresh: bool = Query(default=False)) -> dict[str, Any]:
     return await refresh_market_desk(force=refresh)
 
 
+@app.get("/api/portfolio/intel")
+async def api_portfolio_intel(
+    symbol: str | None = Query(default=None),
+    refresh: bool = Query(default=False),
+    limit: int = Query(default=24, ge=1, le=60),
+) -> dict[str, Any]:
+    """Intel stories linked to current portfolio holdings."""
+    data = await refresh_intel(force=refresh)
+    portfolio = load_portfolio()
+    summary = summarize_holding_intel(
+        data.get("items") or [],
+        portfolio.get("holdings") or [],
+        symbol=symbol,
+        limit=limit,
+    )
+    return {
+        "ok": True,
+        "holdings": portfolio.get("holdings") or [],
+        "portfolio_selected": portfolio.get("selected") or "",
+        "fetched_at": data.get("fetched_at"),
+        "cached": data.get("cached"),
+        "errors": data.get("errors") or [],
+        **summary,
+    }
+
+
 @app.get("/api/intel")
 async def api_intel(
     category: str = Query(default="all"),
@@ -135,12 +162,39 @@ async def api_intel(
     sort: str = Query(default="bearish"),
     q: str | None = Query(default=None),
     watch_only: bool = Query(default=False),
+    holdings_only: bool = Query(default=False),
+    holding: str | None = Query(default=None),
     refresh: bool = Query(default=False),
 ) -> dict:
     data = await refresh_intel(force=refresh)
+    portfolio = load_portfolio()
+    holding_summary = summarize_holding_intel(
+        data.get("items") or [],
+        portfolio.get("holdings") or [],
+        symbol=None,
+        limit=80,
+    )
     items = filter_items(
         data["items"], category=category, q=q, sentiment=sentiment, sort=sort
     )
+    selected_holding = (holding or "").strip().upper() or None
+    if holdings_only or selected_holding:
+        items = [
+            i
+            for i in items
+            if i.get("holding_hit")
+            and (
+                not selected_holding
+                or selected_holding in (i.get("holding_matches") or [])
+            )
+        ]
+        items = filter_items(items, sort=sort)
+        holding_summary = {
+            **holding_summary,
+            "selected": selected_holding or "",
+            "count": len(items),
+            "items": items[:80],
+        }
     if watch_only:
         items = [i for i in items if i.get("watch_hit")]
         items = filter_items(items, sort=sort)
@@ -165,6 +219,9 @@ async def api_intel(
         "digest": data.get("digest", {}),
         "sentiment_summary": data.get("sentiment_summary", {}),
         "watch_hits": data.get("watch_hits", []),
+        "holding_intel": holding_summary,
+        "holdings_only": holdings_only,
+        "holding": (holding or "").upper(),
         "events": data.get("events", []),
         "event_threads": event_threads,
         "timeline": data.get("timeline", []),
