@@ -19,11 +19,56 @@ ET = ZoneInfo("America/New_York")
 
 _CACHE: dict[str, Any] = {"by_date": {}, "fetched_at": {}}
 _CACHE_TTL = 30 * 60  # 30 minutes per day bucket
+_FETCH_CONCURRENCY = 6
+_MAX_WINDOW_DAYS = 31
 
 _TIME_LABELS = {
     "time-pre-market": "盘前",
     "time-after-hours": "盘后",
     "time-not-supplied": "时段未定",
+}
+
+# Always elevate these names when they report in-window
+_FOCUS_SYMBOLS = {
+    "AAPL",
+    "MSFT",
+    "NVDA",
+    "AMZN",
+    "GOOGL",
+    "GOOG",
+    "META",
+    "TSLA",
+    "AVGO",
+    "AMD",
+    "TSM",
+    "ASML",
+    "ORCL",
+    "CRM",
+    "NFLX",
+    "COST",
+    "JPM",
+    "BAC",
+    "XOM",
+    "CVX",
+    "LLY",
+    "UNH",
+    "V",
+    "MA",
+    "PLTR",
+    "SMCI",
+    "MU",
+    "QCOM",
+    "INTC",
+    "IBM",
+    "NOW",
+    "SNOW",
+    "ARM",
+    "WMT",
+    "HD",
+    "DIS",
+    "BA",
+    "CAT",
+    "GE",
 }
 
 
@@ -109,11 +154,110 @@ def _normalize_row(row: dict[str, Any], report_date: str) -> dict[str, Any]:
     }
 
 
+def _focus_score(row: dict[str, Any]) -> float:
+    """Higher = more worth watching in the earnings window."""
+    score = 0.0
+    cap = row.get("market_cap")
+    try:
+        cap_f = float(cap) if cap is not None else 0.0
+    except (TypeError, ValueError):
+        cap_f = 0.0
+    if cap_f >= 200e9:
+        score += 6.0
+    elif cap_f >= 100e9:
+        score += 5.0
+    elif cap_f >= 50e9:
+        score += 4.0
+    elif cap_f >= 20e9:
+        score += 3.0
+    elif cap_f >= 5e9:
+        score += 1.5
+
+    sym = str(row.get("symbol") or "").upper()
+    if sym in _FOCUS_SYMBOLS:
+        score += 3.5
+
+    yoy = row.get("yoy_pct")
+    try:
+        yoy_f = abs(float(yoy)) if yoy is not None else 0.0
+    except (TypeError, ValueError):
+        yoy_f = 0.0
+    if yoy_f >= 80:
+        score += 2.5
+    elif yoy_f >= 40:
+        score += 1.5
+    elif yoy_f >= 20:
+        score += 0.8
+
+    try:
+        n_est = int(row.get("estimate_count") or 0)
+    except (TypeError, ValueError):
+        n_est = 0
+    if n_est >= 20:
+        score += 1.2
+    elif n_est >= 10:
+        score += 0.6
+
+    # Prefer named session over unknown
+    if row.get("time") in {"time-pre-market", "time-after-hours"}:
+        score += 0.3
+    return round(score, 3)
+
+
+def _focus_reasons(row: dict[str, Any]) -> list[str]:
+    reasons: list[str] = []
+    cap = row.get("market_cap")
+    try:
+        cap_f = float(cap) if cap is not None else 0.0
+    except (TypeError, ValueError):
+        cap_f = 0.0
+    if cap_f >= 100e9:
+        reasons.append("超大市值")
+    elif cap_f >= 50e9:
+        reasons.append("大市值")
+    elif cap_f >= 20e9:
+        reasons.append("中大市值")
+
+    if str(row.get("symbol") or "").upper() in _FOCUS_SYMBOLS:
+        reasons.append("核心标的")
+
+    yoy = row.get("yoy_pct")
+    try:
+        yoy_f = float(yoy) if yoy is not None else None
+    except (TypeError, ValueError):
+        yoy_f = None
+    if yoy_f is not None and abs(yoy_f) >= 40:
+        reasons.append(f"预期同比 {yoy_f:+.0f}%")
+    elif yoy_f is not None and abs(yoy_f) >= 20:
+        reasons.append(f"同比变化 {yoy_f:+.0f}%")
+
+    try:
+        n_est = int(row.get("estimate_count") or 0)
+    except (TypeError, ValueError):
+        n_est = 0
+    if n_est >= 15:
+        reasons.append(f"{n_est} 家机构覆盖")
+
+    if row.get("time_zh") in {"盘前", "盘后"}:
+        reasons.append(str(row["time_zh"]))
+    return reasons[:4]
+
+
+def _attach_focus(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    for row in rows:
+        score = _focus_score(row)
+        row["focus_score"] = score
+        row["focus_reasons"] = _focus_reasons(row)
+        row["is_focus"] = False
+    return rows
+
+
 async def fetch_earnings_for_date(
     client: httpx.AsyncClient,
     day: date,
     *,
     force: bool = False,
+    sem: asyncio.Semaphore | None = None,
 ) -> tuple[list[dict[str, Any]], str | None]:
     key = day.isoformat()
     cached_at = float(_CACHE["fetched_at"].get(key) or 0)
@@ -124,59 +268,122 @@ async def fetch_earnings_for_date(
     ):
         return list(_CACHE["by_date"][key]), None
 
-    try:
-        resp = await client.get(
-            NASDAQ_EARNINGS_URL,
-            params={"date": key},
-            headers=_headers(),
-            timeout=30.0,
-        )
-        resp.raise_for_status()
-        payload = resp.json() or {}
-        rows_raw = ((payload.get("data") or {}).get("rows")) or []
-        rows = [_normalize_row(row, key) for row in rows_raw if row.get("symbol")]
-        rows.sort(
-            key=lambda r: (
-                -(r.get("market_cap") or 0),
-                r.get("symbol") or "",
+    async def _do() -> tuple[list[dict[str, Any]], str | None]:
+        try:
+            resp = await client.get(
+                NASDAQ_EARNINGS_URL,
+                params={"date": key},
+                headers=_headers(),
+                timeout=30.0,
             )
-        )
-        _CACHE["by_date"][key] = rows
-        _CACHE["fetched_at"][key] = time.time()
-        return rows, None
-    except Exception as exc:  # noqa: BLE001
-        stale = list(_CACHE["by_date"].get(key) or [])
-        return stale, f"earnings {key}: {exc}"
+            resp.raise_for_status()
+            payload = resp.json() or {}
+            rows_raw = ((payload.get("data") or {}).get("rows")) or []
+            rows = [_normalize_row(row, key) for row in rows_raw if row.get("symbol")]
+            rows = _attach_focus(rows)
+            rows.sort(
+                key=lambda r: (
+                    -(r.get("focus_score") or 0),
+                    -(r.get("market_cap") or 0),
+                    r.get("symbol") or "",
+                )
+            )
+            _CACHE["by_date"][key] = rows
+            _CACHE["fetched_at"][key] = time.time()
+            return rows, None
+        except Exception as exc:  # noqa: BLE001
+            stale = list(_CACHE["by_date"].get(key) or [])
+            return stale, f"earnings {key}: {exc}"
+
+    if sem is None:
+        return await _do()
+    async with sem:
+        return await _do()
 
 
-def _daterange(start: date, end: date) -> list[date]:
+def _daterange(start: date, end: date, *, max_days: int = _MAX_WINDOW_DAYS) -> list[date]:
     if end < start:
         start, end = end, start
-    # hard cap to keep Nasdaq calls reasonable
-    span = min((end - start).days, 21)
+    span = min((end - start).days, max(0, max_days - 1))
     return [start + timedelta(days=i) for i in range(span + 1)]
+
+
+def _build_focus_watch(
+    rows: list[dict[str, Any]], *, limit: int = 24
+) -> list[dict[str, Any]]:
+    ranked = sorted(
+        rows,
+        key=lambda r: (
+            -(r.get("focus_score") or 0),
+            -(r.get("market_cap") or 0),
+            r.get("date") or "",
+            r.get("symbol") or "",
+        ),
+    )
+    # Deduplicate by symbol (keep earliest / highest-score occurrence)
+    seen: set[str] = set()
+    focus: list[dict[str, Any]] = []
+    for row in ranked:
+        sym = str(row.get("symbol") or "")
+        if not sym or sym in seen:
+            continue
+        # Threshold: keep meaningful names, not the whole tape
+        score = float(row.get("focus_score") or 0)
+        cap = float(row.get("market_cap") or 0)
+        if score < 2.5 and cap < 50e9 and sym not in _FOCUS_SYMBOLS:
+            continue
+        if score < 3.5 and len(focus) >= 12 and cap < 50e9:
+            continue
+        seen.add(sym)
+        item = dict(row)
+        item["is_focus"] = True
+        focus.append(item)
+        if len(focus) >= limit:
+            break
+
+    # Ensure top mega names aren't missed if score edge-case
+    focus_syms = {r["symbol"] for r in focus}
+    for row in ranked:
+        sym = str(row.get("symbol") or "")
+        if sym in focus_syms:
+            continue
+        if float(row.get("market_cap") or 0) >= 100e9 or sym in _FOCUS_SYMBOLS:
+            item = dict(row)
+            item["is_focus"] = True
+            focus.append(item)
+            focus_syms.add(sym)
+        if len(focus) >= limit:
+            break
+
+    focus.sort(key=lambda r: (r.get("date") or "", -(r.get("focus_score") or 0)))
+    return focus[:limit]
 
 
 async def build_earnings_calendar(
     *,
     day: date | None = None,
-    days: int = 7,
+    days: int = 31,
     q: str | None = None,
     session: str | None = None,
     force: bool = False,
 ) -> dict[str, Any]:
-    """Market-wide earnings calendar (Nasdaq): today→N days ET, select one day."""
+    """Market-wide earnings calendar (Nasdaq): today→~1 month ET."""
     today = today_et()
     selected = day or today
-    window_days = max(1, min(int(days or 7), 14))
+    window_days = max(1, min(int(days or 31), _MAX_WINDOW_DAYS))
     dates = _daterange(today, today + timedelta(days=window_days - 1))
     if selected not in dates:
+        # Keep month window anchored at today; still allow selecting outside via extra fetch
         dates = sorted({*dates, selected})
     errors: list[str] = []
+    sem = asyncio.Semaphore(_FETCH_CONCURRENCY)
 
     async with httpx.AsyncClient(follow_redirects=True, trust_env=False) as client:
         results = await asyncio.gather(
-            *[fetch_earnings_for_date(client, d, force=force) for d in dates]
+            *[
+                fetch_earnings_for_date(client, d, force=force, sem=sem)
+                for d in dates
+            ]
         )
 
     by_date: list[dict[str, Any]] = []
@@ -184,14 +391,19 @@ async def build_earnings_calendar(
     for d, (rows, err) in zip(dates, results, strict=True):
         if err:
             errors.append(err)
+        # Re-attach focus scores if served from older cache shape
+        rows = _attach_focus(rows)
+        focus_n = sum(1 for r in rows if float(r.get("focus_score") or 0) >= 3.5)
         by_date.append(
             {
                 "date": d.isoformat(),
                 "label": d.strftime("%m/%d"),
                 "weekday": ["一", "二", "三", "四", "五", "六", "日"][d.weekday()],
                 "count": len(rows),
+                "focus_count": focus_n,
                 "is_today": d == today,
                 "is_selected": d == selected,
+                "is_weekend": d.weekday() >= 5,
             }
         )
         all_rows.extend(rows)
@@ -213,22 +425,38 @@ async def build_earnings_calendar(
         return True
 
     filtered_window = [r for r in all_rows if _passes(r)]
+    focus_watch = _build_focus_watch(filtered_window, limit=24)
+    focus_syms = {r.get("symbol") for r in focus_watch}
+
+    for row in filtered_window:
+        row["is_focus"] = row.get("symbol") in focus_syms
+
     selected_date = selected.isoformat()
     selected_rows = [r for r in filtered_window if r.get("date") == selected_date]
     selected_rows.sort(
-        key=lambda r: (-(r.get("market_cap") or 0), r.get("symbol") or "")
+        key=lambda r: (
+            0 if r.get("is_focus") else 1,
+            -(r.get("focus_score") or 0),
+            -(r.get("market_cap") or 0),
+            r.get("symbol") or "",
+        )
     )
 
-    # Refresh tab counts under active filters
     count_by_date = {d.isoformat(): 0 for d in dates}
+    focus_by_date = {d.isoformat(): 0 for d in dates}
     for row in filtered_window:
         key = row.get("date") or ""
         if key in count_by_date:
             count_by_date[key] += 1
+        if key in focus_by_date and row.get("is_focus"):
+            focus_by_date[key] += 1
     for entry in by_date:
         entry["count"] = count_by_date.get(entry["date"], 0)
+        entry["focus_count"] = focus_by_date.get(entry["date"], 0)
 
     mega = [r for r in selected_rows if (r.get("market_cap") or 0) >= 50e9][:12]
+    selected_focus = [r for r in selected_rows if r.get("is_focus")][:12]
+
     return {
         "as_of": datetime.now(tz=ET).isoformat(),
         "timezone": "America/New_York",
@@ -236,15 +464,20 @@ async def build_earnings_calendar(
         "source_url": "https://www.nasdaq.com/market-activity/earnings",
         "day": selected_date,
         "days": window_days,
+        "window_start": dates[0].isoformat() if dates else today.isoformat(),
+        "window_end": dates[-1].isoformat() if dates else today.isoformat(),
         "q": q or "",
         "session": session_key,
         "dates": by_date,
         "selected_date": selected_date,
         "count": len(selected_rows),
         "total_window": len(filtered_window),
+        "focus_count": len(focus_watch),
         "items": selected_rows,
         "mega_caps": mega,
-        "errors": errors[-20:],
+        "focus_watch": focus_watch,
+        "selected_focus": selected_focus,
+        "errors": errors[-30:],
         "cached": any(
             time.time() - float(_CACHE["fetched_at"].get(d.isoformat()) or 0) < _CACHE_TTL
             for d in dates

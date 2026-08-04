@@ -4462,20 +4462,19 @@ html[data-theme="dark"] #btn-portfolio-manage.is-open {
 }
 
 .earnings-date-tabs {
-  display: flex;
-  gap: 0.45rem;
-  overflow-x: auto;
+  display: grid;
+  grid-template-columns: repeat(7, minmax(0, 1fr));
+  gap: 0.4rem;
   padding-bottom: 0.15rem;
-  scrollbar-width: thin;
 }
 
 .earnings-date-tab {
-  flex: 0 0 auto;
-  min-width: 4.6rem;
+  width: 100%;
+  min-width: 0;
   display: grid;
-  gap: 0.1rem;
+  gap: 0.08rem;
   justify-items: center;
-  padding: 0.45rem 0.55rem;
+  padding: 0.4rem 0.3rem;
   border-radius: 12px;
   border: 1px solid var(--line);
   background: var(--elevated-soft);
@@ -4485,19 +4484,34 @@ html[data-theme="dark"] #btn-portfolio-manage.is-open {
 }
 
 .earnings-date-tab .dow {
-  font-size: 0.68rem;
+  font-size: 0.66rem;
   color: var(--ink-soft);
 }
 
 .earnings-date-tab .dom {
   font-weight: 750;
-  font-size: 0.9rem;
+  font-size: 0.84rem;
 }
 
 .earnings-date-tab .cnt {
-  font-size: 0.72rem;
+  font-size: 0.68rem;
   font-weight: 700;
   color: var(--amber);
+  text-align: center;
+}
+
+.earnings-date-tab .cnt em {
+  font-style: normal;
+  color: var(--bear);
+  margin-left: 0.1rem;
+}
+
+.earnings-date-tab.is-weekend {
+  opacity: 0.72;
+}
+
+.earnings-date-tab.has-focus {
+  border-color: rgba(180, 35, 24, 0.28);
 }
 
 .earnings-date-tab.is-today {
@@ -4508,6 +4522,110 @@ html[data-theme="dark"] #btn-portfolio-manage.is-open {
   border-color: rgba(47, 111, 159, 0.55);
   box-shadow: inset 0 0 0 1px rgba(47, 111, 159, 0.2);
   background: rgba(47, 111, 159, 0.08);
+}
+
+.earnings-focus {
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  background: linear-gradient(
+    180deg,
+    rgba(180, 35, 24, 0.06),
+    var(--elevated-soft)
+  );
+  padding: 0.75rem 0.8rem 0.85rem;
+  display: grid;
+  gap: 0.6rem;
+}
+
+.earnings-focus-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 0.75rem;
+}
+
+.earnings-focus-head h2 {
+  margin: 0;
+  font-family: var(--font-display);
+  font-size: 1.05rem;
+}
+
+.earnings-focus-head p {
+  margin: 0.2rem 0 0;
+  color: var(--ink-soft);
+  font-size: 0.78rem;
+}
+
+.earnings-focus-count {
+  flex: 0 0 auto;
+  padding: 0.25rem 0.55rem;
+  border-radius: 999px;
+  font-size: 0.74rem;
+  font-weight: 750;
+  color: var(--bear);
+  background: var(--bear-soft);
+  border: 1px solid rgba(180, 35, 24, 0.25);
+}
+
+.earnings-focus-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(11.5rem, 1fr));
+  gap: 0.45rem;
+}
+
+.earnings-focus-card {
+  appearance: none;
+  width: 100%;
+  text-align: left;
+  display: grid;
+  gap: 0.18rem;
+  padding: 0.55rem 0.6rem;
+  border-radius: 12px;
+  border: 1px solid var(--line);
+  background: var(--chip-bg);
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+}
+
+.earnings-focus-card:hover,
+.earnings-focus-card.is-today-report {
+  border-color: rgba(180, 35, 24, 0.4);
+  box-shadow: inset 0 0 0 1px rgba(180, 35, 24, 0.12);
+}
+
+.earnings-focus-card .top {
+  display: flex;
+  justify-content: space-between;
+  gap: 0.35rem;
+  align-items: baseline;
+}
+
+.earnings-focus-card .sym {
+  font-weight: 800;
+  font-size: 0.92rem;
+}
+
+.earnings-focus-card .when {
+  font-size: 0.7rem;
+  font-weight: 700;
+  color: var(--amber);
+  white-space: nowrap;
+}
+
+.earnings-focus-card .name,
+.earnings-focus-card .cap,
+.earnings-focus-card .why {
+  font-size: 0.72rem;
+  color: var(--ink-soft);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.earnings-focus-card .why {
+  color: var(--bear);
+  font-weight: 650;
 }
 
 .earnings-filters {
@@ -4543,6 +4661,24 @@ html[data-theme="dark"] #btn-portfolio-manage.is-open {
   border-radius: 14px;
   background: var(--elevated-soft);
   padding: 0.7rem 0.75rem 0.8rem;
+}
+
+.earnings-row.is-focus {
+  border-color: rgba(180, 35, 24, 0.35);
+  background: rgba(180, 35, 24, 0.06);
+}
+
+.earnings-row .focus-tag {
+  display: inline-block;
+  margin-left: 0.25rem;
+  padding: 0.05rem 0.28rem;
+  border-radius: 999px;
+  background: var(--bear-soft);
+  color: var(--bear);
+  font-size: 0.62rem;
+  font-style: normal;
+  font-weight: 750;
+  vertical-align: middle;
 }
 
 .earnings-mega-head {
@@ -4711,9 +4847,16 @@ html[data-theme="dark"] #btn-portfolio-manage.is-open {
 
 html[data-theme="dark"] .earnings-date-tab.is-active,
 html[data-theme="dark"] .earnings-mega,
+html[data-theme="dark"] .earnings-focus,
+html[data-theme="dark"] .earnings-focus-card,
 html[data-theme="dark"] .earnings-table-wrap,
 html[data-theme="dark"] .earnings-row.head {
   background: rgba(18, 28, 40, 0.72);
+}
+
+html[data-theme="dark"] .earnings-row.is-focus {
+  background: rgba(240, 113, 103, 0.1);
+  border-color: rgba(240, 113, 103, 0.35);
 }
 
 html[data-theme="dark"] .earnings-row .session-pre-market {
@@ -4721,6 +4864,10 @@ html[data-theme="dark"] .earnings-row .session-pre-market {
 }
 
 @media (max-width: 1100px) {
+  .earnings-date-tabs {
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+  }
+
   .earnings-row,
   .earnings-row.head {
     grid-template-columns: 3.8rem minmax(0, 1.2fr) 3rem 4rem 4rem 3.6rem 3.4rem;
@@ -4751,6 +4898,10 @@ html[data-theme="dark"] .earnings-row .session-pre-market {
 }
 
 @media (max-width: 560px) {
+  .earnings-date-tabs {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+
   .earnings-row,
   .earnings-row.head {
     grid-template-columns: 3.4rem minmax(0, 1fr) 3rem 3.8rem;

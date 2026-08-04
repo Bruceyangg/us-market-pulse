@@ -115,6 +115,7 @@ const els = {
   earningsSessionFilters: document.getElementById("earnings-session-filters"),
   earningsQ: document.getElementById("earnings-q"),
   earningsMega: document.getElementById("earnings-mega"),
+  earningsFocus: document.getElementById("earnings-focus"),
   earningsTable: document.getElementById("earnings-table"),
   earningsTableTitle: document.getElementById("earnings-table-title"),
   earningsTableBlurb: document.getElementById("earnings-table-blurb"),
@@ -3235,27 +3236,39 @@ function renderEarningsDesk(data) {
 
   const dates = data?.dates || [];
   const items = data?.items || [];
-  const mega = data?.mega_caps || [];
+  const focusWatch = data?.focus_watch || [];
+  const selectedFocus = data?.selected_focus || [];
   const selected = data?.selected_date || state.earningsDate || "";
 
   if (els.earningsPageBlurb) {
     const total = dates.reduce((s, d) => s + (d.count || 0), 0);
-    els.earningsPageBlurb.textContent = `Nasdaq 公开日历 · 近 ${dates.length} 日共 ${total} 家申报 · 当日 ${
-      data?.count ?? items.length
-    } 家`;
+    const win =
+      data?.window_start && data?.window_end
+        ? `${data.window_start.slice(5)} → ${data.window_end.slice(5)}`
+        : `近 ${dates.length} 日`;
+    els.earningsPageBlurb.textContent = `一个月窗口 ${win} · 共 ${total} 家申报 · 重点关注 ${
+      data?.focus_count ?? focusWatch.length
+    } 只 · 当日 ${data?.count ?? items.length} 家`;
   }
 
   if (els.earningsDateTabs) {
     els.earningsDateTabs.innerHTML = dates
       .map((d) => {
         const on = d.date === selected;
+        const focusN = d.focus_count || 0;
         return `
           <button type="button" class="earnings-date-tab ${on ? "is-active" : ""} ${
             d.is_today ? "is-today" : ""
-          }" data-date="${escapeHtml(d.date)}" role="tab" aria-selected="${on ? "true" : "false"}">
+          } ${d.is_weekend ? "is-weekend" : ""} ${
+            focusN ? "has-focus" : ""
+          }" data-date="${escapeHtml(d.date)}" role="tab" aria-selected="${
+            on ? "true" : "false"
+          }">
             <span class="dow">周${escapeHtml(d.weekday)}</span>
             <span class="dom">${escapeHtml(d.label)}</span>
-            <span class="cnt">${d.count || 0}</span>
+            <span class="cnt">${d.count || 0}${
+              focusN ? `<em>·${focusN}重点</em>` : ""
+            }</span>
           </button>
         `;
       })
@@ -3281,50 +3294,81 @@ function renderEarningsDesk(data) {
     els.earningsQ.value = state.earningsQ || data?.q || "";
   }
 
-  if (els.earningsMega) {
-    if (!mega.length) {
-      els.earningsMega.innerHTML =
-        '<p class="empty compact">当日无市值 ≥ $50B 的申报（或已被筛选过滤）</p>';
+  const focusTarget = els.earningsFocus || els.earningsMega;
+  if (focusTarget) {
+    if (!focusWatch.length) {
+      focusTarget.innerHTML =
+        '<p class="empty compact">本月窗口暂无重点关注标的（或已被筛选过滤）</p>';
     } else {
-      els.earningsMega.innerHTML = `
-        <div class="earnings-mega-head">
-          <h2>大市值焦点</h2>
-          <p>市值 ≥ $50B</p>
+      const dayFocusNote = selectedFocus.length
+        ? `当日重点 ${selectedFocus.length} 只`
+        : "点日期可筛选当日列表";
+      focusTarget.innerHTML = `
+        <div class="earnings-focus-head">
+          <div>
+            <h2>本月重点关注</h2>
+            <p>大市值 / 核心标的 / 预期同比异动 · ${escapeHtml(dayFocusNote)}</p>
+          </div>
+          <span class="earnings-focus-count">${focusWatch.length} 只</span>
         </div>
-        <div class="earnings-mega-grid">
-          ${mega
-            .map(
-              (row) => `
-            <a class="earnings-mega-card" href="${escapeHtml(
-              row.url || `https://finance.yahoo.com/quote/${row.symbol}/`
-            )}" target="_blank" rel="noopener noreferrer">
-              <span class="sym">${escapeHtml(row.symbol)}</span>
-              <span class="when">${escapeHtml(row.time_zh || "")}</span>
-              <span class="name">${escapeHtml(row.name || "")}</span>
-              <span class="cap">预期 ${escapeHtml(
-                row.eps_forecast_text || "—"
-              )} · 同比 ${escapeHtml(formatSignedPct(row.yoy_pct))}</span>
-            </a>
-          `
-            )
+        <div class="earnings-focus-grid">
+          ${focusWatch
+            .map((row) => {
+              const onDay = row.date === selected;
+              const reasons = (row.focus_reasons || []).slice(0, 3).join(" · ");
+              return `
+              <button type="button" class="earnings-focus-card ${
+                onDay ? "is-today-report" : ""
+              }" data-focus-date="${escapeHtml(row.date || "")}" data-symbol="${escapeHtml(
+                row.symbol || ""
+              )}">
+                <span class="top">
+                  <span class="sym">${escapeHtml(row.symbol)}</span>
+                  <span class="when">${escapeHtml(row.date || "")} · ${escapeHtml(
+                    row.time_zh || ""
+                  )}</span>
+                </span>
+                <span class="name">${escapeHtml(row.name || "")}</span>
+                <span class="cap">预期 ${escapeHtml(
+                  row.eps_forecast_text || "—"
+                )} · 同比 ${escapeHtml(formatSignedPct(row.yoy_pct))}</span>
+                <span class="why">${escapeHtml(reasons || "重点跟踪")}</span>
+              </button>
+            `;
+            })
             .join("")}
         </div>
       `;
+      focusTarget.querySelectorAll("[data-focus-date]").forEach((btn) => {
+        btn.addEventListener("click", () => {
+          const date = btn.getAttribute("data-focus-date") || "";
+          if (!date) return;
+          if (date !== state.earningsDate) {
+            state.earningsDate = date;
+            loadEarningsDesk();
+          }
+        });
+      });
     }
   }
 
   if (els.earningsTableTitle) {
     const tab = dates.find((d) => d.date === selected);
+    const focusN = items.filter((r) => r.is_focus).length;
     els.earningsTableTitle.textContent = tab
       ? `${tab.label} 周${tab.weekday} · 全部申报`
       : "当日全部";
-  }
-  if (els.earningsTableBlurb) {
-    els.earningsTableBlurb.textContent =
-      "市场预期 · 上年对照 · 同比 · 下一/上年发布日";
+    if (els.earningsTableBlurb) {
+      els.earningsTableBlurb.textContent = focusN
+        ? `重点 ${focusN} 只置顶 · 市场预期 / 同比 / 发布日`
+        : "市场预期 · 上年对照 · 同比 · 发布日";
+    }
   }
   if (els.earningsCount) {
-    els.earningsCount.textContent = `${items.length} 家`;
+    const focusN = items.filter((r) => r.is_focus).length;
+    els.earningsCount.textContent = focusN
+      ? `${items.length} 家 · ${focusN} 重点`
+      : `${items.length} 家`;
   }
 
   if (els.earningsTable) {
@@ -3337,12 +3381,15 @@ function renderEarningsDesk(data) {
           <span>代码</span><span>公司</span><span>时段</span><span>下一发布</span><span>上年发布</span><span>市场预期</span><span>上年EPS</span><span>同比</span><span>市值</span>
         </div>
         ${items
-          .map(
-            (row) => `
-          <a class="earnings-row" href="${escapeHtml(
+          .map((row) => {
+            const focus = Boolean(row.is_focus);
+            return `
+          <a class="earnings-row ${focus ? "is-focus" : ""}" href="${escapeHtml(
             row.url || `https://finance.yahoo.com/quote/${row.symbol}/`
           )}" target="_blank" rel="noopener noreferrer">
-            <span class="sym">${escapeHtml(row.symbol)}</span>
+            <span class="sym">${escapeHtml(row.symbol)}${
+              focus ? '<em class="focus-tag">重点</em>' : ""
+            }</span>
             <span class="name">${escapeHtml(row.name || "")}</span>
             <span class="session session-${escapeHtml(
               (row.time || "").replace("time-", "")
@@ -3358,8 +3405,8 @@ function renderEarningsDesk(data) {
             )}</span>
             <span class="cap">${escapeHtml(formatCapShort(row.market_cap_text))}</span>
           </a>
-        `
-          )
+        `;
+          })
           .join("")}
       `;
     }
@@ -3369,14 +3416,14 @@ function renderEarningsDesk(data) {
 async function loadEarningsDesk({ force = false } = {}) {
   if (PAGE !== "earnings") return null;
   const params = new URLSearchParams();
-  params.set("days", "7");
+  params.set("days", "31");
   if (state.earningsDate) params.set("date", state.earningsDate);
   if (state.earningsSession && state.earningsSession !== "all") {
     params.set("session", state.earningsSession);
   }
   if (state.earningsQ) params.set("q", state.earningsQ);
   if (force) params.set("refresh", "true");
-  setStatus(force ? "强制刷新财报日历…" : "同步全美股财报日历…");
+  setStatus(force ? "强制刷新近一个月财报…" : "同步近一个月财报日历…");
   if (els.earningsRefresh) els.earningsRefresh.disabled = true;
   try {
     const res = await fetch(`/api/earnings?${params.toString()}`);
@@ -3385,9 +3432,11 @@ async function loadEarningsDesk({ force = false } = {}) {
     renderEarningsDesk(data);
     const errN = (data.errors || []).length;
     setStatus(
-      `财报已更新${data.cached ? "（缓存）" : ""} · ${data.selected_date || ""} ${
-        data.count || 0
-      } 家${errN ? ` · ${errN} 条拉取警告` : ""}`
+      `财报已更新${data.cached ? "（缓存）" : ""} · ${data.window_start || ""}→${
+        data.window_end || ""
+      } · 当日 ${data.count || 0} · 重点 ${data.focus_count || 0}${
+        errN ? ` · ${errN} 条拉取警告` : ""
+      }`
     );
     return data;
   } catch (err) {

@@ -1,13 +1,13 @@
 {% extends "base.html" %}
 {% block title %}Pulse Desk · 财报日历{% endblock %}
-{% block status_default %}同步全美股财报日历…{% endblock %}
+{% block status_default %}同步近一个月财报日历…{% endblock %}
 {% block content %}
       <section class="page-intro earnings-intro">
         <div class="earnings-intro-main">
           <p class="page-kicker">财报台</p>
           <h1>美股财报日历</h1>
           <p class="lede compact" id="earnings-page-blurb">
-            覆盖 Nasdaq 公开日历上的全部申报公司 · 按美东日期与盘前/盘后筛选
+            近一个月 Nasdaq 公开申报 · 重点标出需关注个股
           </p>
         </div>
         <div class="cta-row earnings-intro-actions">
@@ -18,7 +18,7 @@
 
       <div class="earnings-board" id="earnings-board">
         <div class="earnings-toolbar">
-          <div class="earnings-date-tabs" id="earnings-date-tabs" role="tablist" aria-label="财报日期"></div>
+          <div class="earnings-date-tabs" id="earnings-date-tabs" role="tablist" aria-label="近一个月财报日期"></div>
           <form class="earnings-filters" id="earnings-filters" autocomplete="off">
             <label class="field compact">
               <span>搜索</span>
@@ -32,13 +32,13 @@
           </form>
         </div>
 
-        <div class="earnings-mega" id="earnings-mega" aria-label="大市值焦点"></div>
+        <section class="earnings-focus" id="earnings-focus" aria-label="本月重点关注"></section>
 
         <section class="earnings-table-wrap" aria-label="当日全部财报">
           <div class="section-head compact">
             <div>
               <h2 id="earnings-table-title">当日全部</h2>
-              <p id="earnings-table-blurb">按市值排序</p>
+              <p id="earnings-table-blurb">重点个股置顶 · 按关注度 / 市值排序</p>
             </div>
             <p class="earnings-count" id="earnings-count">—</p>
           </div>

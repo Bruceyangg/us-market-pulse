@@ -234,7 +234,7 @@ async def api_sectors(
 @app.get("/api/earnings")
 async def api_earnings(
     date: str | None = Query(default=None),
-    days: int = Query(default=7, ge=1, le=14),
+    days: int = Query(default=31, ge=1, le=31),
     q: str | None = Query(default=None),
     session: str | None = Query(default=None),
     refresh: bool = Query(default=False),
