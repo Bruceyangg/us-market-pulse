@@ -766,7 +766,7 @@ async def _hydrate_list_intraday_sparks(
     force: bool = False,
     limit: int = 18,
 ) -> None:
-    """Fill same-day list sparklines (Yahoo → Nasdaq fallback)."""
+    """Fill same-day list sparklines via Nasdaq (Yahoo often 429)."""
     _hydrate_sparks_from_cache(pick_rows)
     missing = [
         str(r.get("symbol") or "").upper()
@@ -778,48 +778,56 @@ async def _hydrate_list_intraday_sparks(
     if not missing:
         return
 
-    # Prefer one Nasdaq batch pass first (avoids N Yahoo 429s when blocked)
     try:
         nd_map = await asyncio.wait_for(
-            fetch_nasdaq_intraday_many(missing, concurrency=4, max_points=96),
-            timeout=8.0,
+            fetch_nasdaq_intraday_many(missing, concurrency=5, max_points=96),
+            timeout=12.0,
         )
     except (asyncio.TimeoutError, httpx.HTTPError):
         nd_map = {}
 
-    still: list[str] = []
-    for sym in missing:
-        row_nd = nd_map.get(sym)
-        if row_nd and len(row_nd.get("points") or []) >= 2:
-            pts = [
-                {"t": p.get("t"), "v": p.get("v")}
-                for p in (row_nd.get("points") or [])
-                if p.get("v") is not None
-            ]
-            _SYM_CACHE[f"spark:{sym}"] = {
-                "bundle": {
-                    "symbol": sym,
-                    "points": pts,
-                    "change_pct": row_nd.get("change_pct"),
-                    "series": {
-                        "intraday": {
-                            "chart": "line",
-                            "points": pts,
-                            "change_pct": row_nd.get("change_pct"),
-                        }
-                    },
+    for sym, row_nd in nd_map.items():
+        pts = [
+            {"t": p.get("t"), "v": p.get("v")}
+            for p in (row_nd.get("points") or [])
+            if p.get("v") is not None
+        ]
+        if len(pts) < 2:
+            continue
+        _SYM_CACHE[f"spark:{sym}"] = {
+            "bundle": {
+                "symbol": sym,
+                "points": pts,
+                "change_pct": row_nd.get("change_pct"),
+                "series": {
+                    "intraday": {
+                        "chart": "line",
+                        "points": pts,
+                        "change_pct": row_nd.get("change_pct"),
+                    }
                 },
-                "fetched_at": time.time(),
-            }
-            for row in pick_rows:
-                if str(row.get("symbol") or "").upper() == sym:
-                    _apply_intraday_spark(
-                        row, pts, change_pct=row_nd.get("change_pct") or row.get("change_pct")
-                    )
-                    break
-        else:
-            still.append(sym)
+            },
+            "fetched_at": time.time(),
+        }
+        for row in pick_rows:
+            if str(row.get("symbol") or "").upper() == sym and not _pick_has_chart(row):
+                _apply_intraday_spark(
+                    row,
+                    pts,
+                    change_pct=row_nd.get("change_pct")
+                    if row_nd.get("change_pct") is not None
+                    else row.get("change_pct"),
+                )
+                break
 
+    # Optional Yahoo fill only for stragglers Nasdaq missed (keep short budget)
+    still = [
+        str(r.get("symbol") or "").upper()
+        for r in pick_rows
+        if str(r.get("symbol") or "")
+        and not _spark_points_from_row(r)
+        and not _pick_has_chart(r)
+    ][:6]
     if not still:
         return
 
@@ -827,7 +835,7 @@ async def _hydrate_list_intraday_sparks(
         try:
             pts = await asyncio.wait_for(
                 _fetch_intraday_spark(client, sym, force=force),
-                timeout=3.5,
+                timeout=2.5,
             )
             return sym, pts
         except (asyncio.TimeoutError, httpx.HTTPError):
