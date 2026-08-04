@@ -205,6 +205,8 @@ data class EarningsRow(
 data class IntelResponse(
     val items: List<IntelItem> = emptyList(),
     val mood: MoodSummary? = null,
+    val holding_intel: HoldingIntelResponse? = null,
+    val sentiment_summary: MoodSummary? = null,
     val fetched_at: Double? = null,
     val cached: Boolean? = null,
 )
@@ -220,6 +222,43 @@ data class IntelItem(
     val sentiment: String? = null,
     val score: Double? = null,
     val category: String? = null,
+    val holding_hit: Boolean? = null,
+    val holding_matches: List<String> = emptyList(),
+)
+
+@Serializable
+data class HoldingIntelResponse(
+    val ok: Boolean? = null,
+    val selected: String? = null,
+    val symbols: List<HoldingIntelSymbol> = emptyList(),
+    val count: Int? = null,
+    val total: Int? = null,
+    val items: List<IntelItem> = emptyList(),
+    val holdings: List<Holding> = emptyList(),
+    val fetched_at: Double? = null,
+    val cached: Boolean? = null,
+)
+
+@Serializable
+data class HoldingIntelSymbol(
+    val symbol: String,
+    val name: String? = null,
+    val count: Int? = null,
+)
+
+@Serializable
+data class SettingsResponse(
+    val webhook_url: String? = null,
+    val webhook_format: String? = null,
+    val resolved_webhook_format: String? = null,
+    val push_interval_minutes: Int? = null,
+    val push_times: List<String> = emptyList(),
+    val push_timezone: String? = null,
+    val push_enabled: Boolean? = null,
+    val watch_keywords: List<String> = emptyList(),
+    val webhook_configured: Boolean? = null,
+    val email_configured: Boolean? = null,
+    val any_channel: Boolean? = null,
 )
 
 @Serializable

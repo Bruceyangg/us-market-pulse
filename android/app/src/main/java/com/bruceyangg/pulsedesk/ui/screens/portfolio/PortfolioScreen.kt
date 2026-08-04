@@ -40,12 +40,18 @@ fun PortfolioScreen(vm: PortfolioViewModel = viewModel()) {
     Column(Modifier.fillMaxSize()) {
         ScreenHeader(
             title = "持仓",
-            subtitle = state.data?.note ?: "同步网页端持仓（访客模式可能为空）",
+            subtitle = when {
+                state.needsLogin -> "未登录 · 持仓需登录后查看"
+                else -> state.data?.note ?: "自定义股票 · 云端同步 · 红涨绿跌"
+            },
             onRefresh = { vm.load(true) },
             refreshing = state.refreshing,
         )
         when {
             state.loading && state.data == null -> LoadingState()
+            state.needsLogin -> ErrorState("未登录 · 持仓需登录后查看\n请先在网站登录并添加持仓。") {
+                vm.load(true)
+            }
             state.error != null && state.data == null -> ErrorState(state.error!!) { vm.load(true) }
             else -> {
                 val data = state.data

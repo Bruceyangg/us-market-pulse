@@ -1,42 +1,71 @@
 package com.bruceyangg.pulsedesk.ui.nav
 
+import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.AccountBalance
 import androidx.compose.material.icons.outlined.Article
+import androidx.compose.material.icons.outlined.BrightnessAuto
 import androidx.compose.material.icons.outlined.CalendarMonth
+import androidx.compose.material.icons.outlined.DarkMode
 import androidx.compose.material.icons.outlined.GridView
+import androidx.compose.material.icons.outlined.LightMode
+import androidx.compose.material.icons.outlined.Settings
 import androidx.compose.material.icons.outlined.ShowChart
+import androidx.compose.material.icons.outlined.TipsAndUpdates
 import androidx.compose.material3.Icon
-import androidx.compose.material3.NavigationBar
-import androidx.compose.material3.NavigationBarItem
+import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.navigation.NavGraph.Companion.findStartDestination
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
 import com.bruceyangg.pulsedesk.ui.screens.earnings.EarningsScreen
+import com.bruceyangg.pulsedesk.ui.screens.holdingintel.HoldingIntelScreen
 import com.bruceyangg.pulsedesk.ui.screens.intel.IntelScreen
 import com.bruceyangg.pulsedesk.ui.screens.markets.MarketsScreen
 import com.bruceyangg.pulsedesk.ui.screens.portfolio.PortfolioScreen
 import com.bruceyangg.pulsedesk.ui.screens.sectors.SectorsScreen
+import com.bruceyangg.pulsedesk.ui.screens.settings.SettingsScreen
+import com.bruceyangg.pulsedesk.ui.theme.ThemeMode
+import com.bruceyangg.pulsedesk.ui.theme.ThemePreferences
+import com.bruceyangg.pulsedesk.ui.theme.rememberThemeMode
 
+/** Matches website desk-nav order exactly. */
 enum class PulseTab(
     val route: String,
     val label: String,
     val icon: ImageVector,
 ) {
-    Markets("markets", "行情", Icons.Outlined.ShowChart),
+    Portfolio("desk", "持仓", Icons.Outlined.AccountBalance),
+    HoldingIntel("holding-intel", "持仓情报", Icons.Outlined.TipsAndUpdates),
+    Markets("markets", "市场", Icons.Outlined.ShowChart),
     Sectors("sectors", "板块", Icons.Outlined.GridView),
     Earnings("earnings", "财报", Icons.Outlined.CalendarMonth),
     Intel("intel", "情报", Icons.Outlined.Article),
-    Portfolio("portfolio", "持仓", Icons.Outlined.AccountBalance),
+    Settings("settings", "设置", Icons.Outlined.Settings),
 }
 
 @Composable
@@ -44,39 +73,98 @@ fun PulseRoot() {
     val navController = rememberNavController()
     val backStack by navController.currentBackStackEntryAsState()
     val current = backStack?.destination?.route
+    val context = LocalContext.current
+    val themePrefs = ThemePreferences.get(context)
+    val themeMode = rememberThemeMode(themePrefs)
 
     Scaffold(
-        bottomBar = {
-            NavigationBar {
-                PulseTab.entries.forEach { tab ->
-                    NavigationBarItem(
-                        selected = current == tab.route,
-                        onClick = {
-                            navController.navigate(tab.route) {
-                                popUpTo(navController.graph.findStartDestination().id) {
-                                    saveState = true
-                                }
-                                launchSingleTop = true
-                                restoreState = true
-                            }
+        topBar = {
+            Row(
+                Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 8.dp, vertical = 2.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text(
+                    text = "Pulse Desk",
+                    style = MaterialTheme.typography.titleMedium,
+                    modifier = Modifier
+                        .weight(1f)
+                        .padding(start = 8.dp),
+                )
+                TextButton(onClick = { themePrefs.cycle() }) {
+                    Icon(
+                        imageVector = when (themeMode) {
+                            ThemeMode.Auto -> Icons.Outlined.BrightnessAuto
+                            ThemeMode.Light -> Icons.Outlined.LightMode
+                            ThemeMode.Dark -> Icons.Outlined.DarkMode
                         },
-                        icon = { Icon(tab.icon, contentDescription = tab.label) },
-                        label = { Text(tab.label) },
+                        contentDescription = "切换主题",
                     )
+                    Text(
+                        text = themeMode.label,
+                        modifier = Modifier.padding(start = 4.dp),
+                    )
+                }
+            }
+        },
+        bottomBar = {
+            Surface(tonalElevation = 3.dp, shadowElevation = 6.dp) {
+                Row(
+                    Modifier
+                        .fillMaxWidth()
+                        .horizontalScroll(rememberScrollState())
+                        .padding(horizontal = 4.dp, vertical = 6.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    PulseTab.entries.forEach { tab ->
+                        val selected = current == tab.route
+                        val tint =
+                            if (selected) MaterialTheme.colorScheme.primary
+                            else MaterialTheme.colorScheme.onSurfaceVariant
+                        Column(
+                            modifier = Modifier
+                                .widthIn(min = 72.dp)
+                                .clickable {
+                                    navController.navigate(tab.route) {
+                                        popUpTo(navController.graph.findStartDestination().id) {
+                                            saveState = true
+                                        }
+                                        launchSingleTop = true
+                                        restoreState = true
+                                    }
+                                }
+                                .padding(horizontal = 8.dp, vertical = 4.dp),
+                            horizontalAlignment = Alignment.CenterHorizontally,
+                            verticalArrangement = Arrangement.spacedBy(2.dp),
+                        ) {
+                            Icon(tab.icon, contentDescription = tab.label, tint = tint)
+                            Text(
+                                tab.label,
+                                color = tint,
+                                fontSize = 11.sp,
+                                fontWeight = if (selected) FontWeight.Bold else FontWeight.Medium,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                            )
+                        }
+                    }
                 }
             }
         },
     ) { padding ->
         NavHost(
             navController = navController,
-            startDestination = PulseTab.Sectors.route,
+            startDestination = PulseTab.Portfolio.route,
             modifier = Modifier.padding(padding),
         ) {
+            composable(PulseTab.Portfolio.route) { PortfolioScreen() }
+            composable(PulseTab.HoldingIntel.route) { HoldingIntelScreen() }
             composable(PulseTab.Markets.route) { MarketsScreen() }
             composable(PulseTab.Sectors.route) { SectorsScreen() }
             composable(PulseTab.Earnings.route) { EarningsScreen() }
             composable(PulseTab.Intel.route) { IntelScreen() }
-            composable(PulseTab.Portfolio.route) { PortfolioScreen() }
+            composable(PulseTab.Settings.route) { SettingsScreen() }
         }
     }
 }

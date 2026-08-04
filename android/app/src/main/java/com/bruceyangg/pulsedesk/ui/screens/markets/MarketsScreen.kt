@@ -41,7 +41,7 @@ fun MarketsScreen(vm: MarketsViewModel = viewModel()) {
 
     Column(Modifier.fillMaxSize()) {
         ScreenHeader(
-            title = "行情",
+            title = "市场",
             subtitle = when {
                 state.refreshing -> "同步指数与 K 线…"
                 state.data?.cached == true -> "已缓存 · 捏合缩放日图"
