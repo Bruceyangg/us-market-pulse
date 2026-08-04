@@ -5,98 +5,104 @@
       <section class="page-intro sectors-intro">
         <div class="sectors-intro-main">
           <p class="page-kicker">板块台</p>
-          <h1>热点板块与涨势追踪</h1>
-          <p class="lede compact" id="hot-sectors-blurb">跟踪当前热点、一轮涨势个股、财报日历与月线</p>
+          <h1>热点板块</h1>
+          <p class="lede compact" id="hot-sectors-blurb">选板块 → 看涨势个股 → 读产业链与风险</p>
         </div>
         <div class="cta-row sectors-intro-actions">
           <button class="btn primary btn-compact" id="btn-sectors-refresh" type="button">刷新</button>
-          <div class="tf-filters" id="sector-tf-filters" role="tablist" aria-label="个股走势周期">
-            <button type="button" class="filter is-active" data-stf="intraday" aria-selected="true">分时</button>
-            <button type="button" class="filter" data-stf="day" aria-selected="false">日图</button>
-            <button type="button" class="filter" data-stf="month" aria-selected="false">月图</button>
-            <button type="button" class="filter" data-stf="quarter" aria-selected="false">季图</button>
-          </div>
+          <a class="btn ghost btn-compact" href="/earnings">财报日历</a>
         </div>
       </section>
 
       <div class="sectors-board" id="sectors-board">
-        <div class="sector-etf-strip" id="sector-etf-grid" aria-label="热点板块">
-          <div class="index-card skeleton"></div>
-          <div class="index-card skeleton"></div>
-          <div class="index-card skeleton"></div>
+        <div class="sector-chip-strip" id="sector-etf-grid" aria-label="热点板块">
+          <div class="sector-chip skeleton"></div>
+          <div class="sector-chip skeleton"></div>
+          <div class="sector-chip skeleton"></div>
         </div>
 
-        <div class="sectors-workspace">
-          <aside class="sectors-rail sectors-rail-left" aria-label="热点利空与涨势个股">
-            <section class="sectors-panel" id="hot-desk">
-              <div class="sectors-panel-head">
-                <h2 id="hot-desk-title">热点利空</h2>
-                <p id="ai-desk-blurb">当前热点板块风险</p>
-              </div>
-              <article class="war-analysis-card compact" id="ai-analysis-card">
-                <div class="live-brief-skeleton">汇总中…</div>
-              </article>
-              <div class="spotlight-list compact" id="ai-news-list"></div>
-            </section>
-
-            <section class="sectors-panel" id="sector-picks">
-              <div class="sectors-panel-head">
+        <section class="sectors-desk" aria-label="板块工作台">
+          <aside class="sectors-list-pane" id="sector-picks" aria-label="一轮涨势">
+            <div class="sectors-pane-head">
+              <div>
                 <h2>一轮涨势</h2>
-                <p id="sector-picks-blurb">月线动能优先</p>
+                <p id="sector-picks-blurb">近端动能优先</p>
               </div>
-              <div class="holding-list sector-pick-list" id="sector-pick-list" role="listbox" aria-label="涨势个股列表">
-                <p class="empty">加载中…</p>
-              </div>
-            </section>
+            </div>
+            <div class="holding-list sector-pick-list" id="sector-pick-list" role="listbox" aria-label="涨势个股列表">
+              <p class="empty">加载中…</p>
+            </div>
           </aside>
 
-          <section class="sectors-center" aria-label="个股走势与财报">
-            <div class="portfolio-chart sector-chart" id="sector-pick-chart">
-              <p class="chart-placeholder">选择个股后显示走势</p>
-            </div>
-            <div class="sector-chart-meta">
-              <div class="earnings-panel" id="earnings-panel" aria-label="财报日历">
-                <div class="sectors-panel-head">
-                  <h2>财报日历</h2>
-                  <p id="earnings-blurb">关注临近财报个股</p>
+          <section class="sectors-chart-pane" aria-label="个股走势">
+            <div class="sectors-chart-sticky">
+              <div class="sectors-chart-toolbar">
+                <div class="tf-filters" id="sector-tf-filters" role="tablist" aria-label="个股走势周期">
+                  <button type="button" class="filter is-active" data-stf="intraday" aria-selected="true">分时</button>
+                  <button type="button" class="filter" data-stf="day" aria-selected="false">日图</button>
+                  <button type="button" class="filter" data-stf="month" aria-selected="false">月图</button>
+                  <button type="button" class="filter" data-stf="quarter" aria-selected="false">季图</button>
                 </div>
-                <div class="earnings-list" id="earnings-list">
-                  <p class="empty">加载财报日期…</p>
-                </div>
-                <a class="earnings-all-link" href="/earnings">查看全美股财报日历 →</a>
               </div>
-              <div class="month-panel" id="month-panel" aria-label="月线速览">
-                <div class="sectors-panel-head">
-                  <h2>月线速览</h2>
-                  <p id="month-panel-blurb">一轮涨势对照</p>
-                </div>
-                <div class="month-chart" id="month-chart">
-                  <p class="empty">选择个股后显示月图</p>
-                </div>
+              <div class="portfolio-chart sector-chart" id="sector-pick-chart">
+                <p class="chart-placeholder">点左侧个股，显示走势</p>
               </div>
             </div>
           </section>
 
-          <aside class="sectors-rail sectors-rail-right" aria-label="产业链与板块消息">
-            <section class="sectors-panel value-chain" id="value-chain">
-              <div class="sectors-panel-head">
-                <h2>业务与产业链</h2>
-                <p id="value-chain-blurb">主营 / 上下游</p>
-              </div>
-              <div class="value-chain-body" id="value-chain-body">
-                <p class="empty">选择个股后显示</p>
-              </div>
-            </section>
+          <aside class="sectors-intel-pane" aria-label="产业链与风险">
+            <div class="sectors-intel-sticky">
+              <section class="sectors-intel-block" id="value-chain">
+                <div class="sectors-pane-head">
+                  <div>
+                    <h2>业务与产业链</h2>
+                    <p id="value-chain-blurb">主营 / 上下游</p>
+                  </div>
+                </div>
+                <div class="value-chain-body" id="value-chain-body">
+                  <p class="empty">选择个股后显示</p>
+                </div>
+              </section>
 
-            <section class="sectors-panel" id="sector-news-mini">
-              <div class="sectors-panel-head">
-                <h2>板块消息</h2>
-              </div>
-              <div class="spotlight-list compact" id="sector-news-list">
-                <p class="empty">加载中…</p>
-              </div>
-            </section>
+              <section class="sectors-intel-block" id="earnings-panel" aria-label="观察名单财报">
+                <div class="sectors-pane-head">
+                  <div>
+                    <h2>临近财报</h2>
+                    <p id="earnings-blurb">观察名单窗口</p>
+                  </div>
+                  <a class="btn ghost btn-compact" href="/earnings">全部</a>
+                </div>
+                <div class="earnings-list" id="earnings-list">
+                  <p class="empty">加载财报日期…</p>
+                </div>
+              </section>
+
+              <section class="sectors-intel-block" id="hot-desk">
+                <div class="sectors-pane-head">
+                  <div>
+                    <h2 id="hot-desk-title">热点风险</h2>
+                    <p id="ai-desk-blurb">当前热点承压点</p>
+                  </div>
+                </div>
+                <article class="war-analysis-card compact" id="ai-analysis-card">
+                  <div class="live-brief-skeleton">汇总中…</div>
+                </article>
+                <div class="spotlight-list compact" id="ai-news-list"></div>
+              </section>
+
+              <section class="sectors-intel-block" id="sector-news-mini">
+                <div class="sectors-pane-head">
+                  <div>
+                    <h2>板块消息</h2>
+                    <p>匹配当前板块</p>
+                  </div>
+                </div>
+                <div class="spotlight-list compact" id="sector-news-list">
+                  <p class="empty">加载中…</p>
+                </div>
+              </section>
+            </div>
           </aside>
-        </div>
+        </section>
       </div>
 {% endblock %}

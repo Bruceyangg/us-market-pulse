@@ -2674,9 +2674,12 @@ function renderSectorEtfs(sectors) {
   }
   if (els.hotSectorsBlurb) {
     const hot = rows.filter((r) => r.is_hot).map((r) => r.label).slice(0, 3);
-    els.hotSectorsBlurb.textContent = hot.length
-      ? `当前热点 ${hot.join(" · ")} · 按一轮涨势排序`
-      : "按一轮涨势排序 · 点选切换个股池";
+    const active = rows.find((r) => r.id === state.sectorId);
+    els.hotSectorsBlurb.textContent = active
+      ? `${active.label} · ${hot.length ? `热点 ${hot.join(" / ")}` : "按一轮涨势排序"}`
+      : hot.length
+        ? `当前热点 ${hot.join(" · ")} · 点选板块切换个股池`
+        : "点选板块 → 左侧涨势个股 → 中间走势";
   }
   els.sectorEtfGrid.innerHTML = rows
     .map((row) => {
@@ -2684,33 +2687,30 @@ function renderSectorEtfs(sectors) {
       const month = row.month_change_pct;
       const up = !(typeof pct === "number" && pct < 0);
       const active = row.id === state.sectorId;
-      const spark = sparklinePath(row.points || [], 96, 22, 1);
+      const spark = sparklinePath(row.points || [], 42, 16, 1);
       const stroke = up ? TAPE_UP : TAPE_DOWN;
       return `
-        <button type="button" class="index-card sector-etf-card ${
-          active ? "is-active" : ""
-        } ${row.is_hot ? "is-hot" : ""}" data-sector="${escapeHtml(row.id)}">
-          <div class="label">${escapeHtml(row.label)}${
+        <button type="button" class="sector-chip ${active ? "is-active" : ""} ${
+          row.is_hot ? "is-hot" : ""
+        }" data-sector="${escapeHtml(row.id)}" aria-pressed="${
+          active ? "true" : "false"
+        }">
+          <span class="chip-name">${escapeHtml(row.label)}${
             row.is_wave
               ? '<span class="hot-tag">涨势</span>'
               : row.is_hot
                 ? '<span class="hot-tag">热</span>'
                 : ""
-          }</div>
-          <div class="short">${escapeHtml(row.symbol)} · 月 ${escapeHtml(
-            pctText(month)
-          )}</div>
-          <div class="value">${escapeHtml(
-            row.price == null ? "—" : formatNumber(row.price, "")
-          )}</div>
-          <div class="chg ${pctClass(pct)}">${escapeHtml(pctText(pct))}</div>
-          <div class="mini-spark">
+          }</span>
+          <span class="chip-meta">
+            <span class="chg ${pctClass(pct)}">${escapeHtml(pctText(pct))}</span>
+            <span>月 ${escapeHtml(pctText(month))}</span>
             ${
               spark
-                ? `<svg viewBox="0 0 96 22" preserveAspectRatio="none" aria-hidden="true"><path d="${spark}" fill="none" stroke="${stroke}" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"></path></svg>`
+                ? `<span class="chip-spark" aria-hidden="true"><svg viewBox="0 0 42 16" preserveAspectRatio="none"><path d="${spark}" fill="none" stroke="${stroke}" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"></path></svg></span>`
                 : ""
             }
-          </div>
+          </span>
         </button>
       `;
     })
@@ -2751,30 +2751,22 @@ function renderEarningsCalendar(data) {
       : "关注观察名单财报窗口";
   }
   if (!rows.length) {
-    els.earningsList.innerHTML = '<p class="empty">暂无财报日期</p>';
+    els.earningsList.innerHTML =
+      '<p class="empty">暂无观察名单财报 · <a href="/earnings">看全美股日历</a></p>';
     return;
   }
   els.earningsList.innerHTML = rows
-    .slice(0, 6)
+    .slice(0, 4)
     .map((row) => {
       const soon =
         typeof row.days_to_earnings === "number" && row.days_to_earnings <= 14;
-      const eps =
-        row.eps_avg != null
-          ? `预期 EPS ${Number(row.eps_avg).toFixed(2)}`
-          : row.is_estimate
-            ? "日期为估计"
-            : "";
       return `
         <button type="button" class="earnings-item ${
           row.symbol === selected ? "is-active" : ""
         } ${soon ? "is-soon" : ""}" data-symbol="${escapeHtml(row.symbol)}">
-          <span class="sym">${escapeHtml(row.name || row.symbol)}</span>
+          <span class="sym">${escapeHtml(row.symbol)}</span>
           <span class="when">${escapeHtml(formatEarningsWhen(row))}</span>
-          <span class="meta">${escapeHtml(row.sector_label || "")} · ${escapeHtml(
-            pctText(row.month_change_pct)
-          )} 月</span>
-          ${eps ? `<span class="eps">${escapeHtml(eps)}</span>` : ""}
+          <span class="meta">${escapeHtml(row.name || "")}</span>
         </button>
       `;
     })
@@ -2830,7 +2822,7 @@ function renderSectorPickChart() {
   }
   if (!pick) {
     els.sectorPickChart.innerHTML =
-      '<p class="chart-placeholder">选择个股后显示最新走势</p>';
+      '<p class="chart-placeholder">点左侧个股，显示分时 / K 线</p>';
     renderMonthPanel(null);
     return;
   }
@@ -2909,13 +2901,13 @@ function renderValueChain(vc) {
       <p class="vc-kicker">${escapeHtml(data.symbol)} · ${escapeHtml(
         data.name || ""
       )}</p>
-      <h3>业务</h3>
       <p>${escapeHtml(data.business || "")}</p>
     </div>
     <div class="vc-block">
-      <h3>产业 / 位置</h3>
-      <p>${escapeHtml(data.industry || "")}</p>
-      <p>${escapeHtml(data.chain_position || "")}</p>
+      <h3>位置</h3>
+      <p>${escapeHtml(
+        [data.industry, data.chain_position].filter(Boolean).join(" · ")
+      )}</p>
     </div>
     <div class="vc-block">
       <h3>上游</h3>
@@ -2990,7 +2982,7 @@ function renderSectorPicks(data) {
   if (els.sectorNewsList) {
     const news = data?.sector_news || [];
     els.sectorNewsList.innerHTML = news.length
-      ? news.slice(0, 3).map((item) => spotlightCardHtml(item)).join("")
+      ? news.slice(0, 2).map((item) => spotlightCardHtml(item)).join("")
       : '<p class="empty">暂无该板块匹配新闻。</p>';
   }
 
