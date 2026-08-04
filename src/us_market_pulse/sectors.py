@@ -15,7 +15,9 @@ USER_AGENT = "Mozilla/5.0 (compatible; PulseDesk/1.0)"
 
 # Lightweight frames for sector tape (fewer Yahoo calls than full board)
 SECTOR_TIMEFRAMES = [
-    tf for tf in PORTFOLIO_TIMEFRAMES if tf["id"] in {"intraday", "day", "month"}
+    tf
+    for tf in PORTFOLIO_TIMEFRAMES
+    if tf["id"] in {"intraday", "day", "month", "quarter"}
 ]
 
 SECTOR_ETFS: list[dict[str, Any]] = [
@@ -359,6 +361,168 @@ def _relative_strength(stock: dict[str, Any], etf: dict[str, Any] | None) -> flo
         return None
 
 
+def _bar_close(point: dict[str, Any] | None) -> float | None:
+    if not point:
+        return None
+    for key in ("c", "v", "o"):
+        if point.get(key) is None:
+            continue
+        try:
+            return float(point[key])
+        except (TypeError, ValueError):
+            return None
+    return None
+
+
+def _window_change_pct(points: list[dict[str, Any]] | None, bars: int) -> float | None:
+    """Percent change over the last N bars (from day/intraday series)."""
+    rows = list(points or [])
+    if len(rows) < 2:
+        return None
+    window = rows[-bars:] if len(rows) >= bars else rows
+    first = _bar_close(window[0])
+    last = _bar_close(window[-1])
+    if first in (None, 0) or last is None:
+        return None
+    return round((last - first) / first * 100.0, 3)
+
+
+def _series_points(bundle: dict[str, Any] | None, tf: str) -> list[dict[str, Any]]:
+    series = ((bundle or {}).get("series") or {}).get(tf) or {}
+    return list(series.get("points") or bundle.get("points") or [])
+
+
+def _momentum_fields(bundle: dict[str, Any] | None) -> dict[str, Any]:
+    """Derive near-term wave metrics from 1y daily bars (not all-time monthly)."""
+    day_points = _series_points(bundle, "day")
+    m1 = _window_change_pct(day_points, 22)
+    m3 = _window_change_pct(day_points, 66)
+    day_pct = (bundle or {}).get("change_pct")
+    try:
+        d = float(day_pct) if day_pct is not None else 0.0
+    except (TypeError, ValueError):
+        d = 0.0
+    try:
+        m = float(m1) if m1 is not None else 0.0
+    except (TypeError, ValueError):
+        m = 0.0
+    try:
+        q = float(m3) if m3 is not None else 0.0
+    except (TypeError, ValueError):
+        q = 0.0
+    momentum = round(d * 0.25 + m * 0.45 + q * 0.30, 3)
+    is_wave = m >= 6.0 and q >= 8.0 and d >= -2.0
+    return {
+        "month_change_pct": m1,
+        "quarter_change_pct": m3,
+        "momentum": momentum,
+        "is_wave": is_wave,
+    }
+
+
+def _momentum_score(day_pct: Any, month_pct: Any) -> float:
+    """Legacy helper kept for call sites that only have scalars."""
+    fields = _momentum_fields(
+        {
+            "change_pct": day_pct,
+            "series": {"day": {"points": []}},
+        }
+    )
+    # If no points, fall back to weighted scalars
+    try:
+        d = float(day_pct or 0)
+    except (TypeError, ValueError):
+        d = 0.0
+    try:
+        m = float(month_pct or 0)
+    except (TypeError, ValueError):
+        m = 0.0
+    return round(d * 0.35 + m * 0.65, 3)
+
+
+def _is_wave_up(day_pct: Any, month_pct: Any) -> bool:
+    try:
+        d = float(day_pct if day_pct is not None else 0)
+        m = float(month_pct if month_pct is not None else 0)
+    except (TypeError, ValueError):
+        return False
+    return m >= 6.0 and d >= -2.0
+
+
+async def _fetch_earnings(
+    client: httpx.AsyncClient, symbol: str
+) -> dict[str, Any] | None:
+    sym = (symbol or "").strip().upper()
+    if not sym:
+        return None
+    url = (
+        f"https://query2.finance.yahoo.com/v10/finance/quoteSummary/{sym}"
+        f"?modules=calendarEvents,earnings"
+    )
+    try:
+        resp = await client.get(
+            url,
+            timeout=20.0,
+            headers={
+                "User-Agent": USER_AGENT,
+                "Accept": "application/json",
+            },
+        )
+        resp.raise_for_status()
+        result = (((resp.json() or {}).get("quoteSummary") or {}).get("result") or [None])[0]
+        if not result:
+            return None
+        cal = (result.get("calendarEvents") or {}).get("earnings") or {}
+        dates_raw = cal.get("earningsDate") or []
+        dates: list[dict[str, Any]] = []
+        for entry in dates_raw:
+            if isinstance(entry, dict):
+                raw = entry.get("raw")
+                fmt = entry.get("fmt")
+            else:
+                raw, fmt = entry, None
+            if raw is None and not fmt:
+                continue
+            dates.append({"ts": int(raw) if raw is not None else None, "label": fmt or ""})
+        earn = result.get("earnings") or {}
+        chart = (earn.get("earningsChart") or {})
+        quarterly = []
+        for row in chart.get("quarterly") or []:
+            quarterly.append(
+                {
+                    "date": row.get("date"),
+                    "actual": (row.get("actual") or {}).get("raw")
+                    if isinstance(row.get("actual"), dict)
+                    else row.get("actual"),
+                    "estimate": (row.get("estimate") or {}).get("raw")
+                    if isinstance(row.get("estimate"), dict)
+                    else row.get("estimate"),
+                }
+            )
+        next_ts = dates[0]["ts"] if dates else None
+        days_to = None
+        if next_ts:
+            days_to = int((next_ts - time.time()) / 86400)
+        return {
+            "symbol": sym,
+            "earnings_dates": dates[:3],
+            "next_earnings_ts": next_ts,
+            "next_earnings_label": (dates[0].get("label") if dates else "") or "",
+            "days_to_earnings": days_to,
+            "is_estimate": bool(cal.get("isEarningsDateEstimate")),
+            "eps_avg": (cal.get("earningsAverage") or {}).get("raw")
+            if isinstance(cal.get("earningsAverage"), dict)
+            else cal.get("earningsAverage"),
+            "revenue_avg": (cal.get("revenueAverage") or {}).get("raw")
+            if isinstance(cal.get("revenueAverage"), dict)
+            else cal.get("revenueAverage"),
+            "quarterly": quarterly[-4:],
+            "current_quarter_estimate": chart.get("currentQuarterEstimate"),
+        }
+    except Exception:  # noqa: BLE001
+        return None
+
+
 async def build_sector_desk(
     items: list[dict[str, Any]] | None = None,
     *,
@@ -391,9 +555,7 @@ async def build_sector_desk(
                 errors.extend(errs)
                 if not bundle:
                     continue
-                month_pct = ((bundle.get("series") or {}).get("month") or {}).get(
-                    "change_pct"
-                )
+                wave = _momentum_fields(bundle)
                 sectors.append(
                     {
                         "id": spec["id"],
@@ -406,7 +568,10 @@ async def build_sector_desk(
                         "price": bundle.get("price"),
                         "change": bundle.get("change"),
                         "change_pct": bundle.get("change_pct"),
-                        "month_change_pct": month_pct,
+                        "month_change_pct": wave["month_change_pct"],
+                        "quarter_change_pct": wave["quarter_change_pct"],
+                        "momentum": wave["momentum"],
+                        "is_wave": wave["is_wave"],
                         "points": bundle.get("points") or [],
                         "series": bundle.get("series") or {},
                         "url": bundle.get("url"),
@@ -414,17 +579,18 @@ async def build_sector_desk(
                     }
                 )
 
-            # Hot rank: prefer strong 1D move, break ties with 1M
+            # Hot rank: near-term wave score, then 1M / 1D tape
             sectors.sort(
                 key=lambda r: (
-                    float(r.get("change_pct") or -999),
+                    float(r.get("momentum") or -999),
                     float(r.get("month_change_pct") or -999),
+                    float(r.get("change_pct") or -999),
                 ),
                 reverse=True,
             )
             for idx, row in enumerate(sectors):
                 row["rank"] = idx + 1
-                row["is_hot"] = idx < 3
+                row["is_hot"] = idx < 3 or bool(row.get("is_wave"))
 
             payload = {
                 "sectors": sectors,
@@ -442,69 +608,90 @@ async def build_sector_desk(
     news_items = items or []
     sectors = list(payload.get("sectors") or [])
 
-    # AI desk always featured
-    ai_analysis = topic_bearish_analysis(news_items, "ai") if "ai" in TOPICS else {
-        "label": "AI 板块",
-        "counts": {"total": 0, "bearish": 0, "bullish": 0, "neutral": 0},
-        "avg_score": 0,
-        "assessment": "AI 主题规则未加载。",
-        "top_factors": [],
-        "spotlight": [],
-        "latest": _match_sector_news(news_items, "ai"),
-    }
-    if "ai" in TOPICS:
-        # keep latest from topic filter even if analysis already has it
-        ai_analysis["latest"] = filter_topic_items(news_items, "ai", sort="latest")[:8]
-
-    # Choose active sector
+    # Default to current hottest sector (not hard-coded AI)
     sector_id = (selected_sector or "").strip().lower()
     if not sector_id or not any(s["id"] == sector_id for s in sectors):
-        # Prefer AI if present else hottest
-        sector_id = "ai" if any(s["id"] == "ai" for s in sectors) else (
-            sectors[0]["id"] if sectors else "ai"
-        )
+        sector_id = sectors[0]["id"] if sectors else "ai"
     active = next((s for s in sectors if s["id"] == sector_id), None)
     if active is None and sectors:
         active = sectors[0]
         sector_id = active["id"]
 
-    # Fetch picks for active sector (and always refresh AI picks lightly from cache of active)
-    pick_symbols = list((active or {}).get("picks") or [])[:5]
+    # Universe: active sector picks + leaders from other hot sectors
+    hot = [s for s in sectors if s.get("is_hot")][:3]
+    pick_symbols: list[str] = []
+    for sym in list((active or {}).get("picks") or [])[:5]:
+        if sym not in pick_symbols:
+            pick_symbols.append(sym)
+    for hot_sec in hot:
+        if hot_sec.get("id") == sector_id:
+            continue
+        for sym in list(hot_sec.get("picks") or [])[:2]:
+            if sym not in pick_symbols:
+                pick_symbols.append(sym)
+        if len(pick_symbols) >= 10:
+            break
+
     pick_rows: list[dict[str, Any]] = []
     pick_errors: list[str] = []
+    earnings_by_symbol: dict[str, Any] = {}
     if pick_symbols:
         async with httpx.AsyncClient(
             headers={"User-Agent": USER_AGENT, "Accept": "application/json"},
             follow_redirects=True,
         ) as client:
-            pick_results = await asyncio.gather(
-                *[_fetch_quote(client, sym, sym) for sym in pick_symbols]
+            pick_results, earnings_results = await asyncio.gather(
+                asyncio.gather(*[_fetch_quote(client, sym, sym) for sym in pick_symbols]),
+                asyncio.gather(*[_fetch_earnings(client, sym) for sym in pick_symbols]),
             )
-        for sym, (bundle, errs) in zip(pick_symbols, pick_results, strict=True):
+        sector_by_sym: dict[str, dict[str, Any]] = {}
+        for sec in SECTOR_ETFS:
+            for sym in sec.get("picks") or []:
+                sector_by_sym.setdefault(sym, sec)
+
+        for sym, (bundle, errs), earnings in zip(
+            pick_symbols, pick_results, earnings_results, strict=True
+        ):
             pick_errors.extend(errs)
+            if earnings:
+                earnings_by_symbol[sym] = earnings
             if not bundle:
                 continue
             vc = _value_chain_for(sym)
-            rs = _relative_strength(bundle, active)
-            month_pct = ((bundle.get("series") or {}).get("month") or {}).get(
-                "change_pct"
+            home = sector_by_sym.get(sym) or {}
+            home_etf = next(
+                (s for s in sectors if s.get("id") == home.get("id")), active
             )
+            rs = _relative_strength(bundle, home_etf)
+            wave = _momentum_fields(bundle)
+            day_pct = bundle.get("change_pct")
             pick_rows.append(
                 {
                     **bundle,
                     "name": vc.get("name") or sym,
-                    "month_change_pct": month_pct,
+                    "month_change_pct": wave["month_change_pct"],
+                    "quarter_change_pct": wave["quarter_change_pct"],
                     "vs_sector_pct": rs,
-                    "is_strong": (rs is not None and rs > 0)
-                    or float(bundle.get("change_pct") or 0) > float((active or {}).get("change_pct") or 0),
+                    "momentum": wave["momentum"],
+                    "is_wave": wave["is_wave"],
+                    "is_strong": wave["is_wave"]
+                    or (rs is not None and rs > 0)
+                    or float(day_pct or 0)
+                    > float((home_etf or {}).get("change_pct") or 0),
+                    "sector_id": home.get("id") or sector_id,
+                    "sector_label": home.get("label")
+                    or (active or {}).get("label")
+                    or "",
+                    "earnings": earnings,
                     "value_chain": vc,
                 }
             )
         pick_rows.sort(
             key=lambda r: (
-                1 if r.get("is_strong") else 0,
-                float(r.get("change_pct") or -999),
+                1 if r.get("is_wave") else 0,
+                float(r.get("momentum") or -999),
                 float(r.get("month_change_pct") or -999),
+                float(r.get("change_pct") or -999),
             ),
             reverse=True,
         )
@@ -514,12 +701,11 @@ async def build_sector_desk(
         selected = pick_rows[0]["symbol"] if pick_rows else ""
     selected_pick = next((p for p in pick_rows if p.get("symbol") == selected), None)
 
-    sector_news = _match_sector_news(news_items, (active or {}).get("topic_id") or sector_id)
-    sector_bear = None
+    sector_news = _match_sector_news(
+        news_items, (active or {}).get("topic_id") or sector_id
+    )
     topic_key = (active or {}).get("topic_id")
-    if topic_key == "ai" and "ai" in TOPICS:
-        sector_bear = ai_analysis
-    elif topic_key in TOPICS:
+    if topic_key in TOPICS:
         sector_bear = topic_bearish_analysis(news_items, topic_key)
     else:
         sector_bear = {
@@ -531,35 +717,71 @@ async def build_sector_desk(
                 "neutral": sum(1 for i in sector_news if i.get("sentiment") == "neutral"),
             },
             "avg_score": 0,
-            "assessment": f"{(active or {}).get('label') or '该板块'}近端匹配 {len(sector_news)} 条相关报道。",
+            "assessment": (
+                f"{(active or {}).get('label') or '该板块'}近端匹配 "
+                f"{len(sector_news)} 条相关报道。"
+            ),
             "top_factors": [],
             "spotlight": [i for i in sector_news if i.get("sentiment") == "bearish"][:3],
             "latest": sector_news,
         }
 
-    hot = [s for s in sectors if s.get("is_hot")]
+    # Keep AI desk payload for backward-compatible front-end, but fill with active hot sector
+    hot_desk = {
+        "label": (active or {}).get("label") or "热点板块",
+        "blurb": (active or {}).get("blurb")
+        or "当前热点板块利空与相关新闻（不限于 AI）",
+        "analysis": sector_bear,
+        "latest": sector_news[:6] or sector_bear.get("latest") or [],
+        "spotlight": sector_bear.get("spotlight") or [],
+    }
+
+    earnings_calendar = sorted(
+        [
+            {
+                **(earnings_by_symbol.get(p["symbol"]) or {}),
+                "symbol": p["symbol"],
+                "name": p.get("name") or p["symbol"],
+                "sector_label": p.get("sector_label") or "",
+                "change_pct": p.get("change_pct"),
+                "month_change_pct": p.get("month_change_pct"),
+            }
+            for p in pick_rows
+            if earnings_by_symbol.get(p["symbol"], {}).get("next_earnings_ts")
+        ],
+        key=lambda r: (
+            r.get("days_to_earnings")
+            if r.get("days_to_earnings") is not None
+            else 10_000
+        ),
+    )
+
     return {
         **payload,
         "cached": bool(_CACHE["payload"]) and not force,
-        "ai_desk": {
-            "label": "AI 板块",
-            "blurb": "算力、大模型与 AI 应用相关利空与新闻",
-            "analysis": ai_analysis,
-            "latest": ai_analysis.get("latest") or [],
-            "spotlight": ai_analysis.get("spotlight") or [],
-        },
-        "hot_sectors": hot,
+        "ai_desk": hot_desk,
+        "hot_desk": hot_desk,
+        "hot_sectors": [s for s in sectors if s.get("is_hot")][:4],
         "active_sector_id": sector_id,
         "active_sector": active,
         "sector_news": sector_news,
         "sector_bearish": sector_bear,
         "picks": pick_rows,
+        "wave_leaders": [p for p in pick_rows if p.get("is_wave")][:6],
         "selected_symbol": selected,
         "selected_pick": selected_pick,
         "value_chain": (selected_pick or {}).get("value_chain")
         or _value_chain_for(selected),
+        "earnings_calendar": earnings_calendar,
+        "selected_earnings": earnings_by_symbol.get(selected)
+        or (selected_pick or {}).get("earnings"),
         "timeframes": [
-            {"id": tf["id"], "label": tf["label"], "blurb": tf["blurb"], "chart": tf["chart"]}
+            {
+                "id": tf["id"],
+                "label": tf["label"],
+                "blurb": tf["blurb"],
+                "chart": tf["chart"],
+            }
             for tf in SECTOR_TIMEFRAMES
         ],
         "errors": list(payload.get("errors") or []) + pick_errors[-20:],

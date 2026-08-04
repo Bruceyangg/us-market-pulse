@@ -5,8 +5,8 @@
       <section class="page-intro sectors-intro">
         <div class="sectors-intro-main">
           <p class="page-kicker">板块台</p>
-          <h1>AI 与热点板块</h1>
-          <p class="lede compact" id="hot-sectors-blurb">按涨跌排序 · 同屏看利空、走势与产业链</p>
+          <h1>热点板块与涨势追踪</h1>
+          <p class="lede compact" id="hot-sectors-blurb">跟踪当前热点、一轮涨势个股、财报日历与月线</p>
         </div>
         <div class="cta-row sectors-intro-actions">
           <button class="btn primary btn-compact" id="btn-sectors-refresh" type="button">刷新</button>
@@ -14,6 +14,7 @@
             <button type="button" class="filter is-active" data-stf="intraday" aria-selected="true">分时</button>
             <button type="button" class="filter" data-stf="day" aria-selected="false">日图</button>
             <button type="button" class="filter" data-stf="month" aria-selected="false">月图</button>
+            <button type="button" class="filter" data-stf="quarter" aria-selected="false">季图</button>
           </div>
         </div>
       </section>
@@ -26,11 +27,11 @@
         </div>
 
         <div class="sectors-workspace">
-          <aside class="sectors-rail sectors-rail-left" aria-label="AI 利空与强势个股">
-            <section class="sectors-panel" id="ai-desk">
+          <aside class="sectors-rail sectors-rail-left" aria-label="热点利空与涨势个股">
+            <section class="sectors-panel" id="hot-desk">
               <div class="sectors-panel-head">
-                <h2>AI 利空</h2>
-                <p id="ai-desk-blurb">算力与大模型风险</p>
+                <h2 id="hot-desk-title">热点利空</h2>
+                <p id="ai-desk-blurb">当前热点板块风险</p>
               </div>
               <article class="war-analysis-card compact" id="ai-analysis-card">
                 <div class="live-brief-skeleton">汇总中…</div>
@@ -40,18 +41,38 @@
 
             <section class="sectors-panel" id="sector-picks">
               <div class="sectors-panel-head">
-                <h2>强势个股</h2>
-                <p id="sector-picks-blurb">相对板块更强</p>
+                <h2>一轮涨势</h2>
+                <p id="sector-picks-blurb">月线动能优先</p>
               </div>
-              <div class="holding-list sector-pick-list" id="sector-pick-list" role="listbox" aria-label="强势个股列表">
+              <div class="holding-list sector-pick-list" id="sector-pick-list" role="listbox" aria-label="涨势个股列表">
                 <p class="empty">加载中…</p>
               </div>
             </section>
           </aside>
 
-          <section class="sectors-center" aria-label="个股走势">
+          <section class="sectors-center" aria-label="个股走势与财报">
             <div class="portfolio-chart sector-chart" id="sector-pick-chart">
               <p class="chart-placeholder">选择个股后显示走势</p>
+            </div>
+            <div class="sector-chart-meta">
+              <div class="earnings-panel" id="earnings-panel" aria-label="财报日历">
+                <div class="sectors-panel-head">
+                  <h2>财报日历</h2>
+                  <p id="earnings-blurb">关注临近财报个股</p>
+                </div>
+                <div class="earnings-list" id="earnings-list">
+                  <p class="empty">加载财报日期…</p>
+                </div>
+              </div>
+              <div class="month-panel" id="month-panel" aria-label="月线速览">
+                <div class="sectors-panel-head">
+                  <h2>月线速览</h2>
+                  <p id="month-panel-blurb">一轮涨势对照</p>
+                </div>
+                <div class="month-chart" id="month-chart">
+                  <p class="empty">选择个股后显示月图</p>
+                </div>
+              </div>
             </div>
           </section>
 

@@ -33,9 +33,9 @@ const state = {
   holdingFilter: "",
   holdingIntel: null,
   sectors: null,
-  sectorId: "ai",
+  sectorId: "",
   sectorSymbol: "",
-  sectorTf: "intraday",
+  sectorTf: "day",
 };
 
 const PORTFOLIO_TF_KEYS = ["intraday", "day", "month", "quarter", "year"];
@@ -86,6 +86,7 @@ const els = {
   warBearishGrid: document.getElementById("war-bearish-grid"),
   warBearishBlurb: document.getElementById("war-bearish-blurb"),
   aiDeskBlurb: document.getElementById("ai-desk-blurb"),
+  hotDeskTitle: document.getElementById("hot-desk-title"),
   aiAnalysisCard: document.getElementById("ai-analysis-card"),
   aiNewsList: document.getElementById("ai-news-list"),
   hotSectorsBlurb: document.getElementById("hot-sectors-blurb"),
@@ -97,6 +98,10 @@ const els = {
   sectorNewsList: document.getElementById("sector-news-list"),
   valueChainBlurb: document.getElementById("value-chain-blurb"),
   valueChainBody: document.getElementById("value-chain-body"),
+  earningsList: document.getElementById("earnings-list"),
+  earningsBlurb: document.getElementById("earnings-blurb"),
+  monthChart: document.getElementById("month-chart"),
+  monthPanelBlurb: document.getElementById("month-panel-blurb"),
   sectorsRefresh: document.getElementById("btn-sectors-refresh"),
   briefGrid: document.getElementById("brief-grid"),
   briefBlurb: document.getElementById("brief-blurb"),
@@ -2604,17 +2609,20 @@ function renderAiDesk(aiDesk) {
       ? analysis.avg_score.toFixed(2)
       : "0.00";
   const factors = (analysis.top_factors || []).slice(0, 4).join("、");
+  const label = data.label || "热点板块";
+  if (els.hotDeskTitle) els.hotDeskTitle.textContent = "热点利空";
   if (els.aiDeskBlurb) {
     els.aiDeskBlurb.textContent =
       data.blurb ||
-      `近端样本 ${counts.total || 0} · 利空 ${counts.bearish || 0}`;
+      `${label} · 样本 ${counts.total || 0} · 利空 ${counts.bearish || 0}`;
   }
   if (els.aiAnalysisCard) {
+    const q = label;
     els.aiAnalysisCard.innerHTML = `
       <div class="war-analysis-head">
-        <h3>${escapeHtml(data.label || "AI 板块")}</h3>
+        <h3>${escapeHtml(label)}</h3>
         <a class="btn ghost btn-compact" href="/intel?q=${encodeURIComponent(
-          "人工智能 OR AI OR Nvidia"
+          q
         )}">情报流</a>
       </div>
       <div class="brief-meta-row">
@@ -2633,7 +2641,7 @@ function renderAiDesk(aiDesk) {
   if (els.aiNewsList) {
     const rows = data.latest?.length ? data.latest : data.spotlight || [];
     if (!rows.length) {
-      els.aiNewsList.innerHTML = '<p class="empty">暂无 AI 相关新闻。</p>';
+      els.aiNewsList.innerHTML = '<p class="empty">暂无该热点相关新闻。</p>';
     } else {
       els.aiNewsList.innerHTML = rows
         .slice(0, 2)
@@ -2653,12 +2661,13 @@ function renderSectorEtfs(sectors) {
   if (els.hotSectorsBlurb) {
     const hot = rows.filter((r) => r.is_hot).map((r) => r.label).slice(0, 3);
     els.hotSectorsBlurb.textContent = hot.length
-      ? `热点 ${hot.join(" · ")} · 点选切换个股池`
-      : "按涨跌排序 · 点选切换个股池";
+      ? `当前热点 ${hot.join(" · ")} · 按一轮涨势排序`
+      : "按一轮涨势排序 · 点选切换个股池";
   }
   els.sectorEtfGrid.innerHTML = rows
     .map((row) => {
       const pct = row.change_pct;
+      const month = row.month_change_pct;
       const up = !(typeof pct === "number" && pct < 0);
       const active = row.id === state.sectorId;
       const spark = sparklinePath(row.points || [], 96, 22, 1);
@@ -2668,9 +2677,15 @@ function renderSectorEtfs(sectors) {
           active ? "is-active" : ""
         } ${row.is_hot ? "is-hot" : ""}" data-sector="${escapeHtml(row.id)}">
           <div class="label">${escapeHtml(row.label)}${
-            row.is_hot ? '<span class="hot-tag">热</span>' : ""
+            row.is_wave
+              ? '<span class="hot-tag">涨势</span>'
+              : row.is_hot
+                ? '<span class="hot-tag">热</span>'
+                : ""
           }</div>
-          <div class="short">${escapeHtml(row.symbol)}</div>
+          <div class="short">${escapeHtml(row.symbol)} · 月 ${escapeHtml(
+            pctText(month)
+          )}</div>
           <div class="value">${escapeHtml(
             row.price == null ? "—" : formatNumber(row.price, "")
           )}</div>
@@ -2698,6 +2713,95 @@ function renderSectorEtfs(sectors) {
   });
 }
 
+function formatEarningsWhen(row) {
+  if (!row) return "日期待定";
+  if (typeof row.days_to_earnings === "number") {
+    if (row.days_to_earnings < 0) return `已过 ${Math.abs(row.days_to_earnings)} 天`;
+    if (row.days_to_earnings === 0) return "今天";
+    if (row.days_to_earnings <= 7) return `${row.days_to_earnings} 天后`;
+    return row.next_earnings_label || `${row.days_to_earnings} 天后`;
+  }
+  return row.next_earnings_label || "日期待定";
+}
+
+function renderEarningsCalendar(data) {
+  if (!els.earningsList) return;
+  const rows = data?.earnings_calendar || [];
+  const selected = data?.selected_symbol || "";
+  if (els.earningsBlurb) {
+    const soon = rows.filter(
+      (r) => typeof r.days_to_earnings === "number" && r.days_to_earnings <= 14
+    ).length;
+    els.earningsBlurb.textContent = soon
+      ? `${soon} 只 14 日内临近财报`
+      : "关注观察名单财报窗口";
+  }
+  if (!rows.length) {
+    els.earningsList.innerHTML = '<p class="empty">暂无财报日期</p>';
+    return;
+  }
+  els.earningsList.innerHTML = rows
+    .slice(0, 6)
+    .map((row) => {
+      const soon =
+        typeof row.days_to_earnings === "number" && row.days_to_earnings <= 14;
+      const eps =
+        row.eps_avg != null
+          ? `预期 EPS ${Number(row.eps_avg).toFixed(2)}`
+          : row.is_estimate
+            ? "日期为估计"
+            : "";
+      return `
+        <button type="button" class="earnings-item ${
+          row.symbol === selected ? "is-active" : ""
+        } ${soon ? "is-soon" : ""}" data-symbol="${escapeHtml(row.symbol)}">
+          <span class="sym">${escapeHtml(row.name || row.symbol)}</span>
+          <span class="when">${escapeHtml(formatEarningsWhen(row))}</span>
+          <span class="meta">${escapeHtml(row.sector_label || "")} · ${escapeHtml(
+            pctText(row.month_change_pct)
+          )} 月</span>
+          ${eps ? `<span class="eps">${escapeHtml(eps)}</span>` : ""}
+        </button>
+      `;
+    })
+    .join("");
+  els.earningsList.querySelectorAll("[data-symbol]").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      const sym = btn.getAttribute("data-symbol") || "";
+      if (!sym || sym === state.sectorSymbol) return;
+      state.sectorSymbol = sym;
+      loadSectorDesk();
+    });
+  });
+}
+
+function renderMonthPanel(pick) {
+  if (!els.monthChart) return;
+  if (!pick) {
+    els.monthChart.innerHTML = '<p class="empty">选择个股后显示月图</p>';
+    return;
+  }
+  const series = pick.series?.month;
+  const points = series?.points || [];
+  const pct = series?.change_pct != null ? series.change_pct : pick.month_change_pct;
+  const up = !(typeof pct === "number" && pct < 0);
+  const svg = points.length
+    ? renderCandleSvg(points)
+    : '<p class="empty">暂无月线</p>';
+  if (els.monthPanelBlurb) {
+    els.monthPanelBlurb.textContent = pick.is_wave
+      ? "一轮涨势进行中"
+      : "月线对照涨势";
+  }
+  els.monthChart.innerHTML = `
+    <div class="month-head">
+      <strong>${escapeHtml(pick.symbol || "")}</strong>
+      <span class="chg ${pctClass(pct)}">${escapeHtml(pctText(pct))}</span>
+    </div>
+    ${typeof svg === "string" && svg.includes("<svg") ? svg : svg}
+  `;
+}
+
 function renderSectorPickChart() {
   if (!els.sectorPickChart) return;
   const data = state.sectors || {};
@@ -2713,6 +2817,7 @@ function renderSectorPickChart() {
   if (!pick) {
     els.sectorPickChart.innerHTML =
       '<p class="chart-placeholder">选择个股后显示最新走势</p>';
+    renderMonthPanel(null);
     return;
   }
   const series = pick.series?.[tf];
@@ -2726,11 +2831,19 @@ function renderSectorPickChart() {
     kind === "candle"
       ? renderCandleSvg(points)
       : renderChartSvg(points, { up });
+  const earn = data.selected_earnings || pick.earnings || {};
+  const earnNote = earn.next_earnings_label
+    ? ` · 财报 ${earn.next_earnings_label}${
+        typeof earn.days_to_earnings === "number"
+          ? `（${formatEarningsWhen(earn)}）`
+          : ""
+      }`
+    : "";
   els.sectorPickChart.innerHTML = `
     <div class="chart-head">
       <h3>${escapeHtml(pick.name || pick.label || "")} · ${escapeHtml(
         pick.symbol || ""
-      )}</h3>
+      )}${pick.is_wave ? '<span class="hot-tag">涨势</span>' : ""}</h3>
       <span class="range chg ${up ? "up" : "down"}">${escapeHtml(
         pctText(pct)
       )}</span>
@@ -2748,13 +2861,16 @@ function renderSectorPickChart() {
       <span><span class="k">低</span><span class="v down">${escapeHtml(
         stats.low == null ? "—" : formatNumber(stats.low, "")
       )}</span></span>
-      <span><span class="k">相对板块</span><span class="v ${pctClass(
-        pick.vs_sector_pct
-      )}">${escapeHtml(pctText(pick.vs_sector_pct))}</span></span>
+      <span><span class="k">月涨幅</span><span class="v ${pctClass(
+        pick.month_change_pct
+      )}">${escapeHtml(pctText(pick.month_change_pct))}</span></span>
     </div>
-    ${svg}
-    <div class="chart-foot">红涨绿跌 · 延迟报价 · Yahoo Finance</div>
+    <div class="chart-canvas">${svg}</div>
+    <div class="chart-foot">红涨绿跌 · ${escapeHtml(
+      pick.sector_label || ""
+    )}${escapeHtml(earnNote)}</div>
   `;
+  renderMonthPanel(pick);
 }
 
 function renderValueChain(vc) {
@@ -2807,14 +2923,13 @@ function renderSectorPicks(data) {
   const selected = data?.selected_symbol || state.sectorSymbol || "";
   const sector = data?.active_sector || {};
   const tf = state.sectorTf || "intraday";
+  const waveN = (data?.wave_leaders || picks.filter((p) => p.is_wave)).length;
   if (els.sectorPicksBlurb) {
-    els.sectorPicksBlurb.textContent = `${sector.label || "板块"}观察名单 · 相对 ETF ${
-      sector.symbol || ""
-    } 更强优先`;
+    els.sectorPicksBlurb.textContent = `${sector.label || "热点"} · ${waveN} 只一轮涨势`;
   }
   if (els.sectorPickList) {
     if (!picks.length) {
-      els.sectorPickList.innerHTML = '<p class="empty">暂无强势个股样本。</p>';
+      els.sectorPickList.innerHTML = '<p class="empty">暂无涨势个股样本。</p>';
     } else {
       els.sectorPickList.innerHTML = picks
         .map((pick) => {
@@ -2828,11 +2943,17 @@ function renderSectorPicks(data) {
             }">
               <span class="meta">
                 <span class="nm">${escapeHtml(pick.name || pick.symbol)}${
-                  pick.is_strong ? '<span class="hot-tag">强</span>' : ""
+                  pick.is_wave
+                    ? '<span class="hot-tag">涨势</span>'
+                    : pick.is_strong
+                      ? '<span class="hot-tag">强</span>'
+                      : ""
                 }</span>
-                <span class="sym">${escapeHtml(pick.symbol)}</span>
+                <span class="sym">${escapeHtml(pick.symbol)} · 月 ${escapeHtml(
+                  pctText(pick.month_change_pct)
+                )}</span>
               </span>
-              <span class="spark-wrap">${holdingSparkSvg(pick, tf)}</span>
+              <span class="spark-wrap">${holdingSparkSvg(pick, "month")}</span>
               <span class="price ${pctClass(pct)}">${escapeHtml(
                 pick.price == null ? "—" : formatNumber(pick.price, "")
               )}</span>
@@ -2860,6 +2981,7 @@ function renderSectorPicks(data) {
   }
 
   renderSectorPickChart();
+  renderEarningsCalendar(data);
   renderValueChain(data?.value_chain || data?.selected_pick?.value_chain);
 }
 
@@ -2867,7 +2989,7 @@ function renderSectorDesk(data) {
   state.sectors = data || null;
   if (data?.active_sector_id) state.sectorId = data.active_sector_id;
   if (data?.selected_symbol) state.sectorSymbol = data.selected_symbol;
-  renderAiDesk(data?.ai_desk);
+  renderAiDesk(data?.hot_desk || data?.ai_desk);
   renderSectorEtfs(data?.sectors || []);
   renderSectorPicks(data);
 }

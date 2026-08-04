@@ -2517,8 +2517,8 @@ body {
   display: grid;
   grid-template-columns: minmax(15.5rem, 0.92fr) minmax(0, 1.35fr) minmax(16rem, 0.95fr);
   gap: 0.75rem;
-  align-items: stretch;
-  min-height: min(72vh, 760px);
+  align-items: start;
+  min-height: 0;
 }
 
 .sectors-rail,
@@ -2666,40 +2666,148 @@ body {
   background: var(--elevated);
   box-shadow: var(--shadow);
   padding: 0.75rem;
-  display: flex;
-  flex-direction: column;
+  display: grid;
+  gap: 0.7rem;
   min-height: 0;
+  align-content: start;
 }
 
 .sector-chart {
-  flex: 1;
-  min-height: 0;
   display: flex;
   flex-direction: column;
   background: transparent;
   border: 0;
   box-shadow: none;
   padding: 0;
+  max-height: none;
+}
+
+.sector-chart .chart-canvas {
+  width: 100%;
+  height: 220px;
+  max-height: 220px;
+  overflow: hidden;
+}
+
+.sector-chart .chart-canvas svg {
+  width: 100%;
+  height: 100%;
+  display: block;
 }
 
 .sector-chart svg {
-  flex: 1;
-  min-height: 220px;
   width: 100%;
+  height: 220px;
+  max-height: 220px;
+  display: block;
 }
 
 .sector-chart .chart-head h3 {
-  font-size: 1.1rem;
+  font-size: 1.05rem;
 }
 
 .sector-chart .portfolio-stats {
   grid-template-columns: repeat(5, minmax(0, 1fr));
   padding: 0.4rem 0.5rem;
-  margin-bottom: 0.45rem;
+  margin-bottom: 0.4rem;
 }
 
 .sector-chart .chart-foot {
   font-size: 0.72rem;
+}
+
+.sector-chart-meta {
+  display: grid;
+  grid-template-columns: 1.05fr 0.95fr;
+  gap: 0.55rem;
+  align-items: stretch;
+}
+
+.earnings-panel,
+.month-panel {
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--elevated-soft);
+  padding: 0.6rem 0.65rem 0.7rem;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+}
+
+.earnings-list {
+  display: grid;
+  gap: 0.35rem;
+  overflow: auto;
+  max-height: 9.5rem;
+}
+
+.earnings-item {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 0.35rem 0.55rem;
+  padding: 0.45rem 0.5rem;
+  border-radius: 10px;
+  border: 1px solid var(--line);
+  background: var(--chip-bg);
+  cursor: pointer;
+  text-align: left;
+  font: inherit;
+  color: inherit;
+}
+
+.earnings-item.is-active {
+  border-color: rgba(47, 111, 159, 0.45);
+  box-shadow: inset 0 0 0 1px rgba(47, 111, 159, 0.18);
+}
+
+.earnings-item.is-soon {
+  border-color: rgba(224, 163, 74, 0.45);
+}
+
+.earnings-item .sym {
+  font-weight: 700;
+  font-size: 0.82rem;
+}
+
+.earnings-item .meta {
+  color: var(--ink-soft);
+  font-size: 0.72rem;
+}
+
+.earnings-item .when {
+  text-align: right;
+  font-size: 0.78rem;
+  font-weight: 700;
+  color: var(--amber);
+}
+
+.earnings-item .eps {
+  grid-column: 1 / -1;
+  color: var(--ink-soft);
+  font-size: 0.72rem;
+}
+
+.month-chart {
+  min-height: 8.5rem;
+}
+
+.month-chart svg {
+  width: 100%;
+  height: 140px;
+  display: block;
+}
+
+.month-chart .month-head {
+  display: flex;
+  justify-content: space-between;
+  gap: 0.4rem;
+  margin-bottom: 0.35rem;
+  font-size: 0.78rem;
+}
+
+.month-chart .month-head strong {
+  font-size: 0.86rem;
 }
 
 .value-chain-body {
@@ -2794,8 +2902,14 @@ body {
     min-height: 0;
   }
 
-  .sector-chart svg {
-    min-height: 180px;
+  .sector-chart-meta {
+    grid-template-columns: 1fr;
+  }
+
+  .sector-chart svg,
+  .sector-chart .chart-canvas {
+    height: 180px;
+    max-height: 180px;
   }
 }
 
@@ -3890,7 +4004,10 @@ html[data-theme="dark"] .war-analysis-card,
 html[data-theme="dark"] .value-chain-sticky,
 html[data-theme="dark"] .sector-etf-card,
 html[data-theme="dark"] .sectors-panel,
-html[data-theme="dark"] .sectors-center {
+html[data-theme="dark"] .sectors-center,
+html[data-theme="dark"] .earnings-panel,
+html[data-theme="dark"] .month-panel,
+html[data-theme="dark"] .earnings-item {
   background: var(--elevated);
   color: var(--ink);
   border-color: var(--line);
