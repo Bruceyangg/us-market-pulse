@@ -2760,8 +2760,9 @@ body {
   display: grid;
   grid-template-columns: minmax(15rem, 0.92fr) minmax(0, 1.45fr) minmax(16.5rem, 0.98fr);
   gap: 0.75rem;
-  align-items: start;
-  min-height: calc(100vh - 12.5rem);
+  align-items: stretch;
+  height: calc(100vh - 12.5rem);
+  min-height: 28rem;
 }
 
 .sectors-list-pane,
@@ -2769,6 +2770,9 @@ body {
 .sectors-intel-pane {
   min-width: 0;
   min-height: 0;
+  height: 100%;
+  display: flex;
+  flex-direction: column;
 }
 
 .sectors-list-pane {
@@ -2780,9 +2784,10 @@ body {
   display: flex;
   flex-direction: column;
   gap: 0.45rem;
-  max-height: calc(100vh - 12.5rem);
-  position: sticky;
-  top: 4.75rem;
+  max-height: none;
+  position: relative;
+  top: auto;
+  overflow: hidden;
 }
 
 .sectors-pane-head {
@@ -2835,19 +2840,24 @@ body {
 
 .sectors-chart-pane {
   min-height: 0;
+  overflow: hidden;
 }
 
 .sectors-chart-sticky {
-  position: sticky;
-  top: 4.75rem;
+  position: relative;
+  top: auto;
+  flex: 1;
+  min-height: 0;
+  height: 100%;
   border: 1px solid var(--line);
   border-radius: 16px;
   background: var(--elevated);
   box-shadow: var(--shadow);
   padding: 0.7rem 0.8rem 0.85rem;
   display: grid;
+  grid-template-rows: auto minmax(12rem, 1fr) auto;
   gap: 0.55rem;
-  max-height: calc(100vh - 5.25rem);
+  max-height: none;
   overflow: auto;
   scrollbar-width: thin;
 }
@@ -3011,7 +3021,8 @@ body {
   box-shadow: none;
   padding: 0;
   max-height: none;
-  min-height: 18rem;
+  min-height: 0;
+  overflow: auto;
 }
 
 .chart-zoom {
@@ -3152,16 +3163,20 @@ body {
 }
 
 .sectors-intel-pane {
-  max-height: calc(100vh - 12.5rem);
-  position: sticky;
-  top: 4.75rem;
+  max-height: none;
+  position: relative;
+  top: auto;
+  overflow: hidden;
 }
 
 .sectors-intel-sticky {
+  flex: 1;
+  min-height: 0;
   height: 100%;
-  max-height: calc(100vh - 12.5rem);
+  max-height: none;
   overflow: auto;
   display: grid;
+  align-content: start;
   gap: 0.65rem;
   padding-right: 0.1rem;
   scrollbar-width: thin;
@@ -3346,25 +3361,41 @@ body {
 
   .sectors-desk {
     grid-template-columns: minmax(14rem, 0.95fr) minmax(0, 1.35fr);
+    height: auto;
     min-height: 0;
+    align-items: start;
   }
 
   .sectors-intel-pane {
     grid-column: 1 / -1;
     position: static;
+    height: auto;
     max-height: none;
+    overflow: visible;
   }
 
   .sectors-intel-sticky {
     max-height: none;
+    height: auto;
     grid-template-columns: 1.1fr 0.9fr;
     align-items: start;
+  }
+
+  .sectors-list-pane,
+  .sectors-chart-pane {
+    height: auto;
+    overflow: visible;
   }
 
   .sectors-list-pane,
   .sectors-chart-sticky {
     position: static;
     max-height: none;
+    height: auto;
+  }
+
+  .sectors-chart-sticky {
+    grid-template-rows: auto auto auto;
   }
 }
 
@@ -3387,6 +3418,10 @@ body {
   .sectors-desk,
   .sectors-intel-sticky {
     grid-template-columns: 1fr;
+  }
+
+  .sectors-desk {
+    height: auto;
   }
 
   .sector-chart {

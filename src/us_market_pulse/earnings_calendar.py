@@ -21,6 +21,9 @@ _CACHE: dict[str, Any] = {"by_date": {}, "fetched_at": {}}
 _CACHE_TTL = 30 * 60  # 30 minutes per day bucket
 _FETCH_CONCURRENCY = 6
 _MAX_WINDOW_DAYS = 31
+_UPCOMING: dict[str, Any] = {"by_symbol": {}, "fetched_at": 0.0}
+_UPCOMING_TTL = 30 * 60
+_UPCOMING_DAYS = 75
 
 _TIME_LABELS = {
     "time-pre-market": "盘前",
@@ -507,3 +510,52 @@ def parse_day_param(value: str | None) -> date | None:
         return date.fromisoformat(text[:10])
     except ValueError:
         return None
+
+
+async def get_upcoming_earnings_map(
+    *, force: bool = False, days: int = _UPCOMING_DAYS
+) -> dict[str, dict[str, Any]]:
+    """Symbol → earliest upcoming Nasdaq calendar row (cached)."""
+    now = time.time()
+    if (
+        not force
+        and _UPCOMING["by_symbol"]
+        and now - float(_UPCOMING["fetched_at"] or 0) < _UPCOMING_TTL
+    ):
+        return dict(_UPCOMING["by_symbol"])
+
+    start = today_et()
+    end = start + timedelta(days=max(1, days))
+    days_list = [
+        d for d in _daterange(start, end, max_days=max(1, days) + 1) if d.weekday() < 5
+    ]
+    sem = asyncio.Semaphore(_FETCH_CONCURRENCY)
+    by_symbol: dict[str, dict[str, Any]] = {}
+    async with httpx.AsyncClient(follow_redirects=True, trust_env=False) as client:
+        results = await asyncio.gather(
+            *[
+                fetch_earnings_for_date(client, day, force=force, sem=sem)
+                for day in days_list
+            ]
+        )
+    for rows, _err in results:
+        for row in rows:
+            sym = str(row.get("symbol") or "").upper()
+            if not sym or sym in by_symbol:
+                continue
+            by_symbol[sym] = row
+
+    _UPCOMING["by_symbol"] = by_symbol
+    _UPCOMING["fetched_at"] = now
+    return dict(by_symbol)
+
+
+async def lookup_upcoming_earnings(
+    symbol: str, *, force: bool = False
+) -> dict[str, Any] | None:
+    sym = (symbol or "").strip().upper()
+    if not sym:
+        return None
+    mapping = await get_upcoming_earnings_map(force=force)
+    row = mapping.get(sym)
+    return dict(row) if row else None

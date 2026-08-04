@@ -4,12 +4,21 @@ from __future__ import annotations
 
 import asyncio
 import time
+from datetime import datetime, timedelta
 from typing import Any
+from zoneinfo import ZoneInfo
 
 import httpx
 
+from us_market_pulse.earnings_calendar import (
+    _parse_money,
+    get_upcoming_earnings_map,
+    lookup_upcoming_earnings,
+)
 from us_market_pulse.markets import PORTFOLIO_TIMEFRAMES, fetch_symbol_bundle
 from us_market_pulse.topics import TOPICS, filter_topic_items, topic_bearish_analysis
+
+_ET = ZoneInfo("America/New_York")
 
 USER_AGENT = (
     "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
@@ -518,7 +527,11 @@ async def _fetch_quote(
 
 
 async def _fetch_earnings_cached(
-    client: httpx.AsyncClient, symbol: str, *, force: bool = False
+    client: httpx.AsyncClient,
+    symbol: str,
+    *,
+    force: bool = False,
+    upcoming_map: dict[str, dict[str, Any]] | None = None,
 ) -> dict[str, Any] | None:
     sym = (symbol or "").strip().upper()
     cache_key = f"earn:{sym}"
@@ -527,10 +540,15 @@ async def _fetch_earnings_cached(
         not force
         and cached
         and time.time() - float(cached.get("fetched_at") or 0) < _SYM_TTL
+        and _earnings_has_core(cached.get("earnings"))
     ):
         return cached.get("earnings")
-    earnings = await _fetch_earnings(client, sym)
-    _SYM_CACHE[cache_key] = {"earnings": earnings, "fetched_at": time.time()}
+    earnings = await _fetch_earnings(
+        client, sym, upcoming_map=upcoming_map
+    )
+    # Avoid caching empty results during Yahoo outages — retry next time.
+    if _earnings_has_core(earnings):
+        _SYM_CACHE[cache_key] = {"earnings": earnings, "fetched_at": time.time()}
     return earnings
 
 
@@ -872,7 +890,39 @@ def _enrich_earnings_comparisons(payload: dict[str, Any]) -> dict[str, Any]:
     return payload
 
 
-async def _fetch_earnings(
+def _parse_us_date(text: str | None) -> datetime | None:
+    raw = str(text or "").strip()
+    if not raw:
+        return None
+    for fmt in ("%Y-%m-%d", "%m/%d/%Y", "%m/%d/%y"):
+        try:
+            return datetime.strptime(raw[:10] if fmt == "%Y-%m-%d" else raw, fmt)
+        except ValueError:
+            continue
+    return None
+
+
+def _day_ts(day: datetime | None) -> int | None:
+    if day is None:
+        return None
+    stamp = day.replace(hour=12, minute=0, second=0, microsecond=0, tzinfo=_ET)
+    return int(stamp.timestamp())
+
+
+def _earnings_has_core(payload: dict[str, Any] | None) -> bool:
+    if not payload:
+        return False
+    return bool(
+        payload.get("next_earnings_label")
+        or payload.get("prev_earnings_label")
+        or payload.get("expect_eps") is not None
+        or payload.get("eps_avg") is not None
+        or payload.get("last_eps_actual") is not None
+        or payload.get("history")
+    )
+
+
+async def _fetch_earnings_yahoo(
     client: httpx.AsyncClient, symbol: str
 ) -> dict[str, Any] | None:
     sym = (symbol or "").strip().upper()
@@ -941,7 +991,6 @@ async def _fetch_earnings(
                     "surprise_pct": _yahoo_raw(row.get("surprisePercent")),
                 }
             )
-        # Newest first
         history_rows.sort(
             key=lambda r: float(r.get("quarter_ts") or 0),
             reverse=True,
@@ -1002,10 +1051,152 @@ async def _fetch_earnings(
                 for k, v in trend_map.items()
                 if k in {"0q", "+1q", "+1y", "0y"}
             },
+            "source": "yahoo",
         }
         return _enrich_earnings_comparisons(payload)
     except Exception:  # noqa: BLE001
         return None
+
+
+async def _fetch_earnings_nasdaq(
+    client: httpx.AsyncClient,
+    symbol: str,
+    *,
+    upcoming: dict[str, Any] | None = None,
+) -> dict[str, Any] | None:
+    """Nasdaq earnings-surprise + calendar (works when Yahoo quoteSummary is blocked)."""
+    sym = (symbol or "").strip().upper()
+    if not sym:
+        return None
+    history_rows: list[dict[str, Any]] = []
+    try:
+        resp = await client.get(
+            f"https://api.nasdaq.com/api/company/{sym}/earnings-surprise",
+            timeout=25.0,
+            headers={
+                "User-Agent": USER_AGENT,
+                "Accept": "application/json, text/plain, */*",
+                "Origin": "https://www.nasdaq.com",
+                "Referer": f"https://www.nasdaq.com/market-activity/stocks/{sym.lower()}/earnings",
+            },
+        )
+        resp.raise_for_status()
+        table = (
+            ((resp.json() or {}).get("data") or {}).get("earningsSurpriseTable") or {}
+        )
+        for row in table.get("rows") or []:
+            reported = _parse_us_date(str(row.get("dateReported") or ""))
+            actual = _parse_money(row.get("eps"))
+            if actual is None and isinstance(row.get("eps"), (int, float)):
+                actual = float(row.get("eps"))
+            estimate = _parse_money(row.get("consensusForecast"))
+            surprise = _parse_money(row.get("percentageSurprise"))
+            history_rows.append(
+                {
+                    "period": str(row.get("fiscalQtrEnd") or ""),
+                    "quarter_ts": _day_ts(reported),
+                    "label": reported.date().isoformat() if reported else str(
+                        row.get("dateReported") or ""
+                    ),
+                    "actual": actual,
+                    "estimate": estimate,
+                    "surprise_pct": surprise,
+                }
+            )
+        history_rows.sort(
+            key=lambda r: float(r.get("quarter_ts") or 0),
+            reverse=True,
+        )
+    except Exception:  # noqa: BLE001
+        history_rows = []
+
+    up = upcoming
+    if up is None:
+        up = await lookup_upcoming_earnings(sym)
+    elif isinstance(up, dict) and "symbol" not in up and sym in up:
+        # full map passed in
+        up = up.get(sym)
+
+    next_label = ""
+    next_ts = None
+    days_to = None
+    eps_avg = None
+    analyst_count = None
+    if isinstance(up, dict) and up.get("date"):
+        next_label = str(up.get("next_earnings_label") or up.get("date") or "")
+        next_day = _parse_us_date(next_label)
+        next_ts = _day_ts(next_day)
+        if next_ts:
+            days_to = int((next_ts - time.time()) / 86400)
+        eps_avg = up.get("eps_forecast")
+        analyst_count = up.get("estimate_count")
+
+    # If calendar miss, estimate next print ~90d after last report
+    if not next_label and history_rows:
+        prev_ts = history_rows[0].get("quarter_ts")
+        if isinstance(prev_ts, (int, float)) and prev_ts > 0:
+            est_day = datetime.fromtimestamp(float(prev_ts), tz=_ET) + timedelta(days=91)
+            if est_day.timestamp() > time.time():
+                next_ts = _day_ts(est_day)
+                next_label = est_day.date().isoformat()
+                days_to = int((float(next_ts) - time.time()) / 86400)
+
+    prev = history_rows[0] if history_rows else None
+    if not history_rows and not next_label:
+        return None
+
+    payload = {
+        "symbol": sym,
+        "earnings_dates": (
+            [{"ts": next_ts, "label": next_label}] if next_label else []
+        ),
+        "next_earnings_ts": next_ts,
+        "next_earnings_label": next_label,
+        "days_to_earnings": days_to,
+        "prev_earnings_ts": (prev or {}).get("quarter_ts"),
+        "prev_earnings_label": (prev or {}).get("label") or "",
+        "is_estimate": bool(next_label and not (isinstance(up, dict) and up.get("date"))),
+        "eps_avg": eps_avg,
+        "next_eps_estimate": eps_avg,
+        "next_eps_low": None,
+        "next_eps_high": None,
+        "next_eps_growth": None,
+        "analyst_count": analyst_count,
+        "revenue_avg": None,
+        "quarterly": [
+            {
+                "date": r.get("label"),
+                "label": r.get("label"),
+                "actual": r.get("actual"),
+                "estimate": r.get("estimate"),
+            }
+            for r in reversed(history_rows[:6])
+        ],
+        "history": history_rows[:6],
+        "current_quarter_estimate": eps_avg,
+        "trend": {},
+        "source": "nasdaq",
+    }
+    return _enrich_earnings_comparisons(payload)
+
+
+async def _fetch_earnings(
+    client: httpx.AsyncClient,
+    symbol: str,
+    *,
+    upcoming_map: dict[str, dict[str, Any]] | None = None,
+) -> dict[str, Any] | None:
+    yahoo = await _fetch_earnings_yahoo(client, symbol)
+    if _earnings_has_core(yahoo) and yahoo and yahoo.get("next_earnings_label"):
+        return yahoo
+    nasdaq = await _fetch_earnings_nasdaq(
+        client,
+        symbol,
+        upcoming=(upcoming_map or {}).get(symbol.upper()) if upcoming_map else None,
+    )
+    if _earnings_has_core(nasdaq):
+        return nasdaq
+    return yahoo if _earnings_has_core(yahoo) else nasdaq
 
 
 async def build_sector_desk(
@@ -1132,6 +1323,7 @@ async def build_sector_desk(
         pick_rows = [dict(r) for r in picks_cached["pick_rows"]]
         earnings_by_symbol = dict(picks_cached.get("earnings_by_symbol") or {})
     elif pick_symbols:
+        upcoming_map = await get_upcoming_earnings_map(force=force)
         async with httpx.AsyncClient(
             headers={
                 "User-Agent": USER_AGENT,
@@ -1149,7 +1341,12 @@ async def build_sector_desk(
                 ),
                 asyncio.gather(
                     *[
-                        _fetch_earnings_cached(client, sym, force=force)
+                        _fetch_earnings_cached(
+                            client,
+                            sym,
+                            force=force,
+                            upcoming_map=upcoming_map,
+                        )
                         for sym in pick_symbols
                     ]
                 ),
