@@ -180,6 +180,23 @@ class PortfolioViewModel : ViewModel() {
         _state.update { it.copy(data = it.data) }
     }
 
+    fun selectSymbol(symbol: String) {
+        val data = _state.value.data ?: return
+        val hit = data.holdings.firstOrNull { it.symbol == symbol } ?: return
+        _state.update {
+            it.copy(
+                data = data.copy(
+                    selected = symbol,
+                    selected_symbol = symbol,
+                    selected_board = hit,
+                    board = hit,
+                    selected_earnings = hit.earnings,
+                    value_chain = hit.value_chain,
+                ),
+            )
+        }
+    }
+
     fun load(force: Boolean = false) {
         viewModelScope.launch {
             _state.update {

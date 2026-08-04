@@ -359,21 +359,35 @@ html[data-theme="dark"] .theme-toggle .theme-icon {
 .holding-intel {
   margin: 0;
   min-width: 0;
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
 }
 
 .holding-intel-sticky {
-  position: sticky;
-  top: 0.85rem;
-  display: flex;
-  flex-direction: column;
-  gap: 0.55rem;
-  max-height: calc(100vh - 1.5rem);
-  padding: 0.85rem 0.9rem;
-  border-radius: calc(var(--radius) + 2px);
-  border: 1px solid var(--line);
-  background:
-    linear-gradient(180deg, rgba(255, 250, 248, 0.96), rgba(255, 255, 255, 0.9));
-  box-shadow: var(--shadow);
+  position: relative;
+  top: auto;
+  flex: 1;
+  min-height: 0;
+  height: 100%;
+  display: grid;
+  align-content: start;
+  gap: 0.65rem;
+  max-height: none;
+  padding: 0;
+  border-radius: 0;
+  border: 0;
+  background: transparent;
+  box-shadow: none;
+  overflow: auto;
+  scrollbar-width: thin;
+}
+
+html[data-theme="dark"] .holding-intel-sticky {
+  background: transparent;
+  box-shadow: none;
+  border: 0;
 }
 
 .holding-intel-head {
@@ -447,8 +461,10 @@ html[data-theme="dark"] .theme-toggle .theme-icon {
 .holding-intel-list {
   display: grid;
   gap: 0.5rem;
+  overflow: visible;
+  min-height: auto;
+  max-height: 18rem;
   overflow-y: auto;
-  min-height: 0;
   padding-right: 0.1rem;
   scrollbar-gutter: stable;
 }
@@ -1361,8 +1377,9 @@ body {
   display: grid;
   grid-template-columns: minmax(0, 1.05fr) minmax(0, 1.15fr) minmax(16rem, 0.95fr);
   gap: 0.85rem 0.95rem;
-  align-items: start;
-  min-height: 24rem;
+  align-items: stretch;
+  height: calc(100vh - 14rem);
+  min-height: 28rem;
 }
 
 .portfolio-list-pane {
@@ -1370,22 +1387,42 @@ body {
   display: flex;
   flex-direction: column;
   min-height: 0;
+  height: 100%;
+  overflow: hidden;
 }
 
 .portfolio-list-pane > .chart-tf-note {
   margin: 0.65rem 0 0;
 }
 
+.portfolio-list-pane .holding-list {
+  flex: 1;
+  max-height: none;
+}
+
 .portfolio-chart-pane {
   min-width: 0;
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
 }
 
 .portfolio-chart-sticky {
-  position: sticky;
-  top: 0.85rem;
-  display: flex;
-  flex-direction: column;
+  position: relative;
+  top: auto;
+  flex: 1;
+  min-height: 0;
+  height: 100%;
+  display: grid;
+  grid-template-rows: auto minmax(11rem, 1fr) auto;
   gap: 0.55rem;
+  overflow: auto;
+  scrollbar-width: thin;
+}
+
+.portfolio-focus-meta {
+  margin-top: 0;
 }
 
 .portfolio-chart-toolbar {
@@ -1659,15 +1696,31 @@ body {
 @media (max-width: 1200px) {
   .portfolio-body {
     grid-template-columns: minmax(0, 1fr) minmax(0, 1.05fr);
+    height: auto;
+    align-items: start;
   }
 
   .holding-intel {
     grid-column: 1 / -1;
+    height: auto;
+    overflow: visible;
+  }
+
+  .portfolio-list-pane,
+  .portfolio-chart-pane {
+    height: auto;
+    overflow: visible;
+  }
+
+  .portfolio-chart-sticky {
+    grid-template-rows: auto auto auto;
+    height: auto;
   }
 
   .holding-intel-sticky {
     position: static;
     max-height: none;
+    height: auto;
   }
 
   .holding-intel-list {
@@ -1678,6 +1731,7 @@ body {
 @media (max-width: 960px) {
   .portfolio-body {
     grid-template-columns: 1fr;
+    height: auto;
     min-height: 0;
   }
 

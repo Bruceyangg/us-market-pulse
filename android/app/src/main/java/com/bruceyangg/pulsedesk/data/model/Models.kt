@@ -272,11 +272,37 @@ data class MoodSummary(
 data class PortfolioResponse(
     val holdings: List<Holding> = emptyList(),
     val selected: String? = null,
+    val selected_symbol: String? = null,
+    val selected_board: Holding? = null,
     val board: Holding? = null,
+    val selected_earnings: StockEarnings? = null,
+    val value_chain: ValueChain? = null,
+    val earnings_calendar: List<StockEarnings> = emptyList(),
     val note: String? = null,
     val max_holdings: Int? = null,
     val timeframes: List<Timeframe> = emptyList(),
     val default_tf: String? = null,
+) {
+    fun focusHolding(): Holding? =
+        selected_board
+            ?: board
+            ?: holdings.firstOrNull { it.symbol == (selected ?: selected_symbol) }
+            ?: holdings.firstOrNull()
+}
+
+@Serializable
+data class StockEarnings(
+    val symbol: String? = null,
+    val name: String? = null,
+    val next_earnings_label: String? = null,
+    val prev_earnings_label: String? = null,
+    val days_to_earnings: Int? = null,
+    val eps_avg: Double? = null,
+    val expect_eps: Double? = null,
+    val last_eps_actual: Double? = null,
+    val beat_pct: Double? = null,
+    val analyst_count: Int? = null,
+    val yoy_pct: Double? = null,
 )
 
 @Serializable
@@ -286,8 +312,13 @@ data class Holding(
     val label: String? = null,
     val price: Double? = null,
     val change_pct: Double? = null,
+    val month_change_pct: Double? = null,
+    val sector_label: String? = null,
     val series: Map<String, SeriesBundle> = emptyMap(),
     val points: List<ChartPoint> = emptyList(),
+    val earnings: StockEarnings? = null,
+    val move_analysis: MoveAnalysis? = null,
+    val value_chain: ValueChain? = null,
 )
 
 @Serializable

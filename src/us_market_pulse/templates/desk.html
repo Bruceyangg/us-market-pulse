@@ -108,24 +108,59 @@
               <div class="portfolio-chart" id="portfolio-chart">
                 <p class="chart-placeholder">添加持仓后，中间将显示分时 / K 线详情</p>
               </div>
+              <div class="sectors-focus-meta portfolio-focus-meta">
+                <article class="stock-earnings" id="stock-earnings" aria-label="个股财报对照">
+                  <p class="empty">选择持仓后显示财报对照</p>
+                </article>
+                <article class="move-analysis" id="move-analysis" aria-label="涨跌原因分析">
+                  <p class="empty">选择持仓后显示涨跌解读</p>
+                </article>
+              </div>
             </div>
           </div>
-          <aside class="holding-intel" id="holding-intel" aria-label="持仓情报">
+          <aside class="holding-intel" id="holding-intel" aria-label="持仓情报与档案">
             <div class="holding-intel-sticky">
-              <div class="section-head holding-intel-head">
-                <div>
-                  <h2>持仓情报</h2>
-                  <p id="holding-intel-blurb">关联当前持仓 · 利空优先</p>
+              <section class="sectors-intel-block" id="value-chain">
+                <div class="sectors-pane-head">
+                  <div>
+                    <h2>业务与产业链</h2>
+                    <p id="value-chain-blurb">主营 / 上下游</p>
+                  </div>
                 </div>
-                <div class="holding-intel-actions">
-                  <button class="btn ghost btn-compact" id="btn-holding-intel-refresh" type="button">刷新</button>
-                  <a class="btn ghost btn-compact" id="holding-intel-all-link" href="/intel?holdings=1">全部</a>
+                <div class="value-chain-body" id="value-chain-body">
+                  <p class="empty">选择持仓后显示</p>
                 </div>
-              </div>
-              <div class="holding-intel-chips" id="holding-intel-chips" role="tablist" aria-label="按持仓筛选情报"></div>
-              <div class="holding-intel-list" id="holding-intel-list">
-                <p class="empty">加载持仓相关情报…</p>
-              </div>
+              </section>
+
+              <section class="sectors-intel-block" id="earnings-panel" aria-label="持仓临近财报">
+                <div class="sectors-pane-head">
+                  <div>
+                    <h2>临近财报</h2>
+                    <p id="earnings-blurb">当前持仓窗口</p>
+                  </div>
+                  <a class="btn ghost btn-compact" href="/earnings">全部</a>
+                </div>
+                <div class="earnings-list" id="earnings-list">
+                  <p class="empty">加载财报日期…</p>
+                </div>
+              </section>
+
+              <section class="sectors-intel-block holding-intel-block">
+                <div class="section-head holding-intel-head">
+                  <div>
+                    <h2>持仓情报</h2>
+                    <p id="holding-intel-blurb">关联当前持仓 · 利空优先</p>
+                  </div>
+                  <div class="holding-intel-actions">
+                    <button class="btn ghost btn-compact" id="btn-holding-intel-refresh" type="button">刷新</button>
+                    <a class="btn ghost btn-compact" id="holding-intel-all-link" href="/intel?holdings=1">全部</a>
+                  </div>
+                </div>
+                <div class="holding-intel-chips" id="holding-intel-chips" role="tablist" aria-label="按持仓筛选情报"></div>
+                <div class="holding-intel-list" id="holding-intel-list">
+                  <p class="empty">加载持仓相关情报…</p>
+                </div>
+              </section>
             </div>
           </aside>
         </div>

@@ -1100,6 +1100,7 @@ function renderPortfolio(data) {
     els.portfolioTfNote.textContent = holdingsCountNote(data, meta);
   }
   renderPortfolioChart();
+  renderPortfolioFocus(data);
 }
 
 async function selectPortfolioSymbol(symbol, { quiet = false } = {}) {
@@ -3268,21 +3269,26 @@ function formatEarningsWhen(row) {
   return row.next_earnings_label || "日期待定";
 }
 
-function renderEarningsCalendar(data) {
+function renderEarningsCalendar(data, { onSelect } = {}) {
   if (!els.earningsList) return;
   const rows = data?.earnings_calendar || [];
-  const selected = data?.selected_symbol || "";
+  const selected = data?.selected_symbol || data?.selected || "";
   if (els.earningsBlurb) {
     const soon = rows.filter(
       (r) => typeof r.days_to_earnings === "number" && r.days_to_earnings <= 14
     ).length;
+    const onDesk = PAGE === "desk";
     els.earningsBlurb.textContent = soon
       ? `${soon} 只 14 日内临近财报`
-      : "关注观察名单财报窗口";
+      : onDesk
+        ? "当前持仓财报窗口"
+        : "关注观察名单财报窗口";
   }
   if (!rows.length) {
     els.earningsList.innerHTML =
-      '<p class="empty">暂无观察名单财报 · <a href="/earnings">看全美股日历</a></p>';
+      PAGE === "desk"
+        ? '<p class="empty">暂无持仓财报日期 · <a href="/earnings">看全美股日历</a></p>'
+        : '<p class="empty">暂无观察名单财报 · <a href="/earnings">看全美股日历</a></p>';
     return;
   }
   els.earningsList.innerHTML = rows
@@ -3307,11 +3313,35 @@ function renderEarningsCalendar(data) {
       `;
     })
     .join("");
+  const pickFn =
+    typeof onSelect === "function"
+      ? onSelect
+      : PAGE === "desk"
+        ? (sym) => selectPortfolioSymbol(sym)
+        : (sym) => selectSectorSymbol(sym);
   els.earningsList.querySelectorAll("[data-symbol]").forEach((btn) => {
     btn.addEventListener("click", () => {
       const sym = btn.getAttribute("data-symbol") || "";
-      selectSectorSymbol(sym);
+      pickFn(sym);
     });
+  });
+}
+
+function renderPortfolioFocus(data) {
+  if (PAGE !== "desk") return;
+  const holdings = data?.holdings || [];
+  const selected = data?.selected || data?.selected_symbol || "";
+  const pick =
+    data?.selected_board ||
+    holdings.find((h) => h.symbol === selected) ||
+    holdings[0] ||
+    null;
+  renderStockEarnings(data?.selected_earnings || pick?.earnings, pick);
+  renderMoveAnalysis(pick);
+  renderValueChain(data?.value_chain || pick?.value_chain);
+  renderEarningsCalendar({
+    earnings_calendar: data?.earnings_calendar || [],
+    selected_symbol: selected,
   });
 }
 

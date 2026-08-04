@@ -13,7 +13,14 @@ from typing import Any
 import httpx
 
 from us_market_pulse.config import DATA_DIR
+from us_market_pulse.earnings_calendar import get_upcoming_earnings_map
 from us_market_pulse.markets import PORTFOLIO_TIMEFRAMES, fetch_symbol_bundle
+from us_market_pulse.sectors import (
+    _fetch_earnings_cached,
+    _momentum_fields,
+    _move_analysis,
+    _value_chain_for,
+)
 
 _LOCK = threading.Lock()
 PORTFOLIOS_DIR = DATA_DIR / "portfolios"
@@ -251,7 +258,6 @@ async def build_portfolio_view(
 
     boards = _CACHE.get("boards") or {}
     selected = data.get("selected") or (symbols[0] if symbols else "")
-    selected_board = boards.get(selected)
 
     timeframes = [
         {
@@ -270,9 +276,52 @@ async def build_portfolio_view(
         }
     ]
 
+    # Sector-desk style enrichment: earnings / value chain / move analysis
+    upcoming_map = await get_upcoming_earnings_map(force=force_refresh) if symbols else {}
+    earnings_by_symbol: dict[str, Any] = {}
+    if symbols:
+        async with httpx.AsyncClient(
+            headers={
+                "User-Agent": "Mozilla/5.0 (compatible; PulseDesk/1.0)",
+                "Accept": "application/json",
+            },
+            follow_redirects=True,
+            trust_env=False,
+        ) as earn_client:
+            earn_results = await asyncio.gather(
+                *[
+                    _fetch_earnings_cached(
+                        earn_client,
+                        sym,
+                        force=force_refresh,
+                        upcoming_map=upcoming_map,
+                    )
+                    for sym in symbols
+                ]
+            )
+        for sym, earn in zip(symbols, earn_results, strict=True):
+            if earn:
+                earnings_by_symbol[sym] = earn
+
     cards = []
     for h in holdings:
-        board = boards.get(h["symbol"]) or {}
+        sym = h["symbol"]
+        board = boards.get(sym) or {}
+        vc = _value_chain_for(sym)
+        earn = earnings_by_symbol.get(sym)
+        wave = _momentum_fields(board if board else None)
+        analysis = _move_analysis(
+            day_pct=board.get("change_pct"),
+            month_pct=wave["month_change_pct"],
+            quarter_pct=wave["quarter_change_pct"],
+            vs_sector_pct=None,
+            is_wave=bool(wave["is_wave"]),
+            sector_label=str(vc.get("industry") or ""),
+            etf_day_pct=None,
+            earnings=earn if isinstance(earn, dict) else None,
+            value_chain=vc,
+            news=None,
+        )
         cards.append(
             {
                 **h,
@@ -282,17 +331,55 @@ async def build_portfolio_view(
                 "as_of": board.get("as_of"),
                 "points": board.get("points") or [],
                 "series": board.get("series") or {},
-                "label": board.get("label") or h.get("name") or h["symbol"],
+                "label": board.get("label") or h.get("name") or sym,
                 "url": board.get("url")
-                or f"https://finance.yahoo.com/quote/{h['symbol']}",
+                or f"https://finance.yahoo.com/quote/{sym}",
+                "month_change_pct": wave["month_change_pct"],
+                "quarter_change_pct": wave["quarter_change_pct"],
+                "momentum": wave["momentum"],
+                "is_wave": wave["is_wave"],
+                "earnings": earn,
+                "value_chain": vc,
+                "move_analysis": analysis,
+                "sector_label": vc.get("industry") or "",
             }
         )
+
+    selected_card = next((c for c in cards if c.get("symbol") == selected), None)
+    if selected_card is None and cards:
+        selected_card = cards[0]
+        selected = selected_card["symbol"]
+
+    earnings_calendar = sorted(
+        [
+            {
+                **(c.get("earnings") or {}),
+                "symbol": c["symbol"],
+                "name": c.get("name") or c.get("label") or c["symbol"],
+                "change_pct": c.get("change_pct"),
+                "month_change_pct": c.get("month_change_pct"),
+            }
+            for c in cards
+            if (c.get("earnings") or {}).get("next_earnings_ts")
+            or (c.get("earnings") or {}).get("next_earnings_label")
+        ],
+        key=lambda r: (
+            r.get("days_to_earnings")
+            if r.get("days_to_earnings") is not None
+            else 10_000
+        ),
+    )
 
     return {
         "updated_at": data.get("updated_at") or 0,
         "selected": selected,
+        "selected_symbol": selected,
         "holdings": cards,
-        "selected_board": selected_board,
+        "selected_board": selected_card,
+        "board": selected_card,  # Android / older clients
+        "selected_earnings": (selected_card or {}).get("earnings"),
+        "value_chain": (selected_card or {}).get("value_chain"),
+        "earnings_calendar": earnings_calendar,
         "timeframes": timeframes,
         "default_tf": "intraday",
         "max_holdings": MAX_HOLDINGS,
