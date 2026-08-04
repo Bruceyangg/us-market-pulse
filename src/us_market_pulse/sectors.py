@@ -11,7 +11,10 @@ import httpx
 from us_market_pulse.markets import PORTFOLIO_TIMEFRAMES, fetch_symbol_bundle
 from us_market_pulse.topics import TOPICS, filter_topic_items, topic_bearish_analysis
 
-USER_AGENT = "Mozilla/5.0 (compatible; PulseDesk/1.0)"
+USER_AGENT = (
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+    "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
+)
 
 # Lightweight frames for sector tape (fewer Yahoo calls than full board)
 SECTOR_TIMEFRAMES = [
@@ -739,6 +742,97 @@ def _move_analysis(
     }
 
 
+def _yahoo_raw(value: Any) -> Any:
+    if isinstance(value, dict):
+        if "raw" in value:
+            return value.get("raw")
+        if "fmt" in value:
+            return value.get("fmt")
+    return value
+
+
+def _yahoo_fmt(value: Any) -> str:
+    if isinstance(value, dict):
+        fmt = value.get("fmt")
+        if fmt:
+            return str(fmt)
+        raw = value.get("raw")
+        if raw is None:
+            return ""
+        return str(raw)
+    if value is None:
+        return ""
+    return str(value)
+
+
+def _pct_change(curr: Any, base: Any) -> float | None:
+    try:
+        c = float(curr)
+        b = float(base)
+    except (TypeError, ValueError):
+        return None
+    if b == 0:
+        return None
+    return round((c - b) / abs(b) * 100.0, 2)
+
+
+def _enrich_earnings_comparisons(payload: dict[str, Any]) -> dict[str, Any]:
+    """Attach YoY / QoQ / expectation fields from quarterly + history rows."""
+    quarterly = list(payload.get("quarterly") or [])
+    history = list(payload.get("history") or [])
+
+    # Prefer history (actual reported), fall back to chart quarterly
+    latest = history[0] if history else (quarterly[-1] if quarterly else None)
+    prev_q = history[1] if len(history) > 1 else (
+        quarterly[-2] if len(quarterly) > 1 else None
+    )
+    yoy_base = history[3] if len(history) > 3 else (
+        quarterly[-5] if len(quarterly) >= 5 else None
+    )
+
+    last_actual = (latest or {}).get("actual")
+    last_estimate = (latest or {}).get("estimate")
+    prev_actual = (prev_q or {}).get("actual")
+    yoy_actual = (yoy_base or {}).get("actual")
+
+    qoq_pct = _pct_change(last_actual, prev_actual)
+    yoy_pct = _pct_change(last_actual, yoy_actual)
+    beat_pct = None
+    if last_actual is not None and last_estimate not in (None, 0):
+        beat_pct = _pct_change(last_actual, last_estimate)
+    elif latest and latest.get("surprise_pct") is not None:
+        try:
+            beat_pct = round(float(latest["surprise_pct"]), 2)
+        except (TypeError, ValueError):
+            beat_pct = None
+
+    expect = payload.get("eps_avg")
+    if expect is None:
+        expect = payload.get("next_eps_estimate")
+    expect_vs_last_yoy = _pct_change(expect, last_actual if yoy_actual is None else yoy_actual)
+    # Expected YoY: consensus vs year-ago actual when available, else vs last print
+    if yoy_actual is not None:
+        expect_yoy_pct = _pct_change(expect, yoy_actual)
+    else:
+        expect_yoy_pct = _pct_change(expect, last_actual)
+
+    payload.update(
+        {
+            "last_eps_actual": last_actual,
+            "last_eps_estimate": last_estimate,
+            "prev_eps_actual": prev_actual,
+            "yoy_eps_actual": yoy_actual,
+            "qoq_pct": qoq_pct,
+            "yoy_pct": yoy_pct,
+            "beat_pct": beat_pct,
+            "expect_eps": expect,
+            "expect_yoy_pct": expect_yoy_pct,
+            "expect_vs_last_pct": expect_vs_last_yoy,
+        }
+    )
+    return payload
+
+
 async def _fetch_earnings(
     client: httpx.AsyncClient, symbol: str
 ) -> dict[str, Any] | None:
@@ -747,15 +841,18 @@ async def _fetch_earnings(
         return None
     url = (
         f"https://query2.finance.yahoo.com/v10/finance/quoteSummary/{sym}"
-        f"?modules=calendarEvents,earnings"
+        f"?modules=calendarEvents,earnings,earningsHistory,earningsTrend"
     )
     try:
         resp = await client.get(
             url,
-            timeout=20.0,
+            timeout=25.0,
             headers={
                 "User-Agent": USER_AGENT,
-                "Accept": "application/json",
+                "Accept": "application/json,text/plain,*/*",
+                "Accept-Language": "en-US,en;q=0.9",
+                "Origin": "https://finance.yahoo.com",
+                "Referer": f"https://finance.yahoo.com/quote/{sym}/analysis",
             },
         )
         resp.raise_for_status()
@@ -773,42 +870,101 @@ async def _fetch_earnings(
                 raw, fmt = entry, None
             if raw is None and not fmt:
                 continue
-            dates.append({"ts": int(raw) if raw is not None else None, "label": fmt or ""})
+            try:
+                ts = int(raw) if raw is not None else None
+            except (TypeError, ValueError):
+                ts = None
+            dates.append({"ts": ts, "label": str(fmt or "")})
+
         earn = result.get("earnings") or {}
-        chart = (earn.get("earningsChart") or {})
-        quarterly = []
+        chart = earn.get("earningsChart") or {}
+        quarterly: list[dict[str, Any]] = []
         for row in chart.get("quarterly") or []:
             quarterly.append(
                 {
                     "date": row.get("date"),
-                    "actual": (row.get("actual") or {}).get("raw")
-                    if isinstance(row.get("actual"), dict)
-                    else row.get("actual"),
-                    "estimate": (row.get("estimate") or {}).get("raw")
-                    if isinstance(row.get("estimate"), dict)
-                    else row.get("estimate"),
+                    "label": str(row.get("date") or ""),
+                    "actual": _yahoo_raw(row.get("actual")),
+                    "estimate": _yahoo_raw(row.get("estimate")),
                 }
             )
+
+        history_rows: list[dict[str, Any]] = []
+        for row in (result.get("earningsHistory") or {}).get("history") or []:
+            q = row.get("quarter")
+            history_rows.append(
+                {
+                    "period": row.get("period"),
+                    "quarter_ts": _yahoo_raw(q),
+                    "label": _yahoo_fmt(q),
+                    "actual": _yahoo_raw(row.get("epsActual")),
+                    "estimate": _yahoo_raw(row.get("epsEstimate")),
+                    "surprise_pct": _yahoo_raw(row.get("surprisePercent")),
+                }
+            )
+        # Newest first
+        history_rows.sort(
+            key=lambda r: float(r.get("quarter_ts") or 0),
+            reverse=True,
+        )
+
+        trend_map: dict[str, dict[str, Any]] = {}
+        for row in (result.get("earningsTrend") or {}).get("trend") or []:
+            period = str(row.get("period") or "")
+            est = row.get("earningsEstimate") or {}
+            trend_map[period] = {
+                "period": period,
+                "avg": _yahoo_raw(est.get("avg")),
+                "low": _yahoo_raw(est.get("low")),
+                "high": _yahoo_raw(est.get("high")),
+                "growth": _yahoo_raw(est.get("growth")),
+                "number_of_analysts": _yahoo_raw(est.get("numberOfAnalysts")),
+            }
+
+        next_trend = trend_map.get("0q") or trend_map.get("+1q") or {}
+        eps_avg = _yahoo_raw(cal.get("earningsAverage"))
+        if eps_avg is None:
+            eps_avg = next_trend.get("avg")
+
         next_ts = dates[0]["ts"] if dates else None
         days_to = None
         if next_ts:
             days_to = int((next_ts - time.time()) / 86400)
-        return {
+
+        prev = history_rows[0] if history_rows else None
+        prev_ts = (prev or {}).get("quarter_ts")
+        try:
+            prev_ts_i = int(prev_ts) if prev_ts is not None else None
+        except (TypeError, ValueError):
+            prev_ts_i = None
+
+        cq_est = chart.get("currentQuarterEstimate")
+        payload = {
             "symbol": sym,
             "earnings_dates": dates[:3],
             "next_earnings_ts": next_ts,
             "next_earnings_label": (dates[0].get("label") if dates else "") or "",
             "days_to_earnings": days_to,
+            "prev_earnings_ts": prev_ts_i,
+            "prev_earnings_label": (prev or {}).get("label") or "",
             "is_estimate": bool(cal.get("isEarningsDateEstimate")),
-            "eps_avg": (cal.get("earningsAverage") or {}).get("raw")
-            if isinstance(cal.get("earningsAverage"), dict)
-            else cal.get("earningsAverage"),
-            "revenue_avg": (cal.get("revenueAverage") or {}).get("raw")
-            if isinstance(cal.get("revenueAverage"), dict)
-            else cal.get("revenueAverage"),
-            "quarterly": quarterly[-4:],
-            "current_quarter_estimate": chart.get("currentQuarterEstimate"),
+            "eps_avg": eps_avg,
+            "next_eps_estimate": next_trend.get("avg"),
+            "next_eps_low": next_trend.get("low"),
+            "next_eps_high": next_trend.get("high"),
+            "next_eps_growth": next_trend.get("growth"),
+            "analyst_count": next_trend.get("number_of_analysts"),
+            "revenue_avg": _yahoo_raw(cal.get("revenueAverage")),
+            "quarterly": quarterly[-6:],
+            "history": history_rows[:6],
+            "current_quarter_estimate": _yahoo_raw(cq_est),
+            "trend": {
+                k: v
+                for k, v in trend_map.items()
+                if k in {"0q", "+1q", "+1y", "0y"}
+            },
         }
+        return _enrich_earnings_comparisons(payload)
     except Exception:  # noqa: BLE001
         return None
 

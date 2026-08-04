@@ -107,6 +107,7 @@ const els = {
   monthChart: document.getElementById("month-chart"),
   monthPanelBlurb: document.getElementById("month-panel-blurb"),
   moveAnalysis: document.getElementById("move-analysis"),
+  stockEarnings: document.getElementById("stock-earnings"),
   sectorsRefresh: document.getElementById("btn-sectors-refresh"),
   earningsPageBlurb: document.getElementById("earnings-page-blurb"),
   earningsRefresh: document.getElementById("btn-earnings-refresh"),
@@ -2759,17 +2760,23 @@ function renderEarningsCalendar(data) {
     return;
   }
   els.earningsList.innerHTML = rows
-    .slice(0, 4)
+    .slice(0, 5)
     .map((row) => {
       const soon =
         typeof row.days_to_earnings === "number" && row.days_to_earnings <= 14;
+      const expect = row.expect_eps ?? row.eps_avg;
+      const metaBits = [
+        row.name || "",
+        expect != null ? `预期 ${formatEps(expect)}` : "",
+        row.yoy_pct != null ? `同比 ${formatSignedPct(row.yoy_pct)}` : "",
+      ].filter(Boolean);
       return `
         <button type="button" class="earnings-item ${
           row.symbol === selected ? "is-active" : ""
         } ${soon ? "is-soon" : ""}" data-symbol="${escapeHtml(row.symbol)}">
           <span class="sym">${escapeHtml(row.symbol)}</span>
           <span class="when">${escapeHtml(formatEarningsWhen(row))}</span>
-          <span class="meta">${escapeHtml(row.name || "")}</span>
+          <span class="meta">${escapeHtml(metaBits.join(" · "))}</span>
         </button>
       `;
     })
@@ -2808,6 +2815,127 @@ function renderMonthPanel(pick) {
       <span class="chg ${pctClass(pct)}">${escapeHtml(pctText(pct))}</span>
     </div>
     ${typeof svg === "string" && svg.includes("<svg") ? svg : svg}
+  `;
+}
+
+function formatEps(value) {
+  if (value == null || Number.isNaN(Number(value))) return "—";
+  const n = Number(value);
+  const sign = n > 0 ? "+" : "";
+  return `${sign}${n.toFixed(2)}`;
+}
+
+function formatSignedPct(value) {
+  if (value == null || Number.isNaN(Number(value))) return "—";
+  const n = Number(value);
+  const sign = n > 0 ? "+" : "";
+  return `${sign}${n.toFixed(1)}%`;
+}
+
+function renderStockEarnings(earn, pick) {
+  if (!els.stockEarnings) return;
+  if (!pick) {
+    els.stockEarnings.innerHTML =
+      '<p class="empty">选择个股后显示财报对照</p>';
+    return;
+  }
+  const data = earn || pick.earnings || {};
+  const hasCore =
+    data.next_earnings_label ||
+    data.prev_earnings_label ||
+    data.expect_eps != null ||
+    data.eps_avg != null ||
+    data.last_eps_actual != null;
+  if (!hasCore) {
+    els.stockEarnings.innerHTML = `
+      <div class="stock-earnings-head">
+        <p class="move-kicker">个股财报</p>
+        <h3>${escapeHtml(pick.symbol || "")}</h3>
+      </div>
+      <p class="empty">暂无财报明细（接口限流或未披露）· <a href="/earnings">看日历</a></p>
+    `;
+    return;
+  }
+  const expect = data.expect_eps ?? data.eps_avg ?? data.next_eps_estimate;
+  const nextLabel = data.next_earnings_label || "待定";
+  const prevLabel = data.prev_earnings_label || "—";
+  const when =
+    typeof data.days_to_earnings === "number"
+      ? formatEarningsWhen(data)
+      : "";
+  const beat = data.beat_pct;
+  const beatCls =
+    beat == null ? "" : beat >= 0 ? "up" : "down";
+  els.stockEarnings.innerHTML = `
+    <div class="stock-earnings-head">
+      <div>
+        <p class="move-kicker">个股财报</p>
+        <h3>${escapeHtml(pick.name || "")} · ${escapeHtml(pick.symbol || "")}</h3>
+      </div>
+      ${
+        when
+          ? `<span class="earn-when">${escapeHtml(when)}</span>`
+          : ""
+      }
+    </div>
+    <div class="earn-date-row">
+      <div>
+        <span class="k">下一发布日</span>
+        <strong>${escapeHtml(nextLabel)}</strong>
+      </div>
+      <div>
+        <span class="k">上一发布日</span>
+        <strong>${escapeHtml(prevLabel)}</strong>
+      </div>
+    </div>
+    <div class="earn-metrics">
+      <div>
+        <span class="k">市场预期 EPS</span>
+        <strong>${escapeHtml(formatEps(expect))}</strong>
+        <span class="sub">${
+          data.analyst_count != null
+            ? `${escapeHtml(String(data.analyst_count))} 家机构`
+            : data.next_eps_low != null && data.next_eps_high != null
+              ? `区间 ${escapeHtml(formatEps(data.next_eps_low))} ~ ${escapeHtml(
+                  formatEps(data.next_eps_high)
+                )}`
+              : "共识预期"
+        }</span>
+      </div>
+      <div>
+        <span class="k">上次实际</span>
+        <strong class="${beatCls}">${escapeHtml(
+          formatEps(data.last_eps_actual)
+        )}</strong>
+        <span class="sub">预期 ${escapeHtml(
+          formatEps(data.last_eps_estimate)
+        )}${
+          beat != null
+            ? ` · ${beat >= 0 ? "超预期" : "低于预期"} ${escapeHtml(
+                formatSignedPct(beat)
+              )}`
+            : ""
+        }</span>
+      </div>
+      <div>
+        <span class="k">同比 YoY</span>
+        <strong class="${pctClass(data.yoy_pct)}">${escapeHtml(
+          formatSignedPct(data.yoy_pct)
+        )}</strong>
+        <span class="sub">预期同比 ${escapeHtml(
+          formatSignedPct(data.expect_yoy_pct)
+        )}</span>
+      </div>
+      <div>
+        <span class="k">环比 QoQ</span>
+        <strong class="${pctClass(data.qoq_pct)}">${escapeHtml(
+          formatSignedPct(data.qoq_pct)
+        )}</strong>
+        <span class="sub">上季 ${escapeHtml(
+          formatEps(data.prev_eps_actual)
+        )}</span>
+      </div>
+    </div>
   `;
 }
 
@@ -2868,6 +2996,7 @@ function renderSectorPickChart() {
     els.sectorPickChart.innerHTML =
       '<p class="chart-placeholder">点左侧个股，显示分时 / K 线</p>';
     renderMonthPanel(null);
+    renderStockEarnings(null, null);
     renderMoveAnalysis(null);
     return;
   }
@@ -2922,6 +3051,7 @@ function renderSectorPickChart() {
     )}${escapeHtml(earnNote)}</div>
   `;
   renderMonthPanel(pick);
+  renderStockEarnings(data.selected_earnings || pick.earnings, pick);
   renderMoveAnalysis(pick);
 }
 
@@ -3171,7 +3301,9 @@ function renderEarningsDesk(data) {
               <span class="sym">${escapeHtml(row.symbol)}</span>
               <span class="when">${escapeHtml(row.time_zh || "")}</span>
               <span class="name">${escapeHtml(row.name || "")}</span>
-              <span class="cap">${escapeHtml(formatCapShort(row.market_cap_text))}</span>
+              <span class="cap">预期 ${escapeHtml(
+                row.eps_forecast_text || "—"
+              )} · 同比 ${escapeHtml(formatSignedPct(row.yoy_pct))}</span>
             </a>
           `
             )
@@ -3188,7 +3320,8 @@ function renderEarningsDesk(data) {
       : "当日全部";
   }
   if (els.earningsTableBlurb) {
-    els.earningsTableBlurb.textContent = "按市值排序 · 盘前 / 盘后标注";
+    els.earningsTableBlurb.textContent =
+      "市场预期 · 上年对照 · 同比 · 下一/上年发布日";
   }
   if (els.earningsCount) {
     els.earningsCount.textContent = `${items.length} 家`;
@@ -3201,7 +3334,7 @@ function renderEarningsDesk(data) {
     } else {
       els.earningsTable.innerHTML = `
         <div class="earnings-row head" aria-hidden="true">
-          <span>代码</span><span>公司</span><span>时段</span><span>预期EPS</span><span>上年EPS</span><span>市值</span>
+          <span>代码</span><span>公司</span><span>时段</span><span>下一发布</span><span>上年发布</span><span>市场预期</span><span>上年EPS</span><span>同比</span><span>市值</span>
         </div>
         ${items
           .map(
@@ -3214,8 +3347,15 @@ function renderEarningsDesk(data) {
             <span class="session session-${escapeHtml(
               (row.time || "").replace("time-", "")
             )}">${escapeHtml(row.time_zh || "—")}</span>
+            <span class="date">${escapeHtml(row.next_earnings_label || row.date || "—")}</span>
+            <span class="date muted">${escapeHtml(
+              row.prev_earnings_label || row.last_year_report_date || "—"
+            )}</span>
             <span class="eps">${escapeHtml(row.eps_forecast_text || "—")}</span>
             <span class="eps muted">${escapeHtml(row.last_year_eps_text || "—")}</span>
+            <span class="yoy ${pctClass(row.yoy_pct)}">${escapeHtml(
+              formatSignedPct(row.yoy_pct)
+            )}</span>
             <span class="cap">${escapeHtml(formatCapShort(row.market_cap_text))}</span>
           </a>
         `

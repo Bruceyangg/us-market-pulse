@@ -47,9 +47,14 @@
               <div class="portfolio-chart sector-chart" id="sector-pick-chart">
                 <p class="chart-placeholder">点左侧个股，显示走势</p>
               </div>
-              <article class="move-analysis" id="move-analysis" aria-label="涨跌原因分析">
-                <p class="empty">选择个股后显示涨跌解读</p>
-              </article>
+              <div class="sectors-focus-meta">
+                <article class="stock-earnings" id="stock-earnings" aria-label="个股财报对照">
+                  <p class="empty">选择个股后显示财报对照</p>
+                </article>
+                <article class="move-analysis" id="move-analysis" aria-label="涨跌原因分析">
+                  <p class="empty">选择个股后显示涨跌解读</p>
+                </article>
+              </div>
             </div>
           </section>
 
@@ -67,19 +72,6 @@
                 </div>
               </section>
 
-              <section class="sectors-intel-block" id="earnings-panel" aria-label="观察名单财报">
-                <div class="sectors-pane-head">
-                  <div>
-                    <h2>临近财报</h2>
-                    <p id="earnings-blurb">观察名单窗口</p>
-                  </div>
-                  <a class="btn ghost btn-compact" href="/earnings">全部</a>
-                </div>
-                <div class="earnings-list" id="earnings-list">
-                  <p class="empty">加载财报日期…</p>
-                </div>
-              </section>
-
               <section class="sectors-intel-block" id="hot-desk">
                 <div class="sectors-pane-head">
                   <div>
@@ -91,6 +83,19 @@
                   <div class="live-brief-skeleton">汇总中…</div>
                 </article>
                 <div class="spotlight-list compact" id="ai-news-list"></div>
+              </section>
+
+              <section class="sectors-intel-block" id="earnings-panel" aria-label="观察名单财报">
+                <div class="sectors-pane-head">
+                  <div>
+                    <h2>临近财报</h2>
+                    <p id="earnings-blurb">观察名单窗口</p>
+                  </div>
+                  <a class="btn ghost btn-compact" href="/earnings">全部</a>
+                </div>
+                <div class="earnings-list" id="earnings-list">
+                  <p class="empty">加载财报日期…</p>
+                </div>
               </section>
 
               <section class="sectors-intel-block" id="sector-news-mini">

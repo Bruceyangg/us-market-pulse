@@ -76,10 +76,17 @@ def _normalize_row(row: dict[str, Any], report_date: str) -> dict[str, Any]:
     market_cap = _parse_money(row.get("marketCap"))
     eps_forecast = _parse_money(row.get("epsForecast"))
     last_eps = _parse_money(row.get("lastYearEPS"))
+    yoy_pct = None
+    if eps_forecast is not None and last_eps not in (None, 0):
+        try:
+            yoy_pct = round((eps_forecast - last_eps) / abs(last_eps) * 100.0, 2)
+        except (TypeError, ValueError, ZeroDivisionError):
+            yoy_pct = None
     try:
         n_ests = int(str(row.get("noOfEsts") or "0").replace(",", "") or "0")
     except ValueError:
         n_ests = 0
+    last_year_date = str(row.get("lastYearRptDt") or "").strip()
     return {
         "symbol": symbol,
         "name": str(row.get("name") or symbol).strip(),
@@ -92,7 +99,10 @@ def _normalize_row(row: dict[str, Any], report_date: str) -> dict[str, Any]:
         "eps_forecast_text": str(row.get("epsForecast") or "—"),
         "last_year_eps": last_eps,
         "last_year_eps_text": str(row.get("lastYearEPS") or "—"),
-        "last_year_report_date": str(row.get("lastYearRptDt") or ""),
+        "yoy_pct": yoy_pct,
+        "last_year_report_date": last_year_date,
+        "prev_earnings_label": last_year_date or "",
+        "next_earnings_label": report_date,
         "fiscal_quarter_ending": str(row.get("fiscalQuarterEnding") or ""),
         "estimate_count": n_ests,
         "url": f"https://finance.yahoo.com/quote/{symbol}/" if symbol else "",
