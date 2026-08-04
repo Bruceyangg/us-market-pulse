@@ -37,11 +37,12 @@ http://<电脑局域网IP>:8765
 
 **想电脑关机后大家仍能用：部署到云（推荐 Render 免费档）**
 
-1. 把本仓库推到 GitHub  
-2. 打开一键部署：  
-   `https://render.com/deploy?repo=<你的仓库地址>`  
-3. 用 GitHub 登录 Render，按提示创建 Free Web Service  
-4. 部署完成后会得到固定网址，例如 `https://pulse-desk.onrender.com`
+仓库已公开：https://github.com/Bruceyangg/us-market-pulse  
+
+一键部署（Render 免费档）：  
+https://render.com/deploy?repo=https://github.com/Bruceyangg/us-market-pulse  
+
+用 GitHub 登录 Render → 选 Free → Apply/Deploy。完成后会得到固定网址（如 `https://pulse-desk.onrender.com`）。
 
 说明：Render 免费档闲置后可能休眠，第一次打开偶发要等十几秒。
 

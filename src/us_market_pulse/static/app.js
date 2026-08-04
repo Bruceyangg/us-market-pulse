@@ -36,6 +36,10 @@ const state = {
   sectorId: "",
   sectorSymbol: "",
   sectorTf: "day",
+  earnings: null,
+  earningsDate: "",
+  earningsSession: "all",
+  earningsQ: "",
 };
 
 const PORTFOLIO_TF_KEYS = ["intraday", "day", "month", "quarter", "year"];
@@ -103,6 +107,16 @@ const els = {
   monthChart: document.getElementById("month-chart"),
   monthPanelBlurb: document.getElementById("month-panel-blurb"),
   sectorsRefresh: document.getElementById("btn-sectors-refresh"),
+  earningsPageBlurb: document.getElementById("earnings-page-blurb"),
+  earningsRefresh: document.getElementById("btn-earnings-refresh"),
+  earningsDateTabs: document.getElementById("earnings-date-tabs"),
+  earningsSessionFilters: document.getElementById("earnings-session-filters"),
+  earningsQ: document.getElementById("earnings-q"),
+  earningsMega: document.getElementById("earnings-mega"),
+  earningsTable: document.getElementById("earnings-table"),
+  earningsTableTitle: document.getElementById("earnings-table-title"),
+  earningsTableBlurb: document.getElementById("earnings-table-blurb"),
+  earningsCount: document.getElementById("earnings-count"),
   briefGrid: document.getElementById("brief-grid"),
   briefBlurb: document.getElementById("brief-blurb"),
   eventRail: document.getElementById("event-rail"),
@@ -3033,6 +3047,205 @@ function bindSectorDesk() {
   });
 }
 
+function formatCapShort(text) {
+  if (!text || text === "—" || text === "N/A") return "—";
+  const raw = String(text).replace(/[$,]/g, "");
+  const n = Number(raw);
+  if (!Number.isFinite(n)) return String(text);
+  if (n >= 1e12) return `${(n / 1e12).toFixed(2)}T`;
+  if (n >= 1e9) return `${(n / 1e9).toFixed(1)}B`;
+  if (n >= 1e6) return `${(n / 1e6).toFixed(0)}M`;
+  return String(text);
+}
+
+function renderEarningsDesk(data) {
+  state.earnings = data || null;
+  if (data?.selected_date) state.earningsDate = data.selected_date;
+  if (data?.session) state.earningsSession = data.session;
+
+  const dates = data?.dates || [];
+  const items = data?.items || [];
+  const mega = data?.mega_caps || [];
+  const selected = data?.selected_date || state.earningsDate || "";
+
+  if (els.earningsPageBlurb) {
+    const total = dates.reduce((s, d) => s + (d.count || 0), 0);
+    els.earningsPageBlurb.textContent = `Nasdaq 公开日历 · 近 ${dates.length} 日共 ${total} 家申报 · 当日 ${
+      data?.count ?? items.length
+    } 家`;
+  }
+
+  if (els.earningsDateTabs) {
+    els.earningsDateTabs.innerHTML = dates
+      .map((d) => {
+        const on = d.date === selected;
+        return `
+          <button type="button" class="earnings-date-tab ${on ? "is-active" : ""} ${
+            d.is_today ? "is-today" : ""
+          }" data-date="${escapeHtml(d.date)}" role="tab" aria-selected="${on ? "true" : "false"}">
+            <span class="dow">周${escapeHtml(d.weekday)}</span>
+            <span class="dom">${escapeHtml(d.label)}</span>
+            <span class="cnt">${d.count || 0}</span>
+          </button>
+        `;
+      })
+      .join("");
+    els.earningsDateTabs.querySelectorAll("[data-date]").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        const date = btn.getAttribute("data-date") || "";
+        if (!date || date === state.earningsDate) return;
+        state.earningsDate = date;
+        loadEarningsDesk();
+      });
+    });
+  }
+
+  els.earningsSessionFilters?.querySelectorAll("[data-esession]").forEach((btn) => {
+    const key = btn.getAttribute("data-esession") || "all";
+    const on = key === (state.earningsSession || "all");
+    btn.classList.toggle("is-active", on);
+    btn.setAttribute("aria-selected", on ? "true" : "false");
+  });
+
+  if (els.earningsQ && document.activeElement !== els.earningsQ) {
+    els.earningsQ.value = state.earningsQ || data?.q || "";
+  }
+
+  if (els.earningsMega) {
+    if (!mega.length) {
+      els.earningsMega.innerHTML =
+        '<p class="empty compact">当日无市值 ≥ $50B 的申报（或已被筛选过滤）</p>';
+    } else {
+      els.earningsMega.innerHTML = `
+        <div class="earnings-mega-head">
+          <h2>大市值焦点</h2>
+          <p>市值 ≥ $50B</p>
+        </div>
+        <div class="earnings-mega-grid">
+          ${mega
+            .map(
+              (row) => `
+            <a class="earnings-mega-card" href="${escapeHtml(
+              row.url || `https://finance.yahoo.com/quote/${row.symbol}/`
+            )}" target="_blank" rel="noopener noreferrer">
+              <span class="sym">${escapeHtml(row.symbol)}</span>
+              <span class="when">${escapeHtml(row.time_zh || "")}</span>
+              <span class="name">${escapeHtml(row.name || "")}</span>
+              <span class="cap">${escapeHtml(formatCapShort(row.market_cap_text))}</span>
+            </a>
+          `
+            )
+            .join("")}
+        </div>
+      `;
+    }
+  }
+
+  if (els.earningsTableTitle) {
+    const tab = dates.find((d) => d.date === selected);
+    els.earningsTableTitle.textContent = tab
+      ? `${tab.label} 周${tab.weekday} · 全部申报`
+      : "当日全部";
+  }
+  if (els.earningsTableBlurb) {
+    els.earningsTableBlurb.textContent = "按市值排序 · 盘前 / 盘后标注";
+  }
+  if (els.earningsCount) {
+    els.earningsCount.textContent = `${items.length} 家`;
+  }
+
+  if (els.earningsTable) {
+    if (!items.length) {
+      els.earningsTable.innerHTML =
+        '<p class="empty">该日暂无匹配申报，可切换日期或清空筛选。</p>';
+    } else {
+      els.earningsTable.innerHTML = `
+        <div class="earnings-row head" aria-hidden="true">
+          <span>代码</span><span>公司</span><span>时段</span><span>预期EPS</span><span>上年EPS</span><span>市值</span>
+        </div>
+        ${items
+          .map(
+            (row) => `
+          <a class="earnings-row" href="${escapeHtml(
+            row.url || `https://finance.yahoo.com/quote/${row.symbol}/`
+          )}" target="_blank" rel="noopener noreferrer">
+            <span class="sym">${escapeHtml(row.symbol)}</span>
+            <span class="name">${escapeHtml(row.name || "")}</span>
+            <span class="session session-${escapeHtml(
+              (row.time || "").replace("time-", "")
+            )}">${escapeHtml(row.time_zh || "—")}</span>
+            <span class="eps">${escapeHtml(row.eps_forecast_text || "—")}</span>
+            <span class="eps muted">${escapeHtml(row.last_year_eps_text || "—")}</span>
+            <span class="cap">${escapeHtml(formatCapShort(row.market_cap_text))}</span>
+          </a>
+        `
+          )
+          .join("")}
+      `;
+    }
+  }
+}
+
+async function loadEarningsDesk({ force = false } = {}) {
+  if (PAGE !== "earnings") return null;
+  const params = new URLSearchParams();
+  params.set("days", "7");
+  if (state.earningsDate) params.set("date", state.earningsDate);
+  if (state.earningsSession && state.earningsSession !== "all") {
+    params.set("session", state.earningsSession);
+  }
+  if (state.earningsQ) params.set("q", state.earningsQ);
+  if (force) params.set("refresh", "true");
+  setStatus(force ? "强制刷新财报日历…" : "同步全美股财报日历…");
+  if (els.earningsRefresh) els.earningsRefresh.disabled = true;
+  try {
+    const res = await fetch(`/api/earnings?${params.toString()}`);
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const data = await res.json();
+    renderEarningsDesk(data);
+    const errN = (data.errors || []).length;
+    setStatus(
+      `财报已更新${data.cached ? "（缓存）" : ""} · ${data.selected_date || ""} ${
+        data.count || 0
+      } 家${errN ? ` · ${errN} 条拉取警告` : ""}`
+    );
+    return data;
+  } catch (err) {
+    setStatus(`财报日历加载失败：${err.message || err}`);
+    return null;
+  } finally {
+    if (els.earningsRefresh) els.earningsRefresh.disabled = false;
+  }
+}
+
+function bindEarningsDesk() {
+  if (PAGE !== "earnings") return;
+  els.earningsRefresh?.addEventListener("click", () =>
+    loadEarningsDesk({ force: true })
+  );
+  els.earningsSessionFilters?.querySelectorAll("[data-esession]").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      const key = btn.getAttribute("data-esession") || "all";
+      if (key === state.earningsSession) return;
+      state.earningsSession = key;
+      loadEarningsDesk();
+    });
+  });
+  let qTimer = 0;
+  els.earningsQ?.addEventListener("input", () => {
+    state.earningsQ = els.earningsQ.value.trim();
+    window.clearTimeout(qTimer);
+    qTimer = window.setTimeout(() => loadEarningsDesk(), 280);
+  });
+  els.earningsQ?.addEventListener("keydown", (ev) => {
+    if (ev.key === "Enter") {
+      ev.preventDefault();
+      state.earningsQ = els.earningsQ.value.trim();
+      loadEarningsDesk();
+    }
+  });
+}
+
 function bootPage() {
   if (PAGE === "login") {
     bindAuthPage();
@@ -3061,6 +3274,10 @@ function bootPage() {
     bindSectorDesk();
     loadSectorDesk();
     setInterval(() => loadSectorDesk(), 90 * 1000);
+  } else if (PAGE === "earnings") {
+    bindEarningsDesk();
+    loadEarningsDesk();
+    setInterval(() => loadEarningsDesk(), 5 * 60 * 1000);
   } else if (PAGE === "intel") {
     readIntelQueryFlags();
     loadIntel();
@@ -3143,6 +3360,11 @@ function navCycleRoutes() {
       id: "sectors",
       href: "/sectors",
       match: (p) => p === "/sectors",
+    },
+    {
+      id: "earnings",
+      href: "/earnings",
+      match: (p) => p === "/earnings",
     },
     {
       id: "intel",

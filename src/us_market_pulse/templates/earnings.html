@@ -1,0 +1,50 @@
+{% extends "base.html" %}
+{% block title %}Pulse Desk · 财报日历{% endblock %}
+{% block status_default %}同步全美股财报日历…{% endblock %}
+{% block content %}
+      <section class="page-intro earnings-intro">
+        <div class="earnings-intro-main">
+          <p class="page-kicker">财报台</p>
+          <h1>美股财报日历</h1>
+          <p class="lede compact" id="earnings-page-blurb">
+            覆盖 Nasdaq 公开日历上的全部申报公司 · 按美东日期与盘前/盘后筛选
+          </p>
+        </div>
+        <div class="cta-row earnings-intro-actions">
+          <button class="btn primary btn-compact" id="btn-earnings-refresh" type="button">刷新</button>
+          <a class="btn ghost btn-compact" href="https://www.nasdaq.com/market-activity/earnings" target="_blank" rel="noopener noreferrer">数据源</a>
+        </div>
+      </section>
+
+      <div class="earnings-board" id="earnings-board">
+        <div class="earnings-toolbar">
+          <div class="earnings-date-tabs" id="earnings-date-tabs" role="tablist" aria-label="财报日期"></div>
+          <form class="earnings-filters" id="earnings-filters" autocomplete="off">
+            <label class="field compact">
+              <span>搜索</span>
+              <input id="earnings-q" type="search" placeholder="代码 / 公司名" />
+            </label>
+            <div class="tf-filters" id="earnings-session-filters" role="tablist" aria-label="披露时段">
+              <button type="button" class="filter is-active" data-esession="all" aria-selected="true">全部</button>
+              <button type="button" class="filter" data-esession="pre" aria-selected="false">盘前</button>
+              <button type="button" class="filter" data-esession="post" aria-selected="false">盘后</button>
+            </div>
+          </form>
+        </div>
+
+        <div class="earnings-mega" id="earnings-mega" aria-label="大市值焦点"></div>
+
+        <section class="earnings-table-wrap" aria-label="当日全部财报">
+          <div class="section-head compact">
+            <div>
+              <h2 id="earnings-table-title">当日全部</h2>
+              <p id="earnings-table-blurb">按市值排序</p>
+            </div>
+            <p class="earnings-count" id="earnings-count">—</p>
+          </div>
+          <div class="earnings-table" id="earnings-table">
+            <p class="empty">加载中…</p>
+          </div>
+        </section>
+      </div>
+{% endblock %}

@@ -36,6 +36,10 @@ from us_market_pulse.feeds import (
     refresh_intel,
     refresh_market_desk,
 )
+from us_market_pulse.earnings_calendar import (
+    build_earnings_calendar,
+    parse_day_param,
+)
 from us_market_pulse.sectors import build_sector_desk
 from us_market_pulse.topics import build_war_desk
 from us_market_pulse.portfolio import (
@@ -154,6 +158,11 @@ async def sectors_page(request: Request) -> HTMLResponse:
     return _page(request, "sectors.html", "sectors")
 
 
+@app.get("/earnings", response_class=HTMLResponse)
+async def earnings_page(request: Request) -> HTMLResponse:
+    return _page(request, "earnings.html", "earnings")
+
+
 @app.get("/intel", response_class=HTMLResponse)
 async def intel_page(request: Request) -> HTMLResponse:
     return _page(request, "intel.html", "intel")
@@ -220,6 +229,24 @@ async def api_sectors(
         **desk,
         "intel_fetched_at": intel.get("fetched_at"),
     }
+
+
+@app.get("/api/earnings")
+async def api_earnings(
+    date: str | None = Query(default=None),
+    days: int = Query(default=7, ge=1, le=14),
+    q: str | None = Query(default=None),
+    session: str | None = Query(default=None),
+    refresh: bool = Query(default=False),
+) -> dict[str, Any]:
+    day = parse_day_param(date)
+    return await build_earnings_calendar(
+        day=day,
+        days=days,
+        q=q,
+        session=session,
+        force=refresh,
+    )
 
 
 @app.get("/api/portfolio/intel")
