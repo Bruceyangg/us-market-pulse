@@ -43,6 +43,7 @@ import com.bruceyangg.pulsedesk.ui.components.priceText
 import com.bruceyangg.pulsedesk.ui.theme.TapeDown
 import com.bruceyangg.pulsedesk.ui.theme.TapeUp
 import com.bruceyangg.pulsedesk.ui.theme.tapeColor
+import com.bruceyangg.pulsedesk.viewmodel.AuthViewModel
 import com.bruceyangg.pulsedesk.viewmodel.HoldingIntelViewModel
 import com.bruceyangg.pulsedesk.viewmodel.PortfolioViewModel
 
@@ -50,20 +51,28 @@ import com.bruceyangg.pulsedesk.viewmodel.PortfolioViewModel
 fun PortfolioScreen(
     vm: PortfolioViewModel = viewModel(),
     intelVm: HoldingIntelViewModel = viewModel(),
+    authVm: AuthViewModel = viewModel(),
+    onLoginClick: () -> Unit = {},
 ) {
     val state by vm.state.collectAsStateWithLifecycle()
     val intelState by intelVm.state.collectAsStateWithLifecycle()
+    val auth by authVm.state.collectAsStateWithLifecycle()
     val context = LocalContext.current
     LaunchedEffect(Unit) {
         if (state.data == null) vm.load()
         if (intelState.data == null) intelVm.load()
+    }
+    LaunchedEffect(auth.authenticated, auth.bootstrapped) {
+        if (!auth.bootstrapped) return@LaunchedEffect
+        vm.load(true)
+        intelVm.load(true)
     }
 
     Column(Modifier.fillMaxSize()) {
         ScreenHeader(
             title = "持仓",
             subtitle = when {
-                state.needsLogin -> "未登录 · 持仓需登录后查看"
+                state.needsLogin -> "未登录 · 登录后查看与管理个人持仓"
                 else -> state.data?.note ?: "自定义股票 · 云端同步 · 红涨绿跌"
             },
             onRefresh = { vm.load(true) },
@@ -71,14 +80,19 @@ fun PortfolioScreen(
         )
         when {
             state.loading && state.data == null -> LoadingState()
-            state.needsLogin -> ErrorState("未登录 · 持仓需登录后查看\n请先在网站登录并添加持仓。") {
-                vm.load(true)
-            }
+            state.needsLogin -> ErrorState(
+                message = "未登录 · 持仓需登录后查看\n可在本机注册账户，与网页端同步。",
+                actionLabel = "登录 / 注册",
+                onAction = onLoginClick,
+                onRetry = { vm.load(true) },
+            )
             state.error != null && state.data == null -> ErrorState(state.error!!) { vm.load(true) }
             else -> {
                 val data = state.data
                 if (data == null || data.holdings.isEmpty()) {
-                    ErrorState("还没有持仓。请先在网页端登录并添加美股代码。") { vm.load(true) }
+                    ErrorState("还没有持仓。登录后请先在网页端或后续版本添加美股代码。") {
+                        vm.load(true)
+                    }
                     return@Column
                 }
                 val focus = data.focusHolding()

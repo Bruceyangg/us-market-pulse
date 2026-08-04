@@ -5,6 +5,46 @@ import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.JsonElement
 
 @Serializable
+data class AuthUser(
+    val username: String? = null,
+    val display_name: String? = null,
+    val created_at: Double? = null,
+) {
+    val label: String
+        get() = display_name?.takeIf { it.isNotBlank() } ?: username.orEmpty()
+}
+
+@Serializable
+data class AuthMeResponse(
+    val ok: Boolean = false,
+    val authenticated: Boolean = false,
+    val user: AuthUser? = null,
+)
+
+@Serializable
+data class AuthActionResponse(
+    val ok: Boolean = false,
+    val user: AuthUser? = null,
+)
+
+@Serializable
+data class AuthFormBody(
+    val username: String,
+    val password: String,
+    val display_name: String? = null,
+)
+
+@Serializable
+data class OkResponse(
+    val ok: Boolean = false,
+)
+
+@Serializable
+data class ApiErrorDetail(
+    val detail: String? = null,
+)
+
+@Serializable
 data class MarketsResponse(
     val indices: List<IndexCard> = emptyList(),
     val charts: List<MarketChart> = emptyList(),
@@ -63,6 +103,9 @@ data class SectorsResponse(
     val sectors: List<SectorEtf> = emptyList(),
     val hot_sectors: List<SectorEtf> = emptyList(),
     val active_sector_id: String? = null,
+    val active_sector: SectorEtf? = null,
+    val sector_news: List<SectorNewsItem> = emptyList(),
+    val symbol_news: List<SectorNewsItem> = emptyList(),
     val picks: List<SectorPick> = emptyList(),
     val selected_symbol: String? = null,
     val selected_pick: SectorPick? = null,
@@ -70,6 +113,20 @@ data class SectorsResponse(
     val timeframes: List<Timeframe> = emptyList(),
     val fetched_at: Double? = null,
     val cached: Boolean? = null,
+)
+
+@Serializable
+data class SectorNewsItem(
+    val title: String? = null,
+    val title_zh: String? = null,
+    val brief_zh: String? = null,
+    val summary: String? = null,
+    val sentiment_logic: String? = null,
+    val source: String? = null,
+    val url: String? = null,
+    val published: String? = null,
+    val sentiment: String? = null,
+    val holding_matches: List<String> = emptyList(),
 )
 
 @Serializable
@@ -98,6 +155,7 @@ data class SectorPick(
     val series: Map<String, SeriesBundle> = emptyMap(),
     val move_analysis: MoveAnalysis? = null,
     val value_chain: ValueChain? = null,
+    val symbol_news: List<SectorNewsItem> = emptyList(),
 )
 
 @Serializable

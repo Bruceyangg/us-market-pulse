@@ -10,15 +10,17 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.material3.Button
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
-import androidx.compose.ui.Modifier.Modifier
+import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -31,21 +33,30 @@ import com.bruceyangg.pulsedesk.ui.components.ScreenHeader
 import com.bruceyangg.pulsedesk.ui.theme.ThemeMode
 import com.bruceyangg.pulsedesk.ui.theme.ThemePreferences
 import com.bruceyangg.pulsedesk.ui.theme.rememberThemeMode
+import com.bruceyangg.pulsedesk.viewmodel.AuthViewModel
 import com.bruceyangg.pulsedesk.viewmodel.SettingsViewModel
 
 @Composable
-fun SettingsScreen(vm: SettingsViewModel = viewModel()) {
+fun SettingsScreen(
+    vm: SettingsViewModel = viewModel(),
+    authVm: AuthViewModel = viewModel(),
+    onLoginClick: () -> Unit = {},
+) {
     val state by vm.state.collectAsStateWithLifecycle()
+    val auth by authVm.state.collectAsStateWithLifecycle()
     val context = LocalContext.current
     val themePrefs = ThemePreferences.get(context)
     val themeMode = rememberThemeMode(themePrefs)
 
-    LaunchedEffect(Unit) { if (state.data == null) vm.load() }
+    LaunchedEffect(Unit) {
+        if (state.data == null) vm.load()
+        if (!auth.bootstrapped) authVm.refreshMe()
+    }
 
     Column(Modifier.fillMaxSize()) {
         ScreenHeader(
             title = "设置",
-            subtitle = "主题外观 · 推送与盯盘（与网页同步）",
+            subtitle = "账户 · 主题 · 推送与盯盘",
             onRefresh = { vm.load(true) },
             refreshing = state.refreshing,
         )
@@ -54,6 +65,41 @@ fun SettingsScreen(vm: SettingsViewModel = viewModel()) {
             contentPadding = PaddingValues(16.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
+            item {
+                PulseCard {
+                    Column(Modifier.padding(14.dp)) {
+                        Text("账户", style = MaterialTheme.typography.titleMedium)
+                        if (auth.authenticated) {
+                            Text(
+                                auth.user?.label ?: auth.user?.username.orEmpty(),
+                                fontWeight = FontWeight.SemiBold,
+                                modifier = Modifier.padding(top = 8.dp),
+                            )
+                            Text(
+                                "@${auth.user?.username.orEmpty()}",
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                style = MaterialTheme.typography.bodyMedium,
+                                modifier = Modifier.padding(top = 2.dp),
+                            )
+                            Spacer(Modifier.height(10.dp))
+                            TextButton(onClick = { authVm.logout() }) {
+                                Text("退出登录")
+                            }
+                        } else {
+                            Text(
+                                "登录后可查看与同步个人持仓",
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                style = MaterialTheme.typography.bodyMedium,
+                                modifier = Modifier.padding(top = 6.dp, bottom = 10.dp),
+                            )
+                            Button(onClick = onLoginClick) {
+                                Text("登录 / 注册")
+                            }
+                        }
+                    }
+                }
+            }
+
             item {
                 PulseCard {
                     Column(Modifier.padding(14.dp)) {

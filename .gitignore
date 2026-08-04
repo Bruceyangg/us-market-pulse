@@ -17,3 +17,4 @@ data/secret.key
 data/portfolios/
 .tools/
 .env
+android/local.properties

@@ -3059,6 +3059,28 @@ body {
   z-index: 2;
 }
 
+.symbol-news-block {
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--elevated-soft);
+  padding: 0.55rem 0.65rem 0.7rem;
+  display: grid;
+  gap: 0.45rem;
+  min-width: 0;
+  flex: 0 0 auto;
+  position: relative;
+  z-index: 2;
+}
+
+.symbol-news-block .sectors-pane-head {
+  margin-bottom: 0;
+}
+
+.symbol-news-block .spotlight-list.compact {
+  max-height: 18rem;
+  overflow: auto;
+}
+
 .stock-earnings,
 .move-analysis {
   border: 1px solid var(--line);
@@ -4768,6 +4790,7 @@ html[data-theme="dark"] .sectors-list-pane,
 html[data-theme="dark"] .sectors-chart-sticky,
 html[data-theme="dark"] .sectors-intel-block,
 html[data-theme="dark"] .move-analysis,
+html[data-theme="dark"] .symbol-news-block,
 html[data-theme="dark"] .stock-earnings,
 html[data-theme="dark"] .earn-date-row > div,
 html[data-theme="dark"] .earn-metrics > div,

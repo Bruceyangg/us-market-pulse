@@ -1,17 +1,35 @@
 package com.bruceyangg.pulsedesk.data.api
 
+import com.bruceyangg.pulsedesk.data.model.AuthActionResponse
+import com.bruceyangg.pulsedesk.data.model.AuthFormBody
+import com.bruceyangg.pulsedesk.data.model.AuthMeResponse
 import com.bruceyangg.pulsedesk.data.model.EarningsResponse
 import com.bruceyangg.pulsedesk.data.model.HoldingIntelResponse
 import com.bruceyangg.pulsedesk.data.model.IntelResponse
 import com.bruceyangg.pulsedesk.data.model.MarketsResponse
+import com.bruceyangg.pulsedesk.data.model.OkResponse
 import com.bruceyangg.pulsedesk.data.model.PortfolioResponse
 import com.bruceyangg.pulsedesk.data.model.SectorMapResponse
 import com.bruceyangg.pulsedesk.data.model.SectorsResponse
 import com.bruceyangg.pulsedesk.data.model.SettingsResponse
+import retrofit2.http.Body
 import retrofit2.http.GET
+import retrofit2.http.POST
 import retrofit2.http.Query
 
 interface PulseApi {
+    @GET("api/auth/me")
+    suspend fun authMe(): AuthMeResponse
+
+    @POST("api/auth/login")
+    suspend fun login(@Body body: AuthFormBody): AuthActionResponse
+
+    @POST("api/auth/register")
+    suspend fun register(@Body body: AuthFormBody): AuthActionResponse
+
+    @POST("api/auth/logout")
+    suspend fun logout(): OkResponse
+
     @GET("api/markets")
     suspend fun markets(@Query("refresh") refresh: Boolean = false): MarketsResponse
 

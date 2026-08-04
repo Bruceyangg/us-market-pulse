@@ -114,6 +114,11 @@ const els = {
   sectorPickChart: document.getElementById("sector-pick-chart"),
   sectorTfFilters: document.getElementById("sector-tf-filters"),
   sectorNewsList: document.getElementById("sector-news-list"),
+  sectorNewsBlurb: document.getElementById("sector-news-blurb"),
+  sectorNewsLink: document.getElementById("sector-news-link"),
+  symbolNewsList: document.getElementById("symbol-news-list"),
+  symbolNewsBlurb: document.getElementById("symbol-news-blurb"),
+  symbolNewsLink: document.getElementById("symbol-news-link"),
   valueChainBlurb: document.getElementById("value-chain-blurb"),
   valueChainBody: document.getElementById("value-chain-body"),
   earningsList: document.getElementById("earnings-list"),
@@ -3059,11 +3064,65 @@ function renderAiDesk(aiDesk) {
       els.aiNewsList.innerHTML = '<p class="empty">暂无该热点相关新闻。</p>';
     } else {
       els.aiNewsList.innerHTML = rows
-        .slice(0, 2)
+        .slice(0, 4)
         .map((item) => spotlightCardHtml(item))
         .join("");
     }
   }
+}
+
+function renderSectorNewsFeed(data) {
+  const news = data?.sector_news || [];
+  const label =
+    data?.active_sector?.label || data?.active_sector_id || "当前板块";
+  const q = data?.active_sector?.topic_id || label;
+  if (els.sectorNewsBlurb) {
+    els.sectorNewsBlurb.textContent = news.length
+      ? `${label} · ${news.length} 条匹配`
+      : `${label} · 暂无匹配`;
+  }
+  if (els.sectorNewsLink) {
+    els.sectorNewsLink.href = `/intel?q=${encodeURIComponent(q)}`;
+  }
+  if (!els.sectorNewsList) return;
+  els.sectorNewsList.innerHTML = news.length
+    ? news.slice(0, 8).map((item) => spotlightCardHtml(item)).join("")
+    : '<p class="empty">暂无该板块匹配新闻。</p>';
+}
+
+function renderSymbolNewsFeed(data) {
+  const pick = data?.selected_pick;
+  const news =
+    data?.symbol_news ||
+    pick?.symbol_news ||
+    [];
+  const sym = data?.selected_symbol || pick?.symbol || "";
+  const name = pick?.name || sym;
+  if (els.symbolNewsBlurb) {
+    if (!sym) {
+      els.symbolNewsBlurb.textContent = "点选个股后显示相关情报";
+    } else if (!news.length) {
+      els.symbolNewsBlurb.textContent = `${name} · 暂无命中标题/正文的情报`;
+    } else {
+      els.symbolNewsBlurb.textContent = `${name} · ${news.length} 条相关`;
+    }
+  }
+  if (els.symbolNewsLink) {
+    els.symbolNewsLink.href = sym
+      ? `/intel?q=${encodeURIComponent(sym)}`
+      : "/intel";
+  }
+  if (!els.symbolNewsList) return;
+  if (!sym) {
+    els.symbolNewsList.innerHTML =
+      '<p class="empty">选择个股后显示相关新闻</p>';
+    return;
+  }
+  els.symbolNewsList.innerHTML = news.length
+    ? news.slice(0, 8).map((item) => spotlightCardHtml(item)).join("")
+    : `<p class="empty">暂无命中 ${escapeHtml(
+        sym
+      )} 的情报 · <a href="/intel?q=${encodeURIComponent(sym)}">去情报流搜索</a></p>`;
 }
 
 function heatColor(pct) {
@@ -3793,6 +3852,7 @@ function renderSectorPickChart() {
     renderMonthPanel(null);
     renderStockEarnings(null, null);
     renderMoveAnalysis(null);
+    renderSymbolNewsFeed(data);
     return;
   }
   const series = pick.series?.[tf];
@@ -3958,12 +4018,8 @@ function renderSectorPicks(data) {
     }
   }
 
-  if (els.sectorNewsList) {
-    const news = data?.sector_news || [];
-    els.sectorNewsList.innerHTML = news.length
-      ? news.slice(0, 2).map((item) => spotlightCardHtml(item)).join("")
-      : '<p class="empty">暂无该板块匹配新闻。</p>';
-  }
+  renderSectorNewsFeed(data);
+  renderSymbolNewsFeed(data);
 
   renderSectorPickChart();
   renderEarningsCalendar(data);
@@ -3982,6 +4038,7 @@ function selectSectorSymbol(sym) {
     data.selected_pick = pick;
     data.selected_earnings = pick.earnings || null;
     data.value_chain = pick.value_chain || data.value_chain;
+    data.symbol_news = pick.symbol_news || [];
     syncSectorQuery();
     renderSectorPicks(data);
     setStatus(`已切换 ${pick.name || symbol} · ${pick.sector_label || ""}`);

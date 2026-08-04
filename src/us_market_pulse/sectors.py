@@ -18,6 +18,7 @@ from us_market_pulse.earnings_calendar import (
 )
 from us_market_pulse.market_map import symbols_for_desk
 from us_market_pulse.markets import PORTFOLIO_TIMEFRAMES, fetch_symbol_bundle
+from us_market_pulse.portfolio_intel import match_portfolio_intel
 from us_market_pulse.quotes import fetch_day_quotes
 from us_market_pulse.topics import TOPICS, filter_topic_items, topic_bearish_analysis
 
@@ -643,9 +644,34 @@ def _value_chain_for(symbol: str) -> dict[str, Any]:
     }
 
 
+def _slim_news_item(item: dict[str, Any]) -> dict[str, Any]:
+    """Keep feed cards light for sector / symbol news lists."""
+    keys = (
+        "id",
+        "url",
+        "title",
+        "title_zh",
+        "summary",
+        "brief_zh",
+        "source",
+        "theme",
+        "published",
+        "published_ts",
+        "sentiment",
+        "sentiment_label",
+        "sentiment_score",
+        "sentiment_strength",
+        "sentiment_logic",
+        "sentiment_reason",
+        "sentiment_factors",
+        "holding_matches",
+    )
+    return {k: item.get(k) for k in keys if item.get(k) is not None}
+
+
 def _match_sector_news(items: list[dict[str, Any]], topic_id: str) -> list[dict[str, Any]]:
     if topic_id in TOPICS:
-        return filter_topic_items(items, topic_id, sort="latest")[:8]
+        return filter_topic_items(items, topic_id, sort="latest")[:12]
     # Fallback keyword filter for sector topics not in war TOPICS
     meta = SECTOR_TOPIC_PATTERNS.get(topic_id) or {}
     query = str(meta.get("query") or "")
@@ -661,7 +687,25 @@ def _match_sector_news(items: list[dict[str, Any]], topic_id: str) -> list[dict[
         if any(n in blob for n in needles):
             rows.append(item)
     rows.sort(key=lambda x: x.get("published_ts") or 0.0, reverse=True)
-    return rows[:8]
+    return rows[:12]
+
+
+def _match_symbol_news(
+    items: list[dict[str, Any]],
+    symbol: str,
+    *,
+    name: str | None = None,
+    limit: int = 8,
+) -> list[dict[str, Any]]:
+    """Match intel / news mentioning a constituent ticker or company name."""
+    sym = (symbol or "").strip().upper()
+    if not sym:
+        return []
+    hits = match_portfolio_intel(
+        items,
+        [{"symbol": sym, "name": (name or "").strip() or sym}],
+    )
+    return [_slim_news_item(dict(i)) for i in hits[: max(1, min(limit, 16))]]
 
 
 async def _fetch_quote(
@@ -1737,11 +1781,20 @@ async def build_sector_desk(
     sector_news = _match_sector_news(
         news_items, (active or {}).get("topic_id") or sector_id
     )
-    # Enrich move analysis with sector headlines once news is available
+    sector_news_slim = [_slim_news_item(dict(i)) for i in sector_news[:10]]
+    # Enrich move analysis + per-symbol news once news is available
     for row in pick_rows:
         home_etf = next(
             (s for s in sectors if s.get("id") == row.get("sector_id")), active
         )
+        row["symbol_news"] = _match_symbol_news(
+            news_items,
+            str(row.get("symbol") or ""),
+            name=str(row.get("name") or "") or None,
+            limit=8,
+        )
+        # Prefer symbol-matched headlines for move factors; fall back to sector
+        move_news = row["symbol_news"] or sector_news_slim
         row["move_analysis"] = _move_analysis(
             day_pct=row.get("change_pct"),
             month_pct=row.get("month_change_pct"),
@@ -1754,7 +1807,7 @@ async def build_sector_desk(
             value_chain=row.get("value_chain")
             if isinstance(row.get("value_chain"), dict)
             else None,
-            news=sector_news,
+            news=move_news,
         )
 
     topic_key = (active or {}).get("topic_id")
@@ -1785,8 +1838,11 @@ async def build_sector_desk(
         "blurb": (active or {}).get("blurb")
         or "当前热点板块利空与相关新闻（不限于 AI）",
         "analysis": sector_bear,
-        "latest": sector_news[:6] or sector_bear.get("latest") or [],
-        "spotlight": sector_bear.get("spotlight") or [],
+        "latest": sector_news_slim[:6]
+        or [_slim_news_item(dict(i)) for i in (sector_bear.get("latest") or [])[:6]],
+        "spotlight": [
+            _slim_news_item(dict(i)) for i in (sector_bear.get("spotlight") or [])[:6]
+        ],
     }
 
     earnings_calendar = sorted(
@@ -1827,12 +1883,13 @@ async def build_sector_desk(
         "hot_sectors": [s for s in sectors if s.get("is_hot")][:4],
         "active_sector_id": sector_id,
         "active_sector": _slim_sector_etf(dict(active)) if active else active,
-        "sector_news": sector_news[:6],
+        "sector_news": sector_news_slim,
         "sector_bearish": sector_bear,
         "picks": wire_picks,
         "wave_leaders": [p for p in wire_picks if p.get("is_wave")][:10],
         "selected_symbol": selected,
         "selected_pick": wire_selected,
+        "symbol_news": list((wire_selected or {}).get("symbol_news") or []),
         "value_chain": (wire_selected or {}).get("value_chain")
         or _value_chain_for(selected),
         "earnings_calendar": earnings_calendar[:12],

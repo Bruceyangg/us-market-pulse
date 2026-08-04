@@ -85,7 +85,16 @@ curl -X POST http://127.0.0.1:8765/api/push/test
 # 用 Android Studio 打开 android/ 目录后 Run
 ```
 
-详见 [android/README.md](android/README.md)。
+可直接安装的调试包：`dist/PulseDesk-debug.apk`（见 [android/README.md](android/README.md)）。
+
+## iPhone 安装
+
+Apple 无法像安卓那样直接分发未签名 IPA。请用 Safari **添加到主屏幕**（约 30 秒）：
+
+1. 打开 https://us-market-pulse-6sqa.onrender.com/install  
+2. 分享 → 添加到主屏幕 → 添加  
+
+离线说明：`dist/PulseDesk-iOS-安装说明.html`。原生 SwiftUI 壳见 [`ios/`](ios/README.md)（需 Mac + Xcode）。
 
 ## API
 

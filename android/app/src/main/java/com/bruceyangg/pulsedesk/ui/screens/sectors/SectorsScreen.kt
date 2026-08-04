@@ -1,15 +1,15 @@
 package com.bruceyangg.pulsedesk.ui.screens.sectors
 
+import android.content.Intent
+import android.net.Uri
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -21,11 +21,13 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
-import androidx.compose.ui.Modifier.Modifier
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
+import com.bruceyangg.pulsedesk.data.model.SectorNewsItem
 import com.bruceyangg.pulsedesk.ui.components.CandleChart
 import com.bruceyangg.pulsedesk.ui.components.ErrorState
 import com.bruceyangg.pulsedesk.ui.components.LoadingState
@@ -35,6 +37,8 @@ import com.bruceyangg.pulsedesk.ui.components.ScreenHeader
 import com.bruceyangg.pulsedesk.ui.components.SectorTreemap
 import com.bruceyangg.pulsedesk.ui.components.WaveChip
 import com.bruceyangg.pulsedesk.ui.components.priceText
+import com.bruceyangg.pulsedesk.ui.theme.TapeDown
+import com.bruceyangg.pulsedesk.ui.theme.TapeUp
 import com.bruceyangg.pulsedesk.ui.theme.tapeColor
 import com.bruceyangg.pulsedesk.viewmodel.SectorsViewModel
 
@@ -42,6 +46,7 @@ import com.bruceyangg.pulsedesk.viewmodel.SectorsViewModel
 fun SectorsScreen(vm: SectorsViewModel = viewModel()) {
     val deskState by vm.desk.collectAsStateWithLifecycle()
     val mapState by vm.map.collectAsStateWithLifecycle()
+    val context = LocalContext.current
     LaunchedEffect(Unit) {
         if (deskState.data == null) vm.load()
     }
@@ -62,6 +67,9 @@ fun SectorsScreen(vm: SectorsViewModel = viewModel()) {
                 ErrorState(deskState.error!!) { vm.load(true) }
             else -> {
                 val desk = deskState.data ?: return@Column
+                val symbolNews = desk.symbol_news.ifEmpty {
+                    desk.selected_pick?.symbol_news.orEmpty()
+                }
                 LazyColumn(
                     contentPadding = PaddingValues(bottom = 24.dp),
                     verticalArrangement = Arrangement.spacedBy(10.dp),
@@ -125,6 +133,41 @@ fun SectorsScreen(vm: SectorsViewModel = viewModel()) {
                                         Text("${sec.label} ${com.bruceyangg.pulsedesk.ui.components.pctText(sec.change_pct)}")
                                     },
                                 )
+                            }
+                        }
+                    }
+
+                    item {
+                        Text(
+                            "板块信息流",
+                            style = MaterialTheme.typography.titleMedium,
+                            modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp),
+                        )
+                        Text(
+                            desk.active_sector?.label?.let { "$it · ${desk.sector_news.size} 条匹配" }
+                                ?: "匹配当前板块相关情报",
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            style = MaterialTheme.typography.bodyMedium,
+                            modifier = Modifier.padding(horizontal = 16.dp),
+                        )
+                    }
+                    if (desk.sector_news.isEmpty()) {
+                        item {
+                            Text(
+                                "暂无该板块匹配新闻",
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                modifier = Modifier.padding(horizontal = 16.dp),
+                            )
+                        }
+                    } else {
+                        items(
+                            desk.sector_news.take(8),
+                            key = { "sec-${it.url ?: it.title_zh ?: it.title.orEmpty()}" },
+                        ) { item ->
+                            SectorNewsCard(item) {
+                                item.url?.let { url ->
+                                    context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url)))
+                                }
                             }
                         }
                     }
@@ -198,6 +241,45 @@ fun SectorsScreen(vm: SectorsViewModel = viewModel()) {
                     }
 
                     item {
+                        val pick = desk.selected_pick
+                        Text(
+                            "个股信息流",
+                            style = MaterialTheme.typography.titleMedium,
+                            modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp),
+                        )
+                        Text(
+                            when {
+                                pick == null -> "点选个股后显示相关情报"
+                                symbolNews.isEmpty() -> "${pick.name ?: pick.symbol} · 暂无命中"
+                                else -> "${pick.name ?: pick.symbol} · ${symbolNews.size} 条相关"
+                            },
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            style = MaterialTheme.typography.bodyMedium,
+                            modifier = Modifier.padding(horizontal = 16.dp),
+                        )
+                    }
+                    if (desk.selected_pick != null && symbolNews.isEmpty()) {
+                        item {
+                            Text(
+                                "暂无命中该代码的情报",
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                modifier = Modifier.padding(horizontal = 16.dp),
+                            )
+                        }
+                    } else {
+                        items(
+                            symbolNews.take(8),
+                            key = { "sym-${it.url ?: it.title_zh ?: it.title.orEmpty()}" },
+                        ) { item ->
+                            SectorNewsCard(item) {
+                                item.url?.let { url ->
+                                    context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url)))
+                                }
+                            }
+                        }
+                    }
+
+                    item {
                         Text(
                             "一轮涨势",
                             style = MaterialTheme.typography.titleMedium,
@@ -239,6 +321,56 @@ fun SectorsScreen(vm: SectorsViewModel = viewModel()) {
                         }
                     }
                 }
+            }
+        }
+    }
+}
+
+@Composable
+private fun SectorNewsCard(item: SectorNewsItem, onOpen: () -> Unit) {
+    PulseCard(Modifier.padding(horizontal = 16.dp)) {
+        Column(
+            Modifier
+                .fillMaxWidth()
+                .clickable(enabled = !item.url.isNullOrBlank(), onClick = onOpen)
+                .padding(14.dp),
+        ) {
+            Row(
+                Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+            ) {
+                Text(
+                    item.holding_matches.joinToString(" · ").ifBlank { item.source ?: "情报" },
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    style = MaterialTheme.typography.labelLarge,
+                )
+                Text(
+                    when (item.sentiment) {
+                        "bullish" -> "偏多"
+                        "bearish" -> "偏空"
+                        else -> "中性"
+                    },
+                    color = when (item.sentiment) {
+                        "bullish" -> TapeUp
+                        "bearish" -> TapeDown
+                        else -> MaterialTheme.colorScheme.onSurfaceVariant
+                    },
+                    fontWeight = FontWeight.SemiBold,
+                )
+            }
+            Text(
+                item.title_zh ?: item.title ?: "无标题",
+                fontWeight = FontWeight.SemiBold,
+                modifier = Modifier.padding(top = 6.dp),
+            )
+            val body = item.sentiment_logic ?: item.brief_zh ?: item.summary
+            body?.takeIf { it.isNotBlank() }?.let {
+                Text(
+                    it,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    style = MaterialTheme.typography.bodyMedium,
+                    modifier = Modifier.padding(top = 4.dp),
+                )
             }
         }
     }

@@ -19,7 +19,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
-import androidx.compose.ui.Modifier.Modifier
+import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -72,7 +72,12 @@ fun LoadingState(message: String = "加载中…") {
 }
 
 @Composable
-fun ErrorState(message: String, onRetry: () -> Unit) {
+fun ErrorState(
+    message: String,
+    actionLabel: String? = null,
+    onAction: (() -> Unit)? = null,
+    onRetry: () -> Unit,
+) {
     Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
         Column(
             horizontalAlignment = Alignment.CenterHorizontally,
@@ -80,7 +85,12 @@ fun ErrorState(message: String, onRetry: () -> Unit) {
         ) {
             Text(message, color = MaterialTheme.colorScheme.error)
             Spacer(Modifier.height(12.dp))
-            TextButton(onClick = onRetry) { Text("重试") }
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                if (onAction != null && !actionLabel.isNullOrBlank()) {
+                    TextButton(onClick = onAction) { Text(actionLabel) }
+                }
+                TextButton(onClick = onRetry) { Text("重试") }
+            }
         }
     }
 }
