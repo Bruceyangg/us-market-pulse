@@ -3492,10 +3492,16 @@ html[data-theme="dark"] .sector-pick-list .sector-hold-btn.is-held:hover {
 .sector-chart .chart-canvas > svg,
 .sector-chart .chart-zoom-stage > svg {
   width: 100%;
-  height: min(28vh, 220px);
-  max-height: 220px;
-  min-height: 160px;
+  height: min(32vh, 248px);
+  max-height: 248px;
+  min-height: 180px;
   display: block;
+}
+
+.sector-chart .chart-zoom-stage > svg.session-intraday-svg {
+  height: min(34vh, 260px);
+  max-height: 260px;
+  min-height: 190px;
 }
 
 .portfolio-chart .chart-canvas > svg,

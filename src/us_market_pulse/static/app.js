@@ -446,6 +446,201 @@ function renderChartSvg(points, { up = true, viewStart = 0, viewEnd = null } = {
   `;
 }
 
+const SESSION_BAND_COLORS = {
+  night: "rgba(88, 110, 140, 0.14)",
+  pre: "rgba(196, 122, 22, 0.12)",
+  regular: "rgba(15, 138, 106, 0.08)",
+  post: "rgba(47, 111, 159, 0.12)",
+};
+
+const SESSION_LABELS = {
+  night: "夜盘",
+  pre: "盘前",
+  regular: "盘中",
+  post: "盘后",
+};
+
+function sessionIdFromTs(ts) {
+  if (!ts) return "regular";
+  try {
+    const parts = new Intl.DateTimeFormat("en-US", {
+      timeZone: "America/New_York",
+      hour: "numeric",
+      minute: "numeric",
+      hour12: false,
+    }).formatToParts(new Date(Number(ts) * 1000));
+    const hour = Number(parts.find((p) => p.type === "hour")?.value || 0);
+    const minute = Number(parts.find((p) => p.type === "minute")?.value || 0);
+    const mins = hour * 60 + minute;
+    if (mins >= 20 * 60 || mins < 4 * 60) return "night";
+    if (mins < 9 * 60 + 30) return "pre";
+    if (mins < 16 * 60) return "regular";
+    return "post";
+  } catch {
+    return "regular";
+  }
+}
+
+function ensurePointSessions(points) {
+  return (points || []).map((p) => {
+    if (!p) return p;
+    if (p.session) return p;
+    return { ...p, session: sessionIdFromTs(p.t) };
+  });
+}
+
+function buildSessionSegmentsFromPoints(points) {
+  const rows = ensurePointSessions(points);
+  if (!rows.length) return [];
+  const segs = [];
+  let cur = rows[0]?.session || "regular";
+  let start = 0;
+  for (let i = 0; i < rows.length; i += 1) {
+    const sid = rows[i]?.session || "regular";
+    if (sid !== cur) {
+      segs.push({ id: cur, label: SESSION_LABELS[cur] || cur, i0: start, i1: i - 1 });
+      cur = sid;
+      start = i;
+    }
+  }
+  segs.push({
+    id: cur,
+    label: SESSION_LABELS[cur] || cur,
+    i0: start,
+    i1: rows.length - 1,
+  });
+  return segs;
+}
+
+/** Composite 分时: 夜盘 / 盘前 / 盘中 / 盘后 as one continuous line with session bands. */
+function renderSessionIntradaySvg(
+  points,
+  {
+    up = true,
+    viewStart = 0,
+    viewEnd = null,
+    sessions = null,
+    previousClose = null,
+  } = {}
+) {
+  const width = 320;
+  const height = 168;
+  const padX = 8;
+  const padTop = 18;
+  const padBottom = 16;
+  const plotH = height - padTop - padBottom;
+  const raw = ensurePointSessions(
+    (points || []).filter((p) => p && Number.isFinite(Number(p.v ?? p.c)))
+  );
+  const end = viewEnd == null ? raw.length : Math.min(raw.length, viewEnd);
+  const start = clamp(viewStart, 0, Math.max(0, end));
+  const view = raw.slice(start, end);
+  if (view.length < 2) {
+    return `<svg viewBox="0 0 ${width} ${height}" role="img" aria-label="暂无走势"><text x="16" y="90" fill="${themeMutedFill()}" font-size="13">暂无分时数据</text></svg>`;
+  }
+  const vals = view.map((p) => Number(p.v ?? p.c));
+  let min = Math.min(...vals);
+  let max = Math.max(...vals);
+  const prev =
+    previousClose != null && Number.isFinite(Number(previousClose))
+      ? Number(previousClose)
+      : null;
+  if (prev != null) {
+    min = Math.min(min, prev);
+    max = Math.max(max, prev);
+  }
+  const span = max - min || 1;
+  const stepX = (width - padX * 2) / (view.length - 1);
+  const yOf = (v) => padTop + (1 - (v - min) / span) * plotH;
+  const coords = vals.map((v, i) => [padX + i * stepX, yOf(v)]);
+
+  let segs = Array.isArray(sessions) && sessions.length
+    ? sessions
+        .map((s) => ({
+          id: s.id,
+          label: s.label || SESSION_LABELS[s.id] || s.id,
+          i0: Math.max(0, (s.i0 ?? 0) - start),
+          i1: Math.min(view.length - 1, (s.i1 ?? 0) - start),
+        }))
+        .filter((s) => s.i1 >= 0 && s.i0 < view.length && s.i1 >= s.i0)
+    : buildSessionSegmentsFromPoints(view);
+
+  if (!segs.length) {
+    segs = [{ id: "regular", label: "盘中", i0: 0, i1: view.length - 1 }];
+  }
+
+  const bands = segs
+    .map((s) => {
+      const x0 = padX + s.i0 * stepX - stepX * 0.35;
+      const x1 = padX + s.i1 * stepX + stepX * 0.35;
+      const w = Math.max(2, x1 - x0);
+      const fill = SESSION_BAND_COLORS[s.id] || "rgba(128,128,128,0.08)";
+      const midX = x0 + w / 2;
+      const label = escapeHtml(s.label || "");
+      return `
+        <rect x="${x0.toFixed(2)}" y="${padTop}" width="${w.toFixed(
+          2
+        )}" height="${plotH}" fill="${fill}"></rect>
+        <text x="${midX.toFixed(2)}" y="${(padTop - 5).toFixed(
+          1
+        )}" text-anchor="middle" fill="${themeMutedFill()}" font-size="8.5" font-weight="600">${label}</text>
+      `;
+    })
+    .join("");
+
+  const dividers = segs
+    .slice(1)
+    .map((s) => {
+      const x = padX + s.i0 * stepX;
+      return `<line x1="${x.toFixed(2)}" y1="${padTop}" x2="${x.toFixed(
+        2
+      )}" y2="${(padTop + plotH).toFixed(
+        2
+      )}" stroke="rgba(148,163,184,0.35)" stroke-width="1" stroke-dasharray="3 3"></line>`;
+    })
+    .join("");
+
+  const prevLine =
+    prev != null
+      ? `<line x1="${padX}" y1="${yOf(prev).toFixed(2)}" x2="${
+          width - padX
+        }" y2="${yOf(prev).toFixed(
+          2
+        )}" stroke="rgba(148,163,184,0.55)" stroke-width="1" stroke-dasharray="4 3"></line>`
+      : "";
+
+  const line = coords
+    .map(([x, y], i) => `${i === 0 ? "M" : "L"}${x.toFixed(2)},${y.toFixed(2)}`)
+    .join(" ");
+  const area = `${line} L${coords[coords.length - 1][0].toFixed(2)},${(
+    padTop + plotH
+  ).toFixed(2)} L${coords[0][0].toFixed(2)},${(padTop + plotH).toFixed(2)} Z`;
+  const stroke = up ? TAPE_UP : TAPE_DOWN;
+  const fill = up ? TAPE_UP_SOFT : TAPE_DOWN_SOFT;
+
+  const footLabels = segs
+    .map((s) => {
+      const midX = padX + ((s.i0 + s.i1) / 2) * stepX;
+      return `<text x="${midX.toFixed(2)}" y="${(height - 4).toFixed(
+        1
+      )}" text-anchor="middle" fill="${themeMutedFill()}" font-size="7.5">${escapeHtml(
+        s.label || ""
+      )}</text>`;
+    })
+    .join("");
+
+  return `
+    <svg class="session-intraday-svg" viewBox="0 0 ${width} ${height}" preserveAspectRatio="none" role="img" aria-label="盘前盘中盘后夜盘一体分时">
+      ${bands}
+      ${dividers}
+      ${prevLine}
+      <path d="${area}" fill="${fill}"></path>
+      <path d="${line}" fill="none" stroke="${stroke}" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round"></path>
+      ${footLabels}
+    </svg>
+  `;
+}
+
 function sanitizeCandleBars(points) {
   const bars = (points || []).filter((p) => {
     if (!p) return false;
@@ -615,6 +810,14 @@ function paintZoomableChart(key) {
         maLegendHtml(active.length ? active : MA_PERIODS)
       );
     }
+  } else if (tf === "intraday") {
+    stage.innerHTML = renderSessionIntradaySvg(points, {
+      up,
+      viewStart: z.start,
+      viewEnd: z.start + z.count,
+      sessions: meta.sessions,
+      previousClose: meta.previousClose,
+    });
   } else {
     stage.innerHTML = renderChartSvg(points, {
       up,
@@ -624,11 +827,24 @@ function paintZoomableChart(key) {
   }
 }
 
-function bindZoomableChart(canvasEl, { key, scope, points, tf, kind, up }) {
+function bindZoomableChart(
+  canvasEl,
+  { key, scope, points, tf, kind, up, sessions = null, previousClose = null }
+) {
   if (!canvasEl) return;
   const list = points || [];
   const len = list.length;
-  chartZoomData.set(key, { root: canvasEl, points: list, tf, kind, up, scope, len });
+  chartZoomData.set(key, {
+    root: canvasEl,
+    points: list,
+    tf,
+    kind,
+    up,
+    scope,
+    len,
+    sessions,
+    previousClose,
+  });
   ensureChartZoom(key, scope, len, tf, kind);
   const z = state.chartZoom[key];
   const full = defaultChartZoom(len, tf, kind);
@@ -1156,6 +1372,8 @@ function renderPortfolioChart() {
     tf,
     kind,
     up,
+    sessions: series?.sessions || null,
+    previousClose: series?.previous_close ?? null,
   });
 }
 
@@ -4107,6 +4325,10 @@ function renderSectorPickChart() {
       }`
     : "";
   const maNote = MA_CHART_TFS.has(tf) ? " · 含均线" : "";
+  const sessionNote =
+    tf === "intraday"
+      ? ` · ${(series?.session_labels || []).length ? (series.session_labels || []).join("·") : "盘前·盘中·盘后·夜盘"}一体分时`
+      : "";
   els.sectorPickChart.innerHTML = `
     <div class="chart-head">
       <h3>${escapeHtml(pick.name || pick.label || "")} · ${escapeHtml(
@@ -4134,7 +4356,7 @@ function renderSectorPickChart() {
       )}">${escapeHtml(pctText(pick.month_change_pct))}</span></span>
     </div>
     <div class="chart-canvas" data-zoom-host="sector"></div>
-    <div class="chart-foot">红涨绿跌${maNote} · 所属 ${escapeHtml(
+    <div class="chart-foot">红涨绿跌${maNote}${sessionNote} · 所属 ${escapeHtml(
       pick.sector_label || "板块"
     )}${escapeHtml(earnNote)} · 捏合缩放</div>
   `;
@@ -4145,6 +4367,8 @@ function renderSectorPickChart() {
     tf,
     kind,
     up,
+    sessions: series?.sessions || null,
+    previousClose: series?.previous_close ?? null,
   });
   renderMonthPanel(pick);
   renderStockEarnings(data.selected_earnings || pick.earnings, pick);

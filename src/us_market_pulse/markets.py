@@ -3,12 +3,22 @@
 from __future__ import annotations
 
 import asyncio
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any
 from urllib.parse import quote
+from zoneinfo import ZoneInfo
 
 import httpx
 
+_ET = ZoneInfo("America/New_York")
+
+# Full extended session cycle labels (ET)
+_SESSION_META: list[dict[str, str]] = [
+    {"id": "night", "label": "夜盘"},
+    {"id": "pre", "label": "盘前"},
+    {"id": "regular", "label": "盘中"},
+    {"id": "post", "label": "盘后"},
+]
 INDEX_SPECS: list[dict[str, str]] = [
     {
         "id": "spx",
@@ -48,12 +58,13 @@ TIMEFRAMES: list[dict[str, Any]] = [
     {
         "id": "intraday",
         "label": "分时",
-        "blurb": "当日分时（含盘前盘后，约 5 分钟点，延迟报价）",
-        "range": "1d",
+        "blurb": "盘前·盘中·盘后·夜盘一体分时（约 5 分钟点，延迟报价）",
+        "range": "5d",
         "interval": "5m",
-        "max_points": 160,
+        "max_points": 360,
         "chart": "line",
         "prepost": True,
+        "session_window": True,
     },
     {
         "id": "day",
@@ -105,12 +116,13 @@ PORTFOLIO_TIMEFRAMES: list[dict[str, Any]] = [
     {
         "id": "intraday",
         "label": "分时",
-        "blurb": "当日分时（含盘前盘后，约 5 分钟点，延迟报价）",
-        "range": "1d",
+        "blurb": "盘前·盘中·盘后·夜盘一体分时（约 5 分钟点，延迟报价）",
+        "range": "5d",
         "interval": "5m",
-        "max_points": 160,
+        "max_points": 360,
         "chart": "line",
         "prepost": True,
+        "session_window": True,
     },
     {
         "id": "day",
@@ -146,14 +158,114 @@ PORTFOLIO_TIMEFRAMES: list[dict[str, Any]] = [
 
 
 def _yahoo_chart_url(
-    symbol: str, *, range_: str, interval: str, prepost: bool
+    symbol: str,
+    *,
+    range_: str,
+    interval: str,
+    prepost: bool,
+    period1: int | None = None,
+    period2: int | None = None,
 ) -> str:
     enc = quote(symbol, safe="")
     flag = "true" if prepost else "false"
-    return (
-        f"https://query1.finance.yahoo.com/v8/finance/chart/{enc}"
-        f"?range={range_}&interval={interval}&includePrePost={flag}"
+    base = f"https://query1.finance.yahoo.com/v8/finance/chart/{enc}"
+    if period1 is not None and period2 is not None and period2 > period1:
+        return (
+            f"{base}?period1={int(period1)}&period2={int(period2)}"
+            f"&interval={interval}&includePrePost={flag}"
+        )
+    return f"{base}?range={range_}&interval={interval}&includePrePost={flag}"
+
+
+def _et_minutes(dt: datetime) -> int:
+    return dt.hour * 60 + dt.minute
+
+
+def _session_id_for_ts(ts: int) -> str:
+    """Map unix ts → night / pre / regular / post (America/New_York)."""
+    dt = datetime.fromtimestamp(int(ts), tz=_ET)
+    mins = _et_minutes(dt)
+    if mins >= 20 * 60 or mins < 4 * 60:
+        return "night"
+    if mins < 9 * 60 + 30:
+        return "pre"
+    if mins < 16 * 60:
+        return "regular"
+    return "post"
+
+
+def _session_cycle_bounds(
+    now: datetime | None = None,
+) -> tuple[datetime, datetime]:
+    """
+    Current extended cycle: prior 20:00 ET → now.
+    Covers 夜盘 → 盘前 → 盘中 → 盘后 as one continuous window.
+    """
+    now_et = now.astimezone(_ET) if now else datetime.now(tz=_ET)
+    today_open_night = now_et.replace(hour=20, minute=0, second=0, microsecond=0)
+    if now_et >= today_open_night:
+        start = today_open_night
+    else:
+        start = today_open_night - timedelta(days=1)
+    # Weekend: if start lands Sat/Sun night into Mon pre, still fine —
+    # Yahoo simply returns available bars.
+    return start, now_et
+
+
+def _filter_session_window(
+    points: list[dict[str, Any]],
+    *,
+    start_ts: int,
+    end_ts: int,
+) -> list[dict[str, Any]]:
+    out: list[dict[str, Any]] = []
+    for p in points:
+        try:
+            t = int(p.get("t") or 0)
+        except (TypeError, ValueError):
+            continue
+        if t < start_ts or t > end_ts:
+            continue
+        row = dict(p)
+        row["session"] = _session_id_for_ts(t)
+        out.append(row)
+    return out
+
+
+def _session_segments(points: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Build contiguous session bands for the frontend (index ranges)."""
+    if not points:
+        return []
+    label_map = {s["id"]: s["label"] for s in _SESSION_META}
+    segs: list[dict[str, Any]] = []
+    cur = points[0].get("session") or "regular"
+    start_i = 0
+    for i, p in enumerate(points):
+        sid = p.get("session") or "regular"
+        if sid != cur:
+            segs.append(
+                {
+                    "id": cur,
+                    "label": label_map.get(cur, cur),
+                    "i0": start_i,
+                    "i1": i - 1,
+                    "t0": points[start_i].get("t"),
+                    "t1": points[i - 1].get("t"),
+                }
+            )
+            cur = sid
+            start_i = i
+    segs.append(
+        {
+            "id": cur,
+            "label": label_map.get(cur, cur),
+            "i0": start_i,
+            "i1": len(points) - 1,
+            "t0": points[start_i].get("t"),
+            "t1": points[-1].get("t"),
+        }
     )
+    return segs
 
 
 def _nth(values: list[Any] | None, idx: int) -> float | None:
@@ -237,31 +349,74 @@ async def _fetch_yahoo_series(
     spec: dict[str, str],
     tf: dict[str, Any],
 ) -> tuple[dict[str, Any] | None, str | None]:
-    url = _yahoo_chart_url(
-        spec["symbol"],
-        range_=tf["range"],
-        interval=tf["interval"],
-        prepost=bool(tf.get("prepost")),
-    )
-    try:
-        resp = await client.get(
-            url,
-            timeout=25.0,
-            headers={
-                "User-Agent": "Mozilla/5.0 (compatible; PulseDesk/1.0)",
-                "Accept": "application/json",
-            },
+    period1 = period2 = None
+    use_session = bool(tf.get("session_window") and tf.get("chart") == "line")
+    if use_session:
+        start_et, end_et = _session_cycle_bounds()
+        # Pad start slightly so first overnight bars aren't clipped by Yahoo
+        period1 = int((start_et - timedelta(hours=1)).timestamp())
+        period2 = int((end_et + timedelta(minutes=5)).timestamp())
+
+    headers = {
+        "User-Agent": (
+            "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+            "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
+        ),
+        "Accept": "application/json,text/plain,*/*",
+        "Accept-Language": "en-US,en;q=0.9",
+        "Origin": "https://finance.yahoo.com",
+        "Referer": "https://finance.yahoo.com/",
+    }
+
+    urls: list[str] = []
+    if period1 is not None and period2 is not None:
+        urls.append(
+            _yahoo_chart_url(
+                spec["symbol"],
+                range_=tf["range"],
+                interval=tf["interval"],
+                prepost=bool(tf.get("prepost")),
+                period1=period1,
+                period2=period2,
+            )
         )
-        resp.raise_for_status()
-        payload = resp.json()
-        result = ((payload.get("chart") or {}).get("result") or [None])[0]
+    urls.append(
+        _yahoo_chart_url(
+            spec["symbol"],
+            range_=tf["range"],
+            interval=tf["interval"],
+            prepost=bool(tf.get("prepost")),
+        )
+    )
+
+    try:
+        result = None
+        last_err: str | None = None
+        for url in urls:
+            try:
+                resp = await client.get(url, timeout=25.0, headers=headers)
+                resp.raise_for_status()
+                payload = resp.json()
+                result = ((payload.get("chart") or {}).get("result") or [None])[0]
+                if result:
+                    break
+                last_err = f"{spec['label']}/{tf['label']}: empty chart"
+            except Exception as exc:  # noqa: BLE001
+                last_err = f"{spec['label']}/{tf['label']}: {exc}"
+                result = None
         if not result:
-            return None, f"{spec['label']}/{tf['label']}: empty chart"
+            return None, last_err or f"{spec['label']}/{tf['label']}: empty chart"
 
         meta = result.get("meta") or {}
         timestamps = result.get("timestamp") or []
         quote_block = ((result.get("indicators") or {}).get("quote") or [{}])[0]
         chart = str(tf.get("chart") or "line")
+        # For session-window intraday, compact after filtering so we keep density
+        raw_cap = (
+            max(int(tf.get("max_points") or 120) * 3, 800)
+            if use_session
+            else int(tf.get("max_points") or 120)
+        )
         points = _compact_bars(
             timestamps,
             quote_block.get("open"),
@@ -269,9 +424,29 @@ async def _fetch_yahoo_series(
             quote_block.get("low"),
             quote_block.get("close"),
             quote_block.get("volume"),
-            max_points=int(tf.get("max_points") or 120),
+            max_points=raw_cap,
             chart=chart,
         )
+        sessions: list[dict[str, Any]] = []
+        if use_session and points:
+            start_et, end_et = _session_cycle_bounds()
+            points = _filter_session_window(
+                points,
+                start_ts=int(start_et.timestamp()),
+                end_ts=int(end_et.timestamp()) + 300,
+            )
+            # Final density cap after window filter
+            max_pts = int(tf.get("max_points") or 360)
+            if len(points) > max_pts:
+                step = max(1, len(points) // max_pts)
+                trimmed = points[::step]
+                if trimmed[-1] is not points[-1]:
+                    trimmed.append(points[-1])
+                points = trimmed[:max_pts]
+                for p in points:
+                    p["session"] = _session_id_for_ts(int(p["t"]))
+            sessions = _session_segments(points)
+
         if not points:
             return None, f"{spec['label']}/{tf['label']}: no points"
 
@@ -286,7 +461,11 @@ async def _fetch_yahoo_series(
             day_change = round(float(price) - float(prev), 4)
             day_change_pct = round((float(price) - float(prev)) / float(prev) * 100.0, 3)
 
-        return {
+        # For composite 分时, prefer vs prior close when available (matches list %)
+        if use_session and day_change_pct is not None:
+            change, change_pct = day_change, day_change_pct
+
+        out: dict[str, Any] = {
             "tf": tf["id"],
             "label": tf["label"],
             "blurb": tf["blurb"],
@@ -300,7 +479,22 @@ async def _fetch_yahoo_series(
             "day_change": day_change,
             "day_change_pct": day_change_pct,
             "as_of": meta.get("regularMarketTime") or points[-1]["t"],
-        }, None
+            "previous_close": round(float(prev), 6) if prev not in (None, 0) else None,
+        }
+        if sessions:
+            out["sessions"] = sessions
+            present = {s["id"] for s in sessions}
+            out["session_labels"] = [
+                s["label"] for s in _SESSION_META if s["id"] in present
+            ]
+        elif use_session:
+            # Still advertise the four sessions even if Yahoo only returned one band
+            out["session_labels"] = [s["label"] for s in _SESSION_META]
+            for p in points:
+                if "session" not in p:
+                    p["session"] = _session_id_for_ts(int(p["t"]))
+            out["sessions"] = _session_segments(points)
+        return out, None
     except Exception as exc:  # noqa: BLE001
         return None, f"{spec['label']}/{tf['label']}: {exc}"
 
@@ -368,7 +562,7 @@ async def fetch_symbol_bundle(
             errors.append(err)
         if not row:
             continue
-        series[tf["id"]] = {
+        series_row: dict[str, Any] = {
             "tf": row["tf"],
             "label": row["label"],
             "blurb": row["blurb"],
@@ -379,6 +573,13 @@ async def fetch_symbol_bundle(
             "change": row["change"],
             "change_pct": row["change_pct"],
         }
+        if row.get("sessions"):
+            series_row["sessions"] = row["sessions"]
+        if row.get("session_labels"):
+            series_row["session_labels"] = row["session_labels"]
+        if row.get("previous_close") is not None:
+            series_row["previous_close"] = row["previous_close"]
+        series[tf["id"]] = series_row
         if quote_seed is None or tf["id"] == "intraday":
             quote_seed = row
 

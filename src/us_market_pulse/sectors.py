@@ -29,12 +29,13 @@ _INTRADAY_TF = next(
     {
         "id": "intraday",
         "label": "分时",
-        "blurb": "当日分时",
-        "range": "1d",
+        "blurb": "盘前·盘中·盘后·夜盘一体分时",
+        "range": "5d",
         "interval": "5m",
-        "max_points": 96,
+        "max_points": 360,
         "chart": "line",
         "prepost": True,
+        "session_window": True,
     },
 )
 _pick_fetch_sem: asyncio.Semaphore | None = None
