@@ -73,6 +73,8 @@ const els = {
   portfolioAddForm: document.getElementById("portfolio-add-form"),
   portfolioSymbol: document.getElementById("portfolio-symbol"),
   portfolioName: document.getElementById("portfolio-name"),
+  portfolioSymbolSuggest: document.getElementById("portfolio-symbol-suggest"),
+  portfolioLookupHint: document.getElementById("portfolio-lookup-hint"),
   portfolioRemove: document.getElementById("btn-portfolio-remove"),
   portfolioRefresh: document.getElementById("btn-portfolio-refresh"),
   portfolioExport: document.getElementById("btn-portfolio-export"),
@@ -2468,15 +2470,84 @@ els.portfolioAddForm?.addEventListener("submit", async (event) => {
     const data = await portfolioPost("/api/portfolio/add", { symbol, name });
     if (els.portfolioSymbol) els.portfolioSymbol.value = "";
     if (els.portfolioName) els.portfolioName.value = "";
+    if (els.portfolioLookupHint) {
+      els.portfolioLookupHint.hidden = true;
+      els.portfolioLookupHint.textContent = "";
+    }
     state.portfolioTf = "intraday";
     state.portfolioPreview = null;
     const portfolio = await ensurePortfolioSelection(data.portfolio);
     renderPortfolio(portfolio);
+    const resolved = data.resolved || {};
+    if (els.portfolioBlurb && resolved.symbol) {
+      els.portfolioBlurb.textContent = `已添加 ${resolved.name || resolved.symbol}（${resolved.symbol}）`;
+    }
   } catch (err) {
     if (els.portfolioBlurb) {
       els.portfolioBlurb.textContent = `添加失败：${err.message || err}`;
     }
   }
+});
+
+let portfolioLookupTimer = 0;
+async function refreshPortfolioLookup(q) {
+  if (!els.portfolioSymbolSuggest && !els.portfolioLookupHint) return;
+  const query = (q || "").trim();
+  if (!query) {
+    if (els.portfolioSymbolSuggest) els.portfolioSymbolSuggest.innerHTML = "";
+    if (els.portfolioLookupHint) {
+      els.portfolioLookupHint.hidden = true;
+      els.portfolioLookupHint.textContent = "";
+    }
+    return;
+  }
+  try {
+    const res = await fetch(
+      `/api/portfolio/lookup?q=${encodeURIComponent(query)}&limit=8`
+    );
+    if (!res.ok) return;
+    const data = await res.json();
+    const suggestions = data.suggestions || [];
+    if (els.portfolioSymbolSuggest) {
+      els.portfolioSymbolSuggest.innerHTML = suggestions
+        .map((row) => {
+          const label = row.label || `${row.name || ""} · ${row.symbol || ""}`;
+          // Prefer filling the Chinese/name query path when user typed CJK
+          const value = /[\u4e00-\u9fff]/.test(query)
+            ? row.name || row.symbol
+            : row.symbol;
+          return `<option value="${escapeHtml(value)}" label="${escapeHtml(
+            label
+          )}"></option>`;
+        })
+        .join("");
+    }
+    if (els.portfolioLookupHint) {
+      const hit = data.resolved;
+      if (hit?.symbol) {
+        els.portfolioLookupHint.hidden = false;
+        els.portfolioLookupHint.textContent = `将添加：${hit.name || hit.symbol}（${hit.symbol}）`;
+      } else if (suggestions.length) {
+        els.portfolioLookupHint.hidden = false;
+        els.portfolioLookupHint.textContent = `候选 ${suggestions
+          .slice(0, 3)
+          .map((s) => s.symbol)
+          .join(" / ")}`;
+      } else {
+        els.portfolioLookupHint.hidden = true;
+        els.portfolioLookupHint.textContent = "";
+      }
+    }
+  } catch {
+    /* ignore lookup errors */
+  }
+}
+
+els.portfolioSymbol?.addEventListener("input", () => {
+  clearTimeout(portfolioLookupTimer);
+  portfolioLookupTimer = setTimeout(() => {
+    refreshPortfolioLookup(els.portfolioSymbol?.value || "");
+  }, 180);
 });
 
 els.portfolioRemove?.addEventListener("click", async () => {

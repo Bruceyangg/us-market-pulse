@@ -141,17 +141,37 @@ def normalize_symbol(raw: Any) -> str:
     return symbol
 
 
+def resolve_and_normalize(raw: Any) -> tuple[str, str]:
+    """Return (symbol, canonical_name) from ticker or Chinese/English name."""
+    from us_market_pulse.symbol_lookup import resolve_holding_query
+
+    hit = resolve_holding_query(str(raw or ""))
+    if not hit:
+        return "", ""
+    symbol = normalize_symbol(hit.get("symbol"))
+    if not symbol:
+        return "", ""
+    return symbol, str(hit.get("name") or symbol)
+
+
 def add_holding(
     username: str, symbol: str, *, name: str = "", note: str = ""
 ) -> dict[str, Any]:
-    symbol = normalize_symbol(symbol)
-    if not symbol:
-        raise ValueError("代码无效。请输入美股代码，如 AAPL、NVDA、TSLA。")
+    resolved_symbol, canonical_name = resolve_and_normalize(symbol)
+    if not resolved_symbol:
+        # Fall back to strict ticker-only for unknown ASCII codes
+        resolved_symbol = normalize_symbol(symbol)
+    if not resolved_symbol:
+        raise ValueError(
+            "无法识别。可输入美股代码（如 AAPL）或中文名（如 苹果 / 亚马逊 / 英伟达）。"
+        )
+    symbol = resolved_symbol
+    display_name = (name or canonical_name or symbol).strip()[:40]
     data = load_portfolio(username)
     holdings = data["holdings"]
     for row in holdings:
         if row["symbol"] == symbol:
-            row["name"] = (name or row["name"] or symbol).strip()[:40]
+            row["name"] = display_name or row["name"] or symbol
             row["note"] = (note if note is not None else row.get("note") or "").strip()[
                 :80
             ]
@@ -162,7 +182,7 @@ def add_holding(
     holdings.append(
         {
             "symbol": symbol,
-            "name": (name or symbol).strip()[:40],
+            "name": display_name or symbol,
             "note": (note or "").strip()[:80],
             "added_at": time.time(),
         }

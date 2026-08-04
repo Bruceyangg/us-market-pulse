@@ -43,6 +43,7 @@ from us_market_pulse.earnings_calendar import (
 )
 from us_market_pulse.market_map import build_market_map
 from us_market_pulse.sectors import build_sector_desk
+from us_market_pulse.symbol_lookup import resolve_holding_query, suggest_holdings
 from us_market_pulse.topics import build_war_desk
 from us_market_pulse.portfolio import (
     add_holding,
@@ -50,6 +51,7 @@ from us_market_pulse.portfolio import (
     load_portfolio,
     remove_holding,
     replace_holdings,
+    resolve_and_normalize,
     select_holding,
 )
 from us_market_pulse.portfolio_intel import summarize_holding_intel
@@ -443,6 +445,21 @@ async def api_push_test(
     return await send_digest(force_refresh=True, settings=settings, slot="manual")
 
 
+@app.get("/api/portfolio/lookup")
+async def api_portfolio_lookup(
+    q: str = Query(default=""),
+    limit: int = Query(default=8, ge=1, le=20),
+) -> dict[str, Any]:
+    query = (q or "").strip()
+    resolved = resolve_holding_query(query) if query else None
+    return {
+        "ok": True,
+        "q": query,
+        "resolved": resolved,
+        "suggestions": suggest_holdings(query, limit=limit) if query else [],
+    }
+
+
 @app.get("/api/portfolio")
 async def api_portfolio(
     request: Request, refresh: bool = Query(default=False)
@@ -456,13 +473,27 @@ async def api_portfolio(
 @app.post("/api/portfolio/add")
 async def api_portfolio_add(request: Request, body: HoldingIn) -> dict[str, Any]:
     username = require_user(request)
+    symbol, canonical = resolve_and_normalize(body.symbol)
     try:
-        add_holding(username, body.symbol, name=body.name or "", note=body.note or "")
+        if not symbol:
+            raise ValueError(
+                "无法识别。可输入美股代码（如 AAPL）或中文名（如 苹果 / 亚马逊 / 英伟达）。"
+            )
+        add_holding(
+            username,
+            symbol,
+            name=body.name or canonical or "",
+            note=body.note or "",
+        )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     view = await build_portfolio_view(username, force_refresh=True)
     view["user"] = current_user(request)
-    return {"ok": True, "portfolio": view}
+    return {
+        "ok": True,
+        "portfolio": view,
+        "resolved": {"symbol": symbol, "name": canonical or symbol},
+    }
 
 
 @app.post("/api/portfolio/remove")

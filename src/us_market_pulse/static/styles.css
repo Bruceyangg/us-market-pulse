@@ -1364,6 +1364,14 @@ body {
   background: rgba(255, 255, 255, 0.75);
 }
 
+.portfolio-lookup-hint {
+  margin: 0.25rem 0 0;
+  font-size: 0.72rem;
+  color: var(--sky);
+  font-weight: 650;
+  line-height: 1.35;
+}
+
 #btn-portfolio-manage.is-open {
   border-color: rgba(47, 111, 159, 0.35);
   background: rgba(47, 111, 159, 0.08);

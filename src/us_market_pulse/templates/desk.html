@@ -57,12 +57,22 @@
         <div class="portfolio-manage" id="portfolio-manage" hidden>
           <form class="portfolio-add" id="portfolio-add-form">
             <label>
-              <span>股票代码</span>
-              <input id="portfolio-symbol" name="symbol" type="text" placeholder="如 AAPL / NVDA / TSLA" autocomplete="off" required />
+              <span>代码 / 中文名</span>
+              <input
+                id="portfolio-symbol"
+                name="symbol"
+                type="text"
+                list="portfolio-symbol-suggest"
+                placeholder="AAPL 或 苹果 / 亚马逊 / 英伟达"
+                autocomplete="off"
+                required
+              />
+              <datalist id="portfolio-symbol-suggest"></datalist>
+              <p class="portfolio-lookup-hint" id="portfolio-lookup-hint" hidden></p>
             </label>
             <label>
               <span>备注名（可选）</span>
-              <input id="portfolio-name" name="name" type="text" placeholder="苹果" autocomplete="off" />
+              <input id="portfolio-name" name="name" type="text" placeholder="自定义备注" autocomplete="off" />
             </label>
             <button class="btn primary" type="submit">添加持仓</button>
             <button class="btn ghost" id="btn-portfolio-remove" type="button">删除当前</button>
