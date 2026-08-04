@@ -1640,6 +1640,7 @@ body {
 }
 
 .portfolio-chart .chart-canvas > svg,
+.portfolio-chart .chart-zoom-stage > svg,
 .portfolio-chart > svg {
   width: 100%;
   height: 260px;
@@ -1694,6 +1695,7 @@ body {
   }
 
   .portfolio-chart .chart-canvas > svg,
+  .portfolio-chart .chart-zoom-stage > svg,
   .portfolio-chart > svg {
     height: 200px;
     min-height: 180px;
@@ -2799,6 +2801,69 @@ body {
   min-height: 18rem;
 }
 
+.chart-zoom {
+  position: relative;
+  width: 100%;
+  outline: none;
+  touch-action: none;
+  overscroll-behavior: contain;
+}
+
+.chart-zoom-controls {
+  position: absolute;
+  top: 0.35rem;
+  right: 0.35rem;
+  z-index: 3;
+  display: flex;
+  gap: 0.28rem;
+}
+
+.chart-zoom-btn {
+  width: 1.7rem;
+  height: 1.7rem;
+  border-radius: 0.45rem;
+  border: 1px solid color-mix(in srgb, var(--line) 80%, transparent);
+  background: color-mix(in srgb, var(--panel) 88%, transparent);
+  color: var(--ink);
+  font-size: 1rem;
+  font-weight: 700;
+  line-height: 1;
+  display: inline-grid;
+  place-items: center;
+  cursor: pointer;
+  backdrop-filter: blur(8px);
+  box-shadow: 0 4px 14px color-mix(in srgb, #000 12%, transparent);
+}
+
+.chart-zoom-btn:hover {
+  border-color: color-mix(in srgb, var(--accent, #2f6f9f) 55%, var(--line));
+  color: var(--accent, #2f6f9f);
+}
+
+.chart-zoom-btn:active {
+  transform: translateY(1px);
+}
+
+.chart-zoom-btn.is-hidden {
+  display: none;
+}
+
+.chart-zoom-reset {
+  font-size: 0.72rem;
+  font-weight: 750;
+  width: auto;
+  min-width: 1.7rem;
+  padding: 0 0.35rem;
+}
+
+.chart-zoom-stage {
+  width: 100%;
+}
+
+.chart-zoom.is-zoomed .chart-zoom-stage > svg {
+  cursor: grab;
+}
+
 .ma-legend {
   display: flex;
   flex-wrap: wrap;
@@ -2834,7 +2899,8 @@ body {
   overflow: visible;
 }
 
-.sector-chart .chart-canvas > svg {
+.sector-chart .chart-canvas > svg,
+.sector-chart .chart-zoom-stage > svg {
   width: 100%;
   height: min(38vh, 280px);
   max-height: 280px;
@@ -2842,10 +2908,18 @@ body {
 }
 
 .portfolio-chart .chart-canvas > svg,
-.chart-card .chart-canvas > svg {
+.portfolio-chart .chart-zoom-stage > svg,
+.chart-card .chart-canvas > svg,
+.chart-card .chart-zoom-stage > svg {
   width: 100%;
   height: 180px;
   display: block;
+}
+
+.portfolio-chart .chart-zoom-stage > svg {
+  height: 260px;
+  min-height: 210px;
+  flex: 1 1 auto;
 }
 
 .sector-chart .chart-head h3 {
@@ -3107,6 +3181,7 @@ body {
   }
 
   .sector-chart .chart-canvas > svg,
+  .sector-chart .chart-zoom-stage > svg,
   .sector-chart > svg {
     height: 200px;
     max-height: 200px;

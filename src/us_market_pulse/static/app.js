@@ -40,7 +40,13 @@ const state = {
   earningsDate: "",
   earningsSession: "all",
   earningsQ: "",
+  chartZoom: {},
+  chartZoomScope: {},
 };
+
+const CHART_ZOOM_MIN_BARS = 12;
+const CHART_ZOOM_STEP = 1.22;
+const chartZoomData = new Map();
 
 const PORTFOLIO_TF_KEYS = ["intraday", "day", "month", "quarter", "year"];
 const PAGE = document.body?.dataset?.page || "desk";
@@ -286,14 +292,90 @@ function maLegendHtml(activePeriods = MA_PERIODS) {
     .join("")}</div>`;
 }
 
-function renderChartSvg(points, { up = true } = {}) {
+function clamp(n, lo, hi) {
+  return Math.min(hi, Math.max(lo, n));
+}
+
+function normalizeChartZoom(z, len) {
+  const count = clamp(
+    Math.round(z?.count ?? len),
+    Math.min(CHART_ZOOM_MIN_BARS, len),
+    Math.max(2, len)
+  );
+  const start = clamp(Math.round(z?.start ?? 0), 0, Math.max(0, len - count));
+  return { start, count };
+}
+
+function ensureChartZoom(key, scope, len) {
+  if (state.chartZoomScope[key] !== scope) {
+    state.chartZoomScope[key] = scope;
+    state.chartZoom[key] = { start: 0, count: len };
+  }
+  state.chartZoom[key] = normalizeChartZoom(state.chartZoom[key], len);
+  return state.chartZoom[key];
+}
+
+function zoomChartWindow(key, factor, pivot = 0.5) {
+  const meta = chartZoomData.get(key);
+  if (!meta) return;
+  const len = meta.len;
+  const z = normalizeChartZoom(state.chartZoom[key], len);
+  if (factor === 1 || len <= CHART_ZOOM_MIN_BARS) {
+    state.chartZoom[key] = { start: 0, count: len };
+    paintZoomableChart(key);
+    return;
+  }
+  const pivotIdx = z.start + pivot * z.count;
+  const nextCount = clamp(
+    Math.round(z.count / factor),
+    Math.min(CHART_ZOOM_MIN_BARS, len),
+    len
+  );
+  const nextStart = clamp(
+    Math.round(pivotIdx - pivot * nextCount),
+    0,
+    Math.max(0, len - nextCount)
+  );
+  state.chartZoom[key] = { start: nextStart, count: nextCount };
+  paintZoomableChart(key);
+}
+
+function panChartWindow(key, deltaBars) {
+  const meta = chartZoomData.get(key);
+  if (!meta || !deltaBars) return;
+  const len = meta.len;
+  const z = normalizeChartZoom(state.chartZoom[key], len);
+  if (z.count >= len) return;
+  state.chartZoom[key] = {
+    start: clamp(z.start + deltaBars, 0, len - z.count),
+    count: z.count,
+  };
+  paintZoomableChart(key);
+}
+
+function chartZoomControlsHtml(zoomed) {
+  return `
+    <div class="chart-zoom-controls" role="group" aria-label="图表缩放">
+      <button type="button" class="chart-zoom-btn" data-zoom-act="out" title="缩小" aria-label="缩小">−</button>
+      <button type="button" class="chart-zoom-btn" data-zoom-act="in" title="放大" aria-label="放大">+</button>
+      <button type="button" class="chart-zoom-btn chart-zoom-reset${
+        zoomed ? "" : " is-hidden"
+      }" data-zoom-act="reset" title="重置" aria-label="重置缩放">1×</button>
+    </div>
+  `;
+}
+
+function renderChartSvg(points, { up = true, viewStart = 0, viewEnd = null } = {}) {
   const width = 320;
   const height = 140;
   const padX = 8;
   const padY = 12;
-  const vals = (points || [])
+  const all = (points || [])
     .map((p) => Number(p.v ?? p.c))
     .filter((v) => !Number.isNaN(v));
+  const end = viewEnd == null ? all.length : Math.min(all.length, viewEnd);
+  const start = clamp(viewStart, 0, Math.max(0, end));
+  const vals = all.slice(start, end);
   if (vals.length < 2) {
     return `<svg viewBox="0 0 ${width} ${height}" role="img" aria-label="暂无走势"><text x="16" y="72" fill="${themeMutedFill()}" font-size="13">暂无走势数据</text></svg>`;
   }
@@ -320,7 +402,10 @@ function renderChartSvg(points, { up = true } = {}) {
   `;
 }
 
-function renderCandleSvg(points, { showMa = false } = {}) {
+function renderCandleSvg(
+  points,
+  { showMa = false, viewStart = 0, viewEnd = null } = {}
+) {
   const width = 320;
   const height = 150;
   const padX = 8;
@@ -333,25 +418,32 @@ function renderCandleSvg(points, { showMa = false } = {}) {
   if (bars.length < 2) {
     return `<svg viewBox="0 0 ${width} ${height}" role="img" aria-label="暂无K线"><text x="16" y="78" fill="${themeMutedFill()}" font-size="13">暂无K线数据</text></svg>`;
   }
+  const end = viewEnd == null ? bars.length : Math.min(bars.length, viewEnd);
+  const start = clamp(viewStart, 0, Math.max(0, end));
+  const viewBars = bars.slice(start, end);
+  if (viewBars.length < 2) {
+    return `<svg viewBox="0 0 ${width} ${height}" role="img" aria-label="暂无K线"><text x="16" y="78" fill="${themeMutedFill()}" font-size="13">暂无K线数据</text></svg>`;
+  }
+
   const closes = bars.map((b) => Number(b.c));
   const maLines = showMa
     ? MA_PERIODS.map((m) => ({
         ...m,
-        values: smaSeries(closes, m.n),
+        values: smaSeries(closes, m.n).slice(start, end),
       })).filter((m) => m.values.some((v) => v != null))
     : [];
 
-  const highs = bars.map((b) => Number(b.h));
-  const lows = bars.map((b) => Number(b.l));
+  const highs = viewBars.map((b) => Number(b.h));
+  const lows = viewBars.map((b) => Number(b.l));
   const maVals = maLines.flatMap((m) => m.values.filter((v) => v != null));
   const min = Math.min(...lows, ...(maVals.length ? maVals : [Infinity]));
   const max = Math.max(...highs, ...(maVals.length ? maVals : [-Infinity]));
   const span = max - min || 1;
-  const slot = (width - padX * 2) / bars.length;
+  const slot = (width - padX * 2) / viewBars.length;
   const bodyW = Math.max(1.2, Math.min(7, slot * 0.62));
   const yOf = (price) => padY + (1 - (price - min) / span) * (height - padY * 2);
 
-  const shapes = bars
+  const shapes = viewBars
     .map((b, i) => {
       const o = Number(b.o);
       const h = Number(b.h);
@@ -410,15 +502,126 @@ function renderCandleSvg(points, { showMa = false } = {}) {
   `;
 }
 
-function candleChartHtml(points, tf) {
+function candleChartHtml(points, tf, zoom = null) {
   const showMa = MA_CHART_TFS.has(tf);
-  const svg = renderCandleSvg(points, { showMa });
+  const svg = renderCandleSvg(points, {
+    showMa,
+    viewStart: zoom?.start ?? 0,
+    viewEnd: zoom ? zoom.start + zoom.count : null,
+  });
   if (!showMa) return svg;
   const closes = (points || [])
     .map((p) => Number(p?.c))
     .filter((v) => !Number.isNaN(v));
   const active = MA_PERIODS.filter((m) => closes.length >= m.n);
   return `${svg}${maLegendHtml(active.length ? active : MA_PERIODS)}`;
+}
+
+function paintZoomableChart(key) {
+  const meta = chartZoomData.get(key);
+  if (!meta?.root) return;
+  const { points, tf, kind, up, root } = meta;
+  const len = meta.len;
+  const z = ensureChartZoom(key, meta.scope, len);
+  const stage = root.querySelector(".chart-zoom-stage");
+  const resetBtn = root.querySelector('[data-zoom-act="reset"]');
+  if (!stage) return;
+  const zoomed = z.count < len;
+  if (resetBtn) resetBtn.classList.toggle("is-hidden", !zoomed);
+  root.classList.toggle("is-zoomed", zoomed);
+  if (kind === "candle") {
+    stage.innerHTML = candleChartHtml(points, tf, z);
+  } else {
+    stage.innerHTML = renderChartSvg(points, {
+      up,
+      viewStart: z.start,
+      viewEnd: z.start + z.count,
+    });
+  }
+}
+
+function bindZoomableChart(canvasEl, { key, scope, points, tf, kind, up }) {
+  if (!canvasEl) return;
+  const list = points || [];
+  const len = list.length;
+  chartZoomData.set(key, { root: canvasEl, points: list, tf, kind, up, scope, len });
+  ensureChartZoom(key, scope, len);
+  const z = state.chartZoom[key];
+  const zoomed = z.count < len;
+  canvasEl.innerHTML = `
+    <div class="chart-zoom" data-zoom-key="${escapeHtml(key)}" tabindex="0" aria-label="可缩放图表：触控板捏合或使用角落按钮">
+      ${chartZoomControlsHtml(zoomed)}
+      <div class="chart-zoom-stage"></div>
+    </div>
+  `;
+  paintZoomableChart(key);
+
+  const zoomRoot = canvasEl.querySelector(".chart-zoom");
+  if (!zoomRoot) return;
+
+  zoomRoot.addEventListener("click", (event) => {
+    const btn = event.target.closest("[data-zoom-act]");
+    if (!btn || !zoomRoot.contains(btn)) return;
+    const act = btn.getAttribute("data-zoom-act");
+    if (act === "in") zoomChartWindow(key, CHART_ZOOM_STEP, 0.85);
+    else if (act === "out") zoomChartWindow(key, 1 / CHART_ZOOM_STEP, 0.85);
+    else if (act === "reset") zoomChartWindow(key, 1);
+  });
+
+  zoomRoot.addEventListener(
+    "wheel",
+    (event) => {
+      const absX = Math.abs(event.deltaX);
+      const absY = Math.abs(event.deltaY);
+      // Trackpad pinch → ctrl/meta + wheel (Chrome/Safari/Firefox on macOS).
+      if (event.ctrlKey || event.metaKey) {
+        event.preventDefault();
+        event.stopPropagation();
+        const rect = zoomRoot.getBoundingClientRect();
+        const pivot =
+          rect.width > 0 ? clamp((event.clientX - rect.left) / rect.width, 0, 1) : 0.85;
+        const intensity = Math.exp(-event.deltaY * 0.01);
+        zoomChartWindow(key, intensity, pivot);
+        return;
+      }
+      const z = normalizeChartZoom(state.chartZoom[key], chartZoomData.get(key)?.len || 0);
+      const metaNow = chartZoomData.get(key);
+      if (!metaNow || z.count >= metaNow.len) return;
+      if (absX > absY && absX > 2) {
+        event.preventDefault();
+        event.stopPropagation();
+        const step = Math.max(1, Math.round(z.count * 0.04));
+        panChartWindow(key, event.deltaX > 0 ? step : -step);
+      }
+    },
+    { passive: false }
+  );
+
+  // Safari legacy gesture events (pinch).
+  let gestureScale = 1;
+  zoomRoot.addEventListener(
+    "gesturestart",
+    (event) => {
+      event.preventDefault();
+      gestureScale = 1;
+    },
+    { passive: false }
+  );
+  zoomRoot.addEventListener(
+    "gesturechange",
+    (event) => {
+      event.preventDefault();
+      const next = Number(event.scale) || 1;
+      const factor = next / gestureScale;
+      gestureScale = next;
+      if (!Number.isFinite(factor) || Math.abs(factor - 1) < 0.01) return;
+      const rect = zoomRoot.getBoundingClientRect();
+      const pivot =
+        rect.width > 0 ? clamp((event.clientX - rect.left) / rect.width, 0, 1) : 0.85;
+      zoomChartWindow(key, factor, pivot);
+    },
+    { passive: false }
+  );
 }
 
 function activeMarketTf(data) {
@@ -780,10 +983,6 @@ function renderPortfolioChart() {
     series?.chart || meta.chart || (tf === "intraday" ? "line" : "candle");
   const stats = seriesStats(points, kind);
   const price = board.price != null ? board.price : stats.last;
-  const svg =
-    kind === "candle"
-      ? candleChartHtml(points, tf)
-      : renderChartSvg(points, { up });
 
   els.portfolioChart.classList.remove("is-empty");
   els.portfolioChart.classList.toggle("is-preview", Boolean(preview));
@@ -813,11 +1012,19 @@ function renderPortfolioChart() {
         formatCompact(stats.volume)
       )}</span></span>
     </div>
-    <div class="chart-canvas">${svg}</div>
+    <div class="chart-canvas" data-zoom-host="portfolio"></div>
     <div class="chart-foot">${escapeHtml(
       series?.blurb || meta.blurb || ""
-    )} · 红涨绿跌 · 延迟报价</div>
+    )} · 红涨绿跌 · 延迟报价 · 捏合缩放</div>
   `;
+  bindZoomableChart(els.portfolioChart.querySelector("[data-zoom-host]"), {
+    key: "portfolio",
+    scope: `${board.symbol || ""}:${tf}`,
+    points,
+    tf,
+    kind,
+    up,
+  });
 }
 
 function holdingsCountNote(data, meta) {
@@ -3085,10 +3292,6 @@ function renderSectorPickChart() {
   const kind =
     series?.chart || (tf === "intraday" ? "line" : "candle");
   const stats = seriesStats(points, kind);
-  const svg =
-    kind === "candle"
-      ? candleChartHtml(points, tf)
-      : renderChartSvg(points, { up });
   const earn = data.selected_earnings || pick.earnings || {};
   const earnNote = earn.next_earnings_label
     ? ` · 财报 ${earn.next_earnings_label}${
@@ -3124,11 +3327,19 @@ function renderSectorPickChart() {
         pick.month_change_pct
       )}">${escapeHtml(pctText(pick.month_change_pct))}</span></span>
     </div>
-    <div class="chart-canvas">${svg}</div>
+    <div class="chart-canvas" data-zoom-host="sector"></div>
     <div class="chart-foot">红涨绿跌${maNote} · 所属 ${escapeHtml(
       pick.sector_label || "板块"
-    )}${escapeHtml(earnNote)}</div>
+    )}${escapeHtml(earnNote)} · 捏合缩放</div>
   `;
+  bindZoomableChart(els.sectorPickChart.querySelector("[data-zoom-host]"), {
+    key: "sector",
+    scope: `${pick.symbol || ""}:${tf}`,
+    points,
+    tf,
+    kind,
+    up,
+  });
   renderMonthPanel(pick);
   renderStockEarnings(data.selected_earnings || pick.earnings, pick);
   renderMoveAnalysis(pick);
@@ -3863,6 +4074,7 @@ function bindStickyNavChrome() {
     (event) => {
       if (PAGE === "login" || wheelLocked) return;
       if (isEditableTarget(event.target)) return;
+      if (event.target.closest?.(".chart-zoom")) return;
       const absX = Math.abs(event.deltaX);
       const absY = Math.abs(event.deltaY);
       if (absX < 18 || absX <= absY) {
