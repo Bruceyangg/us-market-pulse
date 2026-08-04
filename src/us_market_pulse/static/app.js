@@ -37,7 +37,7 @@ const state = {
   sectorCache: {},
   sectorId: "",
   sectorSymbol: "",
-  sectorTf: "day",
+  sectorTf: "intraday",
   sectorPrefetchTimer: null,
   earnings: null,
   earningsDate: "",
@@ -3970,11 +3970,34 @@ function renderMoveAnalysis(pick) {
   `;
 }
 
+function resolveSectorChartSeries(pick, preferredTf) {
+  const seriesMap = pick?.series || {};
+  const order = [preferredTf, "intraday", "day", "month", "quarter"].filter(
+    (tf, idx, arr) => tf && arr.indexOf(tf) === idx
+  );
+  for (const tf of order) {
+    const series = seriesMap[tf];
+    const raw = series?.points || (tf === "intraday" ? pick?.points || [] : []);
+    const kind = series?.chart || (tf === "intraday" ? "line" : "candle");
+    const points =
+      kind === "candle" ? sanitizeCandleBars(raw) : (raw || []).filter(Boolean);
+    if (points.length >= 2) {
+      return { tf, series: series || { chart: kind, points: raw }, points, kind };
+    }
+  }
+  return {
+    tf: preferredTf || "intraday",
+    series: null,
+    points: [],
+    kind: preferredTf === "intraday" ? "line" : "candle",
+  };
+}
+
 function renderSectorPickChart() {
   if (!els.sectorPickChart) return;
   const data = state.sectors || {};
   const pick = data.selected_pick;
-  const tf = state.sectorTf || "intraday";
+  let tf = state.sectorTf || "intraday";
   if (els.sectorTfFilters) {
     els.sectorTfFilters.querySelectorAll("[data-stf]").forEach((btn) => {
       const on = btn.getAttribute("data-stf") === tf;
@@ -3991,12 +4014,25 @@ function renderSectorPickChart() {
     renderSymbolNewsFeed(data);
     return;
   }
-  const series = pick.series?.[tf];
-  const rawPoints = series?.points || [];
-  const kind =
-    series?.chart || (tf === "intraday" ? "line" : "candle");
-  const points =
-    kind === "candle" ? sanitizeCandleBars(rawPoints) : rawPoints;
+  const resolved = resolveSectorChartSeries(pick, tf);
+  // If preferred TF is empty but another has data, switch to it so the chart shows
+  if (resolved.points.length >= 2 && resolved.tf !== tf) {
+    // Keep user's TF button state, but render available data with a note — or auto-switch
+    if (!(pick.series && pick.series[tf]?.points?.length >= 2)) {
+      tf = resolved.tf;
+      state.sectorTf = tf;
+      if (els.sectorTfFilters) {
+        els.sectorTfFilters.querySelectorAll("[data-stf]").forEach((btn) => {
+          const on = btn.getAttribute("data-stf") === tf;
+          btn.classList.toggle("is-active", on);
+          btn.setAttribute("aria-selected", on ? "true" : "false");
+        });
+      }
+    }
+  }
+  const series = resolved.series;
+  const points = resolved.points;
+  const kind = resolved.kind;
   if (points.length < 2) {
     els.sectorPickChart.innerHTML = `
       <div class="chart-head">
@@ -4004,7 +4040,7 @@ function renderSectorPickChart() {
           pick.symbol || ""
         )}</h3>
       </div>
-      <p class="chart-placeholder">该周期暂无走势数据，试试切换分时 / 日图</p>
+      <p class="chart-placeholder">加载走势中… 若一直空白请点刷新</p>
     `;
     renderMonthPanel(pick);
     renderStockEarnings(data.selected_earnings || pick.earnings, pick);

@@ -541,6 +541,10 @@ def _pick_has_chart(row: dict[str, Any] | None) -> bool:
     return len(month.get("points") or []) >= 2
 
 
+def _bundle_has_full_chart(bundle: dict[str, Any] | None) -> bool:
+    return _pick_has_chart(bundle)
+
+
 def _spark_points_from_row(row: dict[str, Any] | None) -> list[dict[str, Any]]:
     """Prefer 24h intraday line points for list sparklines."""
     if not row:
@@ -654,16 +658,16 @@ async def _fetch_intraday_spark(
     sym = (symbol or "").strip().upper()
     if not sym:
         return []
-    cache_key = f"quote:{sym}"
-    cached = _SYM_CACHE.get(cache_key)
-    if (
-        not force
-        and cached
-        and time.time() - float(cached.get("fetched_at") or 0) < _SYM_TTL
-    ):
-        spark = _spark_points_from_row(cached.get("bundle"))
-        if spark:
-            return spark
+    # Prefer full quote cache, then dedicated spark cache — never poison quote cache
+    quote_cached = _SYM_CACHE.get(f"quote:{sym}") or {}
+    spark_cached = _SYM_CACHE.get(f"spark:{sym}") or {}
+    if not force:
+        for cached in (quote_cached, spark_cached):
+            if time.time() - float(cached.get("fetched_at") or 0) >= _SYM_TTL:
+                continue
+            spark = _spark_points_from_row(cached.get("bundle") or cached)
+            if spark:
+                return spark
     async with _get_pick_sem():
         bundle, _errs = await fetch_symbol_bundle(
             client,
@@ -673,29 +677,42 @@ async def _fetch_intraday_spark(
             timeframes=[dict(_INTRADAY_TF, max_points=96)],
             include_yearly=False,
         )
-    if bundle:
-        # Keep a lightweight cache entry so later full-chart fetches can reuse spark
-        existing = _SYM_CACHE.get(cache_key) or {}
-        prev = existing.get("bundle") if isinstance(existing.get("bundle"), dict) else {}
-        merged = dict(prev or {})
-        merged.update(
-            {
-                "symbol": sym,
-                "points": bundle.get("points") or [],
-                "change_pct": bundle.get("change_pct", merged.get("change_pct")),
-                "price": bundle.get("price", merged.get("price")),
-            }
-        )
-        series = dict(merged.get("series") or {})
-        series["intraday"] = (bundle.get("series") or {}).get("intraday") or {
-            "chart": "line",
-            "points": bundle.get("points") or [],
+    if not bundle:
+        return []
+    spark = _spark_points_from_row(bundle)
+    _SYM_CACHE[f"spark:{sym}"] = {
+        "bundle": {
+            "symbol": sym,
+            "points": spark,
             "change_pct": bundle.get("change_pct"),
+            "series": {
+                "intraday": {
+                    "chart": "line",
+                    "points": spark,
+                    "change_pct": bundle.get("change_pct"),
+                }
+            },
+        },
+        "fetched_at": time.time(),
+    }
+    # If a full quote already exists, only refresh its intraday slice
+    full = quote_cached.get("bundle")
+    if isinstance(full, dict) and _bundle_has_full_chart(full):
+        series = dict(full.get("series") or {})
+        series["intraday"] = {
+            "chart": "line",
+            "points": spark,
+            "change_pct": bundle.get("change_pct", full.get("change_pct")),
         }
-        merged["series"] = series
-        _SYM_CACHE[cache_key] = {"bundle": merged, "fetched_at": time.time()}
-        return _spark_points_from_row(merged)
-    return []
+        full = dict(full)
+        full["series"] = series
+        if not full.get("points"):
+            full["points"] = spark[-48:]
+        _SYM_CACHE[f"quote:{sym}"] = {
+            "bundle": full,
+            "fetched_at": quote_cached.get("fetched_at") or time.time(),
+        }
+    return spark
 
 
 async def _hydrate_list_intraday_sparks(
@@ -896,6 +913,7 @@ async def _fetch_quote(
         not force
         and cached
         and time.time() - float(cached.get("fetched_at") or 0) < _SYM_TTL
+        and _bundle_has_full_chart(cached.get("bundle"))
     ):
         return cached.get("bundle"), []
     bundle, errs = await fetch_symbol_bundle(
@@ -906,7 +924,7 @@ async def _fetch_quote(
         timeframes=SECTOR_TIMEFRAMES,
         include_yearly=False,
     )
-    if bundle:
+    if bundle and _bundle_has_full_chart(bundle):
         _SYM_CACHE[cache_key] = {"bundle": bundle, "fetched_at": time.time()}
     return bundle, errs
 
@@ -1733,7 +1751,7 @@ async def build_sector_desk(
     pick_rows: list[dict[str, Any]] = []
     pick_errors: list[str] = []
     earnings_by_symbol: dict[str, Any] = {}
-    picks_key = f"{sector_id}:{'|'.join(pick_symbols)}"
+    picks_key = f"v2:{sector_id}:{'|'.join(pick_symbols)}"
     picks_cached = _PICKS_CACHE.get(sector_id) or {}
     picks_fresh = (
         not force
@@ -1795,23 +1813,24 @@ async def build_sector_desk(
     # Skip per-symbol earnings here — Yahoo quoteSummary can take 20s+ and blocks the desk.
     selected_pick = next((p for p in pick_rows if p.get("symbol") == selected), None)
     need_selected_chart = bool(selected) and not _pick_has_chart(selected_pick)
-    already_tried = bool(selected_pick and selected_pick.get("chart_attempted"))
-    if selected and need_selected_chart and (not already_tried or force):
+    # Always (re)fetch when the selected row lacks day/month charts. Do not let a
+    # prior chart_attempted / intraday-only spark cache block the full desk chart.
+    if selected and need_selected_chart:
         try:
             async with httpx.AsyncClient(
                 headers=yahoo_headers,
                 follow_redirects=True,
                 trust_env=False,
-                timeout=httpx.Timeout(6.0, connect=2.5),
+                timeout=httpx.Timeout(8.0, connect=2.5),
             ) as client:
                 bundle, errs = await asyncio.wait_for(
                     _fetch_quote_limited(client, selected, selected, force=force),
-                    timeout=6.0,
+                    timeout=8.0,
                 )
         except (asyncio.TimeoutError, httpx.HTTPError) as exc:
             bundle, errs = None, [f"{selected}: chart timeout ({exc.__class__.__name__})"]
         pick_errors.extend(errs)
-        if bundle:
+        if bundle and _bundle_has_full_chart(bundle):
             vc = _value_chain_for(selected)
             rs = _relative_strength(bundle, home_etf)
             wave = _momentum_fields(bundle)
@@ -1846,7 +1865,6 @@ async def build_sector_desk(
                 pick_rows.insert(0, rich)
             selected_pick = rich
         else:
-            # Remember failure so warm cache hits stay instant
             for row in pick_rows:
                 if row.get("symbol") == selected:
                     row["chart_attempted"] = True
