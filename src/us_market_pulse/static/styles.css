@@ -3145,10 +3145,10 @@ html[data-theme="dark"] .sector-pick-list .sector-hold-btn.is-held:hover {
   border-radius: 16px;
   background: var(--elevated);
   box-shadow: var(--shadow);
-  padding: 0.75rem 0.85rem 0.9rem;
+  padding: 0.7rem 0.8rem 0.8rem;
   display: flex;
   flex-direction: column;
-  gap: 0.6rem;
+  gap: 0.45rem;
   max-height: none;
   overflow: visible;
 }
@@ -3158,8 +3158,8 @@ html[data-theme="dark"] .sector-pick-list .sector-hold-btn.is-held:hover {
 }
 
 .sectors-chart-sticky > .sector-chart {
-  flex: 1 1 auto;
-  min-height: 22rem;
+  flex: 0 0 auto;
+  min-height: 0;
   max-height: none;
   overflow: visible;
 }
@@ -3182,8 +3182,8 @@ html[data-theme="dark"] .sector-pick-list .sector-hold-btn.is-held:hover {
   display: grid;
   gap: 0.45rem;
   min-width: 0;
-  flex: 1 1 auto;
-  min-height: 8rem;
+  flex: 0 0 auto;
+  min-height: 0;
   position: relative;
   z-index: 2;
 }
@@ -3193,9 +3193,9 @@ html[data-theme="dark"] .sector-pick-list .sector-hold-btn.is-held:hover {
 }
 
 .symbol-news-block .spotlight-list.compact {
-  max-height: none;
-  overflow: visible;
-  flex: 1 1 auto;
+  max-height: 11rem;
+  overflow: auto;
+  flex: 0 0 auto;
 }
 
 .stock-earnings,
@@ -3360,8 +3360,9 @@ html[data-theme="dark"] .sector-pick-list .sector-hold-btn.is-held:hover {
   box-shadow: none;
   padding: 0;
   max-height: none;
-  min-height: 22rem;
+  min-height: 0;
   overflow: visible;
+  gap: 0.25rem;
 }
 
 .chart-zoom {
@@ -3471,9 +3472,9 @@ html[data-theme="dark"] .sector-pick-list .sector-hold-btn.is-held:hover {
 .sector-chart .chart-canvas > svg,
 .sector-chart .chart-zoom-stage > svg {
   width: 100%;
-  height: min(48vh, 380px);
-  max-height: 380px;
-  min-height: 260px;
+  height: min(34vh, 260px);
+  max-height: 260px;
+  min-height: 180px;
   display: block;
 }
 
@@ -3507,13 +3508,19 @@ html[data-theme="dark"] .sector-pick-list .sector-hold-btn.is-held:hover {
 
 .sector-chart .portfolio-stats {
   grid-template-columns: repeat(5, minmax(0, 1fr));
-  padding: 0.45rem 0.55rem;
-  margin-bottom: 0.35rem;
+  padding: 0.35rem 0.5rem;
+  margin-bottom: 0.15rem;
 }
 
 .sector-chart .chart-foot {
-  font-size: 0.74rem;
+  font-size: 0.72rem;
   color: var(--ink-soft);
+  margin-top: 0.1rem;
+}
+
+.sector-chart .ma-legend {
+  margin-top: 0.15rem;
+  margin-bottom: 0;
 }
 
 .sectors-intel-pane {

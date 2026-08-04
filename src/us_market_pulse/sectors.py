@@ -24,6 +24,19 @@ from us_market_pulse.topics import TOPICS, filter_topic_items, topic_bearish_ana
 
 # Cap concurrent Yahoo chart fetches per sector switch
 _MAX_SECTOR_PICKS = 28
+_INTRADAY_TF = next(
+    (tf for tf in PORTFOLIO_TIMEFRAMES if tf["id"] == "intraday"),
+    {
+        "id": "intraday",
+        "label": "分时",
+        "blurb": "当日分时",
+        "range": "1d",
+        "interval": "5m",
+        "max_points": 96,
+        "chart": "line",
+        "prepost": True,
+    },
+)
 _pick_fetch_sem: asyncio.Semaphore | None = None
 
 
@@ -517,21 +530,76 @@ _SYM_TTL = 180.0
 
 
 def _pick_has_chart(row: dict[str, Any] | None) -> bool:
+    """True when the row has a full desk chart (day+), not only a 24h list spark."""
     if not row:
         return False
     series = row.get("series") or {}
-    return bool(series.get("intraday") or series.get("day") or row.get("points"))
+    day = series.get("day") if isinstance(series.get("day"), dict) else {}
+    if len(day.get("points") or []) >= 2:
+        return True
+    month = series.get("month") if isinstance(series.get("month"), dict) else {}
+    return len(month.get("points") or []) >= 2
+
+
+def _spark_points_from_row(row: dict[str, Any] | None) -> list[dict[str, Any]]:
+    """Prefer 24h intraday line points for list sparklines."""
+    if not row:
+        return []
+    series = row.get("series") or {}
+    intra = series.get("intraday") if isinstance(series.get("intraday"), dict) else {}
+    pts = list((intra or {}).get("points") or [])
+    if not pts:
+        pts = list(row.get("points") or [])
+    out: list[dict[str, Any]] = []
+    for p in pts:
+        if not isinstance(p, dict):
+            continue
+        if p.get("v") is not None:
+            out.append({"t": p.get("t"), "v": p.get("v")})
+        elif p.get("c") is not None:
+            out.append({"t": p.get("t"), "v": p.get("c")})
+    return out[-64:]
+
+
+def _apply_intraday_spark(
+    row: dict[str, Any],
+    points: list[dict[str, Any]],
+    *,
+    change_pct: float | None = None,
+) -> None:
+    spark = list(points or [])[-64:]
+    if not spark:
+        return
+    row["points"] = spark[-48:]
+    series = dict(row.get("series") or {})
+    series["intraday"] = {
+        "chart": "line",
+        "points": spark,
+        "change_pct": change_pct
+        if change_pct is not None
+        else row.get("change_pct"),
+    }
+    row["series"] = series
 
 
 def _slim_pick_row(row: dict[str, Any], selected: str) -> dict[str, Any]:
-    """Strip heavy multi-TF series from list rows; keep full chart for selection."""
+    """Strip heavy multi-TF series from list rows; keep 24h spark + full selected chart."""
     out = dict(row)
     sym = str(out.get("symbol") or "").upper()
     if sym == selected and _pick_has_chart(out):
         return out
-    points = list(out.get("points") or [])[:48]
-    out["points"] = points
+    spark = _spark_points_from_row(out)
+    intra = (out.get("series") or {}).get("intraday")
+    intra_pct = (
+        intra.get("change_pct")
+        if isinstance(intra, dict) and intra.get("change_pct") is not None
+        else out.get("change_pct")
+    )
     out["series"] = {}
+    if spark:
+        _apply_intraday_spark(out, spark, change_pct=intra_pct)
+    else:
+        out["points"] = []
     out["lite"] = True
     # Drop bulky nested blobs from wire payload
     earn = out.get("earnings")
@@ -557,6 +625,112 @@ def _slim_sector_etf(row: dict[str, Any]) -> dict[str, Any]:
     out = {k: v for k, v in row.items() if k != "series"}
     out["points"] = list(row.get("points") or [])[:64]
     return out
+
+
+def _hydrate_sparks_from_cache(pick_rows: list[dict[str, Any]]) -> None:
+    for row in pick_rows:
+        if _spark_points_from_row(row):
+            continue
+        sym = str(row.get("symbol") or "").upper()
+        cached = _SYM_CACHE.get(f"quote:{sym}") or {}
+        bundle = cached.get("bundle")
+        spark = _spark_points_from_row(bundle if isinstance(bundle, dict) else None)
+        if spark:
+            _apply_intraday_spark(
+                row,
+                spark,
+                change_pct=(bundle or {}).get("change_pct")
+                if isinstance(bundle, dict)
+                else row.get("change_pct"),
+            )
+
+
+async def _fetch_intraday_spark(
+    client: httpx.AsyncClient,
+    symbol: str,
+    *,
+    force: bool = False,
+) -> list[dict[str, Any]]:
+    sym = (symbol or "").strip().upper()
+    if not sym:
+        return []
+    cache_key = f"quote:{sym}"
+    cached = _SYM_CACHE.get(cache_key)
+    if (
+        not force
+        and cached
+        and time.time() - float(cached.get("fetched_at") or 0) < _SYM_TTL
+    ):
+        spark = _spark_points_from_row(cached.get("bundle"))
+        if spark:
+            return spark
+    async with _get_pick_sem():
+        bundle, _errs = await fetch_symbol_bundle(
+            client,
+            symbol=sym,
+            label=sym,
+            short=sym,
+            timeframes=[dict(_INTRADAY_TF, max_points=96)],
+            include_yearly=False,
+        )
+    if bundle:
+        # Keep a lightweight cache entry so later full-chart fetches can reuse spark
+        existing = _SYM_CACHE.get(cache_key) or {}
+        prev = existing.get("bundle") if isinstance(existing.get("bundle"), dict) else {}
+        merged = dict(prev or {})
+        merged.update(
+            {
+                "symbol": sym,
+                "points": bundle.get("points") or [],
+                "change_pct": bundle.get("change_pct", merged.get("change_pct")),
+                "price": bundle.get("price", merged.get("price")),
+            }
+        )
+        series = dict(merged.get("series") or {})
+        series["intraday"] = (bundle.get("series") or {}).get("intraday") or {
+            "chart": "line",
+            "points": bundle.get("points") or [],
+            "change_pct": bundle.get("change_pct"),
+        }
+        merged["series"] = series
+        _SYM_CACHE[cache_key] = {"bundle": merged, "fetched_at": time.time()}
+        return _spark_points_from_row(merged)
+    return []
+
+
+async def _hydrate_list_intraday_sparks(
+    client: httpx.AsyncClient,
+    pick_rows: list[dict[str, Any]],
+    *,
+    force: bool = False,
+    limit: int = 18,
+) -> None:
+    """Fill 24h list sparklines without waiting on full multi-TF charts."""
+    _hydrate_sparks_from_cache(pick_rows)
+    missing = [
+        str(r.get("symbol") or "").upper()
+        for r in pick_rows
+        if str(r.get("symbol") or "") and not _spark_points_from_row(r)
+    ][: max(1, min(limit, _MAX_SECTOR_PICKS))]
+    if not missing:
+        return
+
+    async def one(sym: str) -> tuple[str, list[dict[str, Any]]]:
+        try:
+            pts = await asyncio.wait_for(
+                _fetch_intraday_spark(client, sym, force=force),
+                timeout=3.5,
+            )
+            return sym, pts
+        except (asyncio.TimeoutError, httpx.HTTPError):
+            return sym, []
+
+    results = await asyncio.gather(*(one(sym) for sym in missing))
+    by_sym = {sym: pts for sym, pts in results if pts}
+    for row in pick_rows:
+        sym = str(row.get("symbol") or "").upper()
+        if sym in by_sym:
+            _apply_intraday_spark(row, by_sym[sym], change_pct=row.get("change_pct"))
 
 
 async def _fetch_quote_limited(
@@ -1679,6 +1853,26 @@ async def build_sector_desk(
                     break
             if selected_pick is not None:
                 selected_pick["chart_attempted"] = True
+
+    # List column always shows 24h sparklines (independent of day/month/quarter desk TF).
+    try:
+        async with httpx.AsyncClient(
+            headers=yahoo_headers,
+            follow_redirects=True,
+            trust_env=False,
+            timeout=httpx.Timeout(4.0, connect=2.0),
+        ) as spark_client:
+            await asyncio.wait_for(
+                _hydrate_list_intraday_sparks(
+                    spark_client,
+                    pick_rows,
+                    force=force,
+                    limit=min(18, len(pick_rows) or 1),
+                ),
+                timeout=5.0,
+            )
+    except (asyncio.TimeoutError, httpx.HTTPError):
+        _hydrate_sparks_from_cache(pick_rows)
 
     if pick_rows:
         pick_rows.sort(

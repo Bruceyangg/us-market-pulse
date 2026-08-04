@@ -893,15 +893,25 @@ function pctSparkBar(pct) {
 }
 
 function holdingSparkSvg(holding, tf) {
-  const series = holding?.series?.[tf];
-  const points = series?.points || holding?.points || [];
-  const kind = series?.chart || (tf === "intraday" ? "line" : "candle");
+  const want = tf || "intraday";
+  const series = holding?.series?.[want];
+  // Sector list always prefers 24h points even if other TF series exist
+  const points =
+    want === "intraday"
+      ? series?.points ||
+        holding?.series?.intraday?.points ||
+        holding?.points ||
+        []
+      : series?.points || holding?.points || [];
+  const kind = series?.chart || (want === "intraday" ? "line" : "candle");
   const pct =
-    series?.change_pct != null
-      ? series.change_pct
-      : holdingTfPct(holding, tf) != null
-        ? holdingTfPct(holding, tf)
-        : holding?.change_pct;
+    want === "intraday"
+      ? holding?.change_pct ?? series?.change_pct
+      : series?.change_pct != null
+        ? series.change_pct
+        : holdingTfPct(holding, want) != null
+          ? holdingTfPct(holding, want)
+          : holding?.change_pct;
   const up = !(typeof pct === "number" && pct < 0);
   if (kind === "candle") {
     return (
@@ -3520,8 +3530,9 @@ function sectorCachePut(id, data) {
 function pickHasChart(pick) {
   const series = pick?.series || {};
   const day = series.day?.points || [];
-  const intra = series.intraday?.points || [];
-  return day.length >= 2 || intra.length >= 2;
+  const month = series.month?.points || [];
+  // Require multi-TF desk chart — list sparklines alone are not enough
+  return day.length >= 2 || month.length >= 2;
 }
 
 function openSectorDesk(id, { scroll = true } = {}) {
@@ -4141,7 +4152,8 @@ function renderSectorPicks(data) {
     } else {
       els.sectorPickList.innerHTML = picks
         .map((pick) => {
-          const pct = holdingTfPct(pick, tf);
+          // List tape is always day % + 24h spark — independent of desk TF tabs
+          const pct = pick.change_pct;
           const on = pick.symbol === selected;
           const held = isInHoldings(pick.symbol);
           return `
@@ -4167,7 +4179,7 @@ function renderSectorPicks(data) {
                     pick.sector_label || "板块"
                   )} · 月 ${escapeHtml(pctText(pick.month_change_pct))}</span>
                 </span>
-                <span class="spark-wrap">${holdingSparkSvg(pick, "month")}</span>
+                <span class="spark-wrap">${holdingSparkSvg(pick, "intraday")}</span>
                 <span class="price ${pctClass(pct)}">${escapeHtml(
                   pick.price == null ? "—" : formatNumber(pick.price, "")
                 )}</span>
