@@ -2704,8 +2704,10 @@ function renderSectorEtfs(sectors) {
                 : ""
           }</span>
           <span class="chip-meta">
-            <span class="chg ${pctClass(pct)}">${escapeHtml(pctText(pct))}</span>
-            <span>月 ${escapeHtml(pctText(month))}</span>
+            <span>
+              <span class="chg ${pctClass(pct)}">${escapeHtml(pctText(pct))}</span>
+              <span>月 ${escapeHtml(pctText(month))}</span>
+            </span>
             ${
               spark
                 ? `<span class="chip-spark" aria-hidden="true"><svg viewBox="0 0 42 16" preserveAspectRatio="none"><path d="${spark}" fill="none" stroke="${stroke}" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"></path></svg></span>`
