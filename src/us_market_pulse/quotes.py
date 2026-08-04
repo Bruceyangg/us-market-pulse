@@ -299,17 +299,25 @@ async def fetch_nasdaq_intraday_many(
 
     out: dict[str, dict[str, Any]] = {}
     sem = asyncio.Semaphore(max(1, concurrency))
+    uniq = []
+    seen: set[str] = set()
+    for raw in symbols:
+        sym = str(raw or "").upper().strip()
+        if sym and sym not in seen:
+            seen.add(sym)
+            uniq.append(sym)
+    if not uniq:
+        return out
 
-    async def one(sym: str) -> None:
-        async with sem:
-            async with httpx.AsyncClient(follow_redirects=True, trust_env=False) as client:
+    async with httpx.AsyncClient(follow_redirects=True, trust_env=False) as client:
+
+        async def one(sym: str) -> None:
+            async with sem:
                 row = await fetch_nasdaq_intraday(
                     client, sym, max_points=max_points
                 )
-            if row and row.get("points"):
-                out[sym.upper()] = row
+                if row and row.get("points"):
+                    out[sym] = row
 
-    await asyncio.gather(
-        *[one(str(s).upper().strip()) for s in symbols if str(s).strip()]
-    )
+        await asyncio.gather(*(one(s) for s in uniq))
     return out

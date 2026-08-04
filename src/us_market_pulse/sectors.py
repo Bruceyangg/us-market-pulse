@@ -2097,7 +2097,7 @@ async def build_sector_desk(
                     force=force,
                     limit=min(18, len(pick_rows) or 1),
                 ),
-                timeout=5.0,
+                timeout=14.0,
             )
     except (asyncio.TimeoutError, httpx.HTTPError):
         _hydrate_sparks_from_cache(pick_rows)
