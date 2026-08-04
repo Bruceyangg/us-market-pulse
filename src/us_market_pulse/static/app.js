@@ -29,6 +29,7 @@ const state = {
   portfolioSort: { key: "change_pct", dir: "desc" },
   portfolioPreview: null,
   portfolioSelectBusy: false,
+  holdingSymbols: null,
   holdingsOnly: false,
   holdingFilter: "",
   holdingIntel: null,
@@ -48,6 +49,14 @@ const state = {
 
 const CHART_ZOOM_MIN_BARS = 12;
 const CHART_ZOOM_STEP = 1.22;
+/** Default visible bars for dense candle series so K-lines stay readable. */
+const CHART_DEFAULT_VISIBLE = {
+  day: 90,
+  week: 80,
+  month: 72,
+  quarter: 64,
+  year: 60,
+};
 const chartZoomData = new Map();
 
 const PORTFOLIO_TF_KEYS = ["intraday", "day", "month", "quarter", "year"];
@@ -309,6 +318,16 @@ function clamp(n, lo, hi) {
   return Math.min(hi, Math.max(lo, n));
 }
 
+function defaultChartZoom(len, tf, kind) {
+  const n = Math.max(2, len || 0);
+  if (kind !== "candle" || n <= 96) {
+    return { start: 0, count: n };
+  }
+  const prefer = CHART_DEFAULT_VISIBLE[tf] || 90;
+  const count = Math.min(n, Math.max(CHART_ZOOM_MIN_BARS, prefer));
+  return { start: Math.max(0, n - count), count };
+}
+
 function normalizeChartZoom(z, len) {
   const count = clamp(
     Math.round(z?.count ?? len),
@@ -319,10 +338,10 @@ function normalizeChartZoom(z, len) {
   return { start, count };
 }
 
-function ensureChartZoom(key, scope, len) {
+function ensureChartZoom(key, scope, len, tf = "day", kind = "candle") {
   if (state.chartZoomScope[key] !== scope) {
     state.chartZoomScope[key] = scope;
-    state.chartZoom[key] = { start: 0, count: len };
+    state.chartZoom[key] = defaultChartZoom(len, tf, kind);
   }
   state.chartZoom[key] = normalizeChartZoom(state.chartZoom[key], len);
   return state.chartZoom[key];
@@ -334,7 +353,7 @@ function zoomChartWindow(key, factor, pivot = 0.5) {
   const len = meta.len;
   const z = normalizeChartZoom(state.chartZoom[key], len);
   if (factor === 1 || len <= CHART_ZOOM_MIN_BARS) {
-    state.chartZoom[key] = { start: 0, count: len };
+    state.chartZoom[key] = defaultChartZoom(len, meta.tf, meta.kind);
     paintZoomableChart(key);
     return;
   }
@@ -415,6 +434,32 @@ function renderChartSvg(points, { up = true, viewStart = 0, viewEnd = null } = {
   `;
 }
 
+function sanitizeCandleBars(points) {
+  const bars = (points || []).filter((p) => {
+    if (!p) return false;
+    const o = Number(p.o);
+    const h = Number(p.h);
+    const l = Number(p.l);
+    const c = Number(p.c);
+    if (![o, h, l, c].every((n) => Number.isFinite(n) && n > 0)) return false;
+    if (h < l || o > h * 1.05 || c > h * 1.05 || o < l * 0.95 || c < l * 0.95) {
+      return false;
+    }
+    return true;
+  });
+  if (bars.length < 8) return bars;
+  const closes = bars.map((b) => Number(b.c)).sort((a, b) => a - b);
+  const median = closes[Math.floor(closes.length / 2)] || 0;
+  if (!(median > 0)) return bars;
+  const floor = median * 0.08;
+  const ceil = median * 40;
+  return bars.filter((b) => {
+    const h = Number(b.h);
+    const l = Number(b.l);
+    return l >= floor && h <= ceil;
+  });
+}
+
 function renderCandleSvg(
   points,
   { showMa = false, viewStart = 0, viewEnd = null } = {}
@@ -423,11 +468,7 @@ function renderCandleSvg(
   const height = 150;
   const padX = 8;
   const padY = 10;
-  const bars = (points || []).filter(
-    (p) =>
-      p &&
-      [p.o, p.h, p.l, p.c].every((n) => n != null && !Number.isNaN(Number(n)))
-  );
+  const bars = sanitizeCandleBars(points);
   if (bars.length < 2) {
     return `<svg viewBox="0 0 ${width} ${height}" role="img" aria-label="暂无K线"><text x="16" y="78" fill="${themeMutedFill()}" font-size="13">暂无K线数据</text></svg>`;
   }
@@ -453,7 +494,8 @@ function renderCandleSvg(
   const max = Math.max(...highs, ...(maVals.length ? maVals : [-Infinity]));
   const span = max - min || 1;
   const slot = (width - padX * 2) / viewBars.length;
-  const bodyW = Math.max(1.2, Math.min(7, slot * 0.62));
+  const bodyW = Math.max(1.8, Math.min(8, slot * 0.68));
+  const wickW = Math.max(1.2, Math.min(2.2, bodyW * 0.45));
   const yOf = (price) => padY + (1 - (price - min) / span) * (height - padY * 2);
 
   const shapes = viewBars
@@ -470,11 +512,13 @@ function renderCandleSvg(
       const yOpen = yOf(o);
       const yClose = yOf(c);
       const top = Math.min(yOpen, yClose);
-      const bodyH = Math.max(1.2, Math.abs(yClose - yOpen));
+      const bodyH = Math.max(1.4, Math.abs(yClose - yOpen));
       return `
         <line x1="${x.toFixed(2)}" y1="${yHigh.toFixed(2)}" x2="${x.toFixed(
           2
-        )}" y2="${yLow.toFixed(2)}" stroke="${color}" stroke-width="1.2"></line>
+        )}" y2="${yLow.toFixed(2)}" stroke="${color}" stroke-width="${wickW.toFixed(
+          2
+        )}"></line>
         <rect x="${(x - bodyW / 2).toFixed(2)}" y="${top.toFixed(
           2
         )}" width="${bodyW.toFixed(2)}" height="${bodyH.toFixed(
@@ -535,12 +579,13 @@ function paintZoomableChart(key) {
   if (!meta?.root) return;
   const { points, tf, kind, up, root } = meta;
   const len = meta.len;
-  const z = ensureChartZoom(key, meta.scope, len);
+  const z = ensureChartZoom(key, meta.scope, len, tf, kind);
   const stage = root.querySelector(".chart-zoom-stage");
   const zoomRoot = root.querySelector(".chart-zoom");
   const resetBtn = root.querySelector('[data-zoom-act="reset"]');
   if (!stage) return;
-  const zoomed = z.count < len;
+  const full = defaultChartZoom(len, tf, kind);
+  const zoomed = z.count < len || z.start !== full.start;
   if (resetBtn) resetBtn.classList.toggle("is-hidden", !zoomed);
   if (zoomRoot) zoomRoot.classList.toggle("is-zoomed", zoomed);
   root.querySelectorAll(":scope > .ma-legend").forEach((el) => el.remove());
@@ -572,9 +617,10 @@ function bindZoomableChart(canvasEl, { key, scope, points, tf, kind, up }) {
   const list = points || [];
   const len = list.length;
   chartZoomData.set(key, { root: canvasEl, points: list, tf, kind, up, scope, len });
-  ensureChartZoom(key, scope, len);
+  ensureChartZoom(key, scope, len, tf, kind);
   const z = state.chartZoom[key];
-  const zoomed = z.count < len;
+  const full = defaultChartZoom(len, tf, kind);
+  const zoomed = z.count < len || z.start !== full.start;
   canvasEl.innerHTML = `
     <div class="chart-zoom" data-zoom-key="${escapeHtml(key)}" tabindex="0" aria-label="可缩放图表：触控板捏合或使用角落按钮">
       ${chartZoomControlsHtml(zoomed)}
@@ -910,7 +956,8 @@ function updatePortfolioSortMarks() {
 }
 
 function seriesStats(points, kind) {
-  const bars = (points || []).filter(Boolean);
+  const bars =
+    kind === "candle" ? sanitizeCandleBars(points) : (points || []).filter(Boolean);
   if (!bars.length) {
     return { open: null, high: null, low: null, last: null, volume: null };
   }
@@ -1208,6 +1255,7 @@ async function loadPortfolio({ refresh = false } = {}) {
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     let data = await res.json();
     data = await ensurePortfolioSelection(data);
+    syncHoldingSymbolsFromPortfolio(data);
     renderPortfolio(data);
     try {
       localStorage.setItem(
@@ -1246,6 +1294,79 @@ async function portfolioPost(path, body) {
   }
   if (!res.ok) throw new Error(data.detail || `HTTP ${res.status}`);
   return data;
+}
+
+function syncHoldingSymbolsFromPortfolio(data) {
+  const symbols = (data?.holdings || [])
+    .map((h) => String(h.symbol || "").toUpperCase())
+    .filter(Boolean);
+  state.holdingSymbols = new Set(symbols);
+  if (data) state.portfolio = data;
+  return state.holdingSymbols;
+}
+
+function isInHoldings(symbol) {
+  const sym = String(symbol || "").toUpperCase();
+  if (!sym) return false;
+  if (state.holdingSymbols) return state.holdingSymbols.has(sym);
+  return (state.portfolio?.holdings || []).some((h) => h.symbol === sym);
+}
+
+async function refreshHoldingSymbols({ force = false } = {}) {
+  if (!AUTHED) {
+    state.holdingSymbols = new Set();
+    return state.holdingSymbols;
+  }
+  if (state.holdingSymbols && !force && state.portfolio) {
+    return state.holdingSymbols;
+  }
+  try {
+    const res = await fetch("/api/portfolio", { credentials: "same-origin" });
+    if (res.status === 401) {
+      state.holdingSymbols = new Set();
+      return state.holdingSymbols;
+    }
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const data = await res.json();
+    return syncHoldingSymbolsFromPortfolio(data);
+  } catch {
+    if (!state.holdingSymbols) state.holdingSymbols = new Set();
+    return state.holdingSymbols;
+  }
+}
+
+async function toggleSectorHolding(symbol, name = "") {
+  const sym = String(symbol || "").trim().toUpperCase();
+  if (!sym) return;
+  if (!AUTHED) {
+    window.location.href = `/login?next=${encodeURIComponent(
+      location.pathname + location.search
+    )}`;
+    return;
+  }
+  const held = isInHoldings(sym);
+  try {
+    const data = held
+      ? await portfolioPost("/api/portfolio/remove", { symbol: sym })
+      : await portfolioPost("/api/portfolio/add", {
+          symbol: sym,
+          name: name || "",
+        });
+    syncHoldingSymbolsFromPortfolio(data.portfolio);
+    if (PAGE === "desk") {
+      const portfolio = await ensurePortfolioSelection(data.portfolio);
+      renderPortfolio(portfolio);
+    } else if (PAGE === "sectors") {
+      renderSectorPicks(state.sectors || {});
+    }
+    setStatus(
+      held
+        ? `已从持仓移除 ${sym}`
+        : `已加入持仓 ${data.resolved?.name || name || sym}（${sym}）`
+    );
+  } catch (err) {
+    setStatus(`${held ? "移除" : "加入"}失败：${err.message || err}`);
+  }
 }
 
 function renderAgenda(events, nextFomc) {
@@ -2482,6 +2603,7 @@ els.portfolioAddForm?.addEventListener("submit", async (event) => {
     state.portfolioTf = "intraday";
     state.portfolioPreview = null;
     const portfolio = await ensurePortfolioSelection(data.portfolio);
+    syncHoldingSymbolsFromPortfolio(portfolio);
     renderPortfolio(portfolio);
     const resolved = data.resolved || {};
     if (els.portfolioBlurb && resolved.symbol) {
@@ -2563,6 +2685,7 @@ els.portfolioRemove?.addEventListener("click", async () => {
     const data = await portfolioPost("/api/portfolio/remove", { symbol });
     state.portfolioPreview = null;
     const portfolio = await ensurePortfolioSelection(data.portfolio);
+    syncHoldingSymbolsFromPortfolio(portfolio);
     renderPortfolio(portfolio);
   } catch (err) {
     if (els.portfolioBlurb) {
@@ -3396,7 +3519,9 @@ function sectorCachePut(id, data) {
 
 function pickHasChart(pick) {
   const series = pick?.series || {};
-  return Boolean(series.intraday || series.day || (pick?.points || []).length);
+  const day = series.day?.points || [];
+  const intra = series.intraday?.points || [];
+  return day.length >= 2 || intra.length >= 2;
 }
 
 function openSectorDesk(id, { scroll = true } = {}) {
@@ -3856,12 +3981,48 @@ function renderSectorPickChart() {
     return;
   }
   const series = pick.series?.[tf];
-  const points = series?.points || pick.points || [];
-  const pct = series?.change_pct != null ? series.change_pct : pick.change_pct;
-  const up = !(typeof pct === "number" && pct < 0);
+  const rawPoints = series?.points || [];
   const kind =
     series?.chart || (tf === "intraday" ? "line" : "candle");
-  const stats = seriesStats(points, kind);
+  const points =
+    kind === "candle" ? sanitizeCandleBars(rawPoints) : rawPoints;
+  if (points.length < 2) {
+    els.sectorPickChart.innerHTML = `
+      <div class="chart-head">
+        <h3>${escapeHtml(pick.name || pick.label || "")} · ${escapeHtml(
+          pick.symbol || ""
+        )}</h3>
+      </div>
+      <p class="chart-placeholder">该周期暂无走势数据，试试切换分时 / 日图</p>
+    `;
+    renderMonthPanel(pick);
+    renderStockEarnings(data.selected_earnings || pick.earnings, pick);
+    renderMoveAnalysis(pick);
+    return;
+  }
+  const zoomWin = defaultChartZoom(points.length, tf, kind);
+  const viewPoints = points.slice(zoomWin.start, zoomWin.start + zoomWin.count);
+  const pct =
+    series?.change_pct != null && kind === "line"
+      ? series.change_pct
+      : viewPoints.length >= 2
+        ? kind === "candle"
+          ? ((Number(viewPoints[viewPoints.length - 1].c) -
+              Number(viewPoints[0].o ?? viewPoints[0].c)) /
+              Math.abs(Number(viewPoints[0].o ?? viewPoints[0].c) || 1)) *
+            100
+          : ((Number(
+              viewPoints[viewPoints.length - 1].v ??
+                viewPoints[viewPoints.length - 1].c
+            ) -
+              Number(viewPoints[0].v ?? viewPoints[0].c)) /
+              Math.abs(Number(viewPoints[0].v ?? viewPoints[0].c) || 1)) *
+            100
+        : series?.change_pct != null
+          ? series.change_pct
+          : pick.change_pct;
+  const up = !(typeof pct === "number" && pct < 0);
+  const stats = seriesStats(viewPoints.length ? viewPoints : points, kind);
   const earn = data.selected_earnings || pick.earnings || {};
   const earnNote = earn.next_earnings_label
     ? ` · 财报 ${earn.next_earnings_label}${
@@ -3972,7 +4133,7 @@ function renderSectorPicks(data) {
       : "板块成分";
   }
   if (els.sectorPicksBlurb) {
-    els.sectorPicksBlurb.textContent = `${picks.length} 只成分 · ${waveN} 只一轮涨势 · 点选看分时 / K 线`;
+    els.sectorPicksBlurb.textContent = `${picks.length} 只成分 · ${waveN} 只一轮涨势 · 点选看走势 · +/− 管持仓`;
   }
   if (els.sectorPickList) {
     if (!picks.length) {
@@ -3982,37 +4143,66 @@ function renderSectorPicks(data) {
         .map((pick) => {
           const pct = holdingTfPct(pick, tf);
           const on = pick.symbol === selected;
+          const held = isInHoldings(pick.symbol);
           return `
-            <button type="button" class="holding-row ${
+            <div class="holding-row sector-pick-row ${
               on ? "is-active" : ""
-            } ${pctClass(pct)}" data-symbol="${escapeHtml(pick.symbol)}" role="option" aria-selected="${
-              on ? "true" : "false"
-            }">
-              <span class="meta">
-                <span class="nm">${escapeHtml(pick.name || pick.symbol)}${
-                  pick.is_wave
-                    ? '<span class="hot-tag">涨势</span>'
-                    : pick.is_strong
-                      ? '<span class="hot-tag">强</span>'
-                      : ""
-                }</span>
-                <span class="sym">${escapeHtml(pick.symbol)} · ${escapeHtml(
-                  pick.sector_label || "板块"
-                )} · 月 ${escapeHtml(pctText(pick.month_change_pct))}</span>
-              </span>
-              <span class="spark-wrap">${holdingSparkSvg(pick, "month")}</span>
-              <span class="price ${pctClass(pct)}">${escapeHtml(
-                pick.price == null ? "—" : formatNumber(pick.price, "")
-              )}</span>
-              <span class="chg ${pctClass(pct)}">${escapeHtml(pctText(pct))}</span>
-            </button>
+            } ${held ? "in-holding" : ""} ${pctClass(pct)}" data-symbol="${escapeHtml(
+              pick.symbol
+            )}" role="option" aria-selected="${on ? "true" : "false"}">
+              <button type="button" class="sector-pick-main" data-symbol="${escapeHtml(
+                pick.symbol
+              )}">
+                <span class="meta">
+                  <span class="nm">${escapeHtml(pick.name || pick.symbol)}${
+                    pick.is_wave
+                      ? '<span class="hot-tag">涨势</span>'
+                      : pick.is_strong
+                        ? '<span class="hot-tag">强</span>'
+                        : ""
+                  }${
+                    held ? '<span class="hold-tag">持仓</span>' : ""
+                  }</span>
+                  <span class="sym">${escapeHtml(pick.symbol)} · ${escapeHtml(
+                    pick.sector_label || "板块"
+                  )} · 月 ${escapeHtml(pctText(pick.month_change_pct))}</span>
+                </span>
+                <span class="spark-wrap">${holdingSparkSvg(pick, "month")}</span>
+                <span class="price ${pctClass(pct)}">${escapeHtml(
+                  pick.price == null ? "—" : formatNumber(pick.price, "")
+                )}</span>
+                <span class="chg ${pctClass(pct)}">${escapeHtml(pctText(pct))}</span>
+              </button>
+              <button
+                type="button"
+                class="sector-hold-btn ${held ? "is-held" : ""}"
+                data-hold-symbol="${escapeHtml(pick.symbol)}"
+                data-hold-name="${escapeHtml(pick.name || "")}"
+                data-hold-action="${held ? "remove" : "add"}"
+                title="${held ? `从持仓移除 ${pick.symbol}` : `加入持仓 ${pick.symbol}`}"
+                aria-label="${held ? `从持仓移除 ${pick.symbol}` : `加入持仓 ${pick.symbol}`}"
+              >${held ? "−" : "+"}</button>
+            </div>
           `;
         })
         .join("");
-      els.sectorPickList.querySelectorAll("[data-symbol]").forEach((btn) => {
+      els.sectorPickList.querySelectorAll(".sector-pick-main[data-symbol]").forEach((btn) => {
         btn.addEventListener("click", () => {
           const sym = btn.getAttribute("data-symbol") || "";
           selectSectorSymbol(sym);
+        });
+      });
+      els.sectorPickList.querySelectorAll(".sector-hold-btn").forEach((btn) => {
+        btn.addEventListener("click", (event) => {
+          event.preventDefault();
+          event.stopPropagation();
+          const sym = btn.getAttribute("data-hold-symbol") || "";
+          const name = btn.getAttribute("data-hold-name") || "";
+          const action = btn.getAttribute("data-hold-action") || "add";
+          if (action === "remove") {
+            if (!confirm(`确定从持仓移除 ${sym}？`)) return;
+          }
+          toggleSectorHolding(sym, name);
         });
       });
     }
@@ -4396,7 +4586,7 @@ function bootPage() {
     if (qSector) state.sectorId = qSector;
     if (qSymbol) state.sectorSymbol = qSymbol;
     bindSectorDesk();
-    loadSectorDesk();
+    refreshHoldingSymbols().finally(() => loadSectorDesk());
     setInterval(() => loadSectorDesk(), 90 * 1000);
   } else if (PAGE === "earnings") {
     bindEarningsDesk();
