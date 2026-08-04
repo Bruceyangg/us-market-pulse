@@ -526,13 +526,27 @@ function paintZoomableChart(key) {
   const len = meta.len;
   const z = ensureChartZoom(key, meta.scope, len);
   const stage = root.querySelector(".chart-zoom-stage");
+  const zoomRoot = root.querySelector(".chart-zoom");
   const resetBtn = root.querySelector('[data-zoom-act="reset"]');
   if (!stage) return;
   const zoomed = z.count < len;
   if (resetBtn) resetBtn.classList.toggle("is-hidden", !zoomed);
-  root.classList.toggle("is-zoomed", zoomed);
+  if (zoomRoot) zoomRoot.classList.toggle("is-zoomed", zoomed);
+  root.querySelectorAll(":scope > .ma-legend").forEach((el) => el.remove());
   if (kind === "candle") {
-    stage.innerHTML = candleChartHtml(points, tf, z);
+    // Keep SVG inside the zoom stage; park MA legend as a sibling so it cannot
+    // overflow/paint over 个股财报 below when the chart card is height-clipped.
+    stage.innerHTML = candleChartHtml(points, tf, z).replace(
+      /<div class="ma-legend"[\s\S]*?<\/div>\s*$/,
+      ""
+    );
+    const active = MA_PERIODS.filter((m) => (points || []).length >= m.n);
+    if (zoomRoot) {
+      zoomRoot.insertAdjacentHTML(
+        "afterend",
+        maLegendHtml(active.length ? active : MA_PERIODS)
+      );
+    }
   } else {
     stage.innerHTML = renderChartSvg(points, {
       up,
