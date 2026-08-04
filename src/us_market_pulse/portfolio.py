@@ -265,7 +265,7 @@ async def build_portfolio_view(
         {
             "id": "year",
             "label": "年图",
-            "blurb": "按年聚合 K 线（红涨绿跌）",
+            "blurb": "按年聚合 K 线 · MA5/10/30/60/120/250（红涨绿跌）",
             "chart": "candle",
         }
     ]

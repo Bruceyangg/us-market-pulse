@@ -251,6 +251,41 @@ function themeMutedFill() {
   );
 }
 
+const MA_PERIODS = [
+  { n: 5, label: "MA5", color: "#c47a16" },
+  { n: 10, label: "MA10", color: "#2f6f9f" },
+  { n: 30, label: "MA30", color: "#0f8a6a" },
+  { n: 60, label: "MA60", color: "#a35c2a" },
+  { n: 120, label: "MA120", color: "#b42318" },
+  { n: 250, label: "MA250", color: "#3a4d63" },
+];
+
+const MA_CHART_TFS = new Set(["day", "week", "month", "quarter", "year"]);
+
+function smaSeries(values, period) {
+  const out = new Array(values.length).fill(null);
+  if (!period || values.length < period) return out;
+  let sum = 0;
+  for (let i = 0; i < values.length; i += 1) {
+    sum += values[i];
+    if (i >= period) sum -= values[i - period];
+    if (i >= period - 1) out[i] = sum / period;
+  }
+  return out;
+}
+
+function maLegendHtml(activePeriods = MA_PERIODS) {
+  if (!activePeriods.length) return "";
+  return `<div class="ma-legend" aria-label="均线图例">${activePeriods
+    .map(
+      (m) =>
+        `<span class="ma-legend-item"><i style="background:${m.color}"></i>${escapeHtml(
+          m.label
+        )}</span>`
+    )
+    .join("")}</div>`;
+}
+
 function renderChartSvg(points, { up = true } = {}) {
   const width = 320;
   const height = 140;
@@ -285,7 +320,7 @@ function renderChartSvg(points, { up = true } = {}) {
   `;
 }
 
-function renderCandleSvg(points) {
+function renderCandleSvg(points, { showMa = false } = {}) {
   const width = 320;
   const height = 150;
   const padX = 8;
@@ -298,13 +333,22 @@ function renderCandleSvg(points) {
   if (bars.length < 2) {
     return `<svg viewBox="0 0 ${width} ${height}" role="img" aria-label="暂无K线"><text x="16" y="78" fill="${themeMutedFill()}" font-size="13">暂无K线数据</text></svg>`;
   }
+  const closes = bars.map((b) => Number(b.c));
+  const maLines = showMa
+    ? MA_PERIODS.map((m) => ({
+        ...m,
+        values: smaSeries(closes, m.n),
+      })).filter((m) => m.values.some((v) => v != null))
+    : [];
+
   const highs = bars.map((b) => Number(b.h));
   const lows = bars.map((b) => Number(b.l));
-  const min = Math.min(...lows);
-  const max = Math.max(...highs);
+  const maVals = maLines.flatMap((m) => m.values.filter((v) => v != null));
+  const min = Math.min(...lows, ...(maVals.length ? maVals : [Infinity]));
+  const max = Math.max(...highs, ...(maVals.length ? maVals : [-Infinity]));
   const span = max - min || 1;
   const slot = (width - padX * 2) / bars.length;
-  const bodyW = Math.max(1.5, Math.min(7, slot * 0.62));
+  const bodyW = Math.max(1.2, Math.min(7, slot * 0.62));
   const yOf = (price) => padY + (1 - (price - min) / span) * (height - padY * 2);
 
   const shapes = bars
@@ -335,11 +379,46 @@ function renderCandleSvg(points) {
     })
     .join("");
 
+  const maPaths = maLines
+    .map((m) => {
+      let d = "";
+      let started = false;
+      m.values.forEach((v, i) => {
+        if (v == null || Number.isNaN(v)) {
+          started = false;
+          return;
+        }
+        const x = padX + i * slot + slot / 2;
+        const y = yOf(v);
+        d += `${started ? "L" : "M"}${x.toFixed(2)},${y.toFixed(2)} `;
+        started = true;
+      });
+      if (!d) return "";
+      return `<path d="${d.trim()}" fill="none" stroke="${
+        m.color
+      }" stroke-width="1.35" stroke-linecap="round" stroke-linejoin="round" opacity="0.92"></path>`;
+    })
+    .join("");
+
   return `
-    <svg viewBox="0 0 ${width} ${height}" preserveAspectRatio="none" role="img" aria-label="K线柱状图 红涨绿跌">
+    <svg viewBox="0 0 ${width} ${height}" preserveAspectRatio="none" role="img" aria-label="K线柱状图 红涨绿跌${
+      showMa ? " 含均线" : ""
+    }">
       ${shapes}
+      ${maPaths}
     </svg>
   `;
+}
+
+function candleChartHtml(points, tf) {
+  const showMa = MA_CHART_TFS.has(tf);
+  const svg = renderCandleSvg(points, { showMa });
+  if (!showMa) return svg;
+  const closes = (points || [])
+    .map((p) => Number(p?.c))
+    .filter((v) => !Number.isNaN(v));
+  const active = MA_PERIODS.filter((m) => closes.length >= m.n);
+  return `${svg}${maLegendHtml(active.length ? active : MA_PERIODS)}`;
 }
 
 function activeMarketTf(data) {
@@ -396,7 +475,7 @@ function renderMarketCharts(data) {
       const kind = chart.chart || meta.chart || (tf === "intraday" ? "line" : "candle");
       const svg =
         kind === "candle"
-          ? renderCandleSvg(chart.points || [])
+          ? candleChartHtml(chart.points || [], tf)
           : renderChartSvg(chart.points || [], { up });
       const chgCls = up ? "up" : "down";
       return `
@@ -407,7 +486,7 @@ function renderMarketCharts(data) {
               meta.label || ""
             )} · 区间 ${pctText}</span>
           </div>
-          ${svg}
+          <div class="chart-canvas">${svg}</div>
           <div class="chart-foot">${escapeHtml(chart.blurb || meta.blurb || "")}</div>
         </article>
       `;
@@ -703,7 +782,7 @@ function renderPortfolioChart() {
   const price = board.price != null ? board.price : stats.last;
   const svg =
     kind === "candle"
-      ? renderCandleSvg(points)
+      ? candleChartHtml(points, tf)
       : renderChartSvg(points, { up });
 
   els.portfolioChart.classList.remove("is-empty");
@@ -734,7 +813,7 @@ function renderPortfolioChart() {
         formatCompact(stats.volume)
       )}</span></span>
     </div>
-    ${svg}
+    <div class="chart-canvas">${svg}</div>
     <div class="chart-foot">${escapeHtml(
       series?.blurb || meta.blurb || ""
     )} · 红涨绿跌 · 延迟报价</div>
@@ -2801,19 +2880,19 @@ function renderMonthPanel(pick) {
   const pct = series?.change_pct != null ? series.change_pct : pick.month_change_pct;
   const up = !(typeof pct === "number" && pct < 0);
   const svg = points.length
-    ? renderCandleSvg(points)
+    ? candleChartHtml(points, "month")
     : '<p class="empty">暂无月线</p>';
   if (els.monthPanelBlurb) {
     els.monthPanelBlurb.textContent = pick.is_wave
       ? "一轮涨势进行中"
-      : "月线对照涨势";
+      : "月线对照涨势 · 含均线";
   }
   els.monthChart.innerHTML = `
     <div class="month-head">
       <strong>${escapeHtml(pick.symbol || "")}</strong>
       <span class="chg ${pctClass(pct)}">${escapeHtml(pctText(pct))}</span>
     </div>
-    ${typeof svg === "string" && svg.includes("<svg") ? svg : svg}
+    <div class="chart-canvas">${svg}</div>
   `;
 }
 
@@ -3008,7 +3087,7 @@ function renderSectorPickChart() {
   const stats = seriesStats(points, kind);
   const svg =
     kind === "candle"
-      ? renderCandleSvg(points)
+      ? candleChartHtml(points, tf)
       : renderChartSvg(points, { up });
   const earn = data.selected_earnings || pick.earnings || {};
   const earnNote = earn.next_earnings_label
@@ -3018,6 +3097,7 @@ function renderSectorPickChart() {
           : ""
       }`
     : "";
+  const maNote = MA_CHART_TFS.has(tf) ? " · 含均线" : "";
   els.sectorPickChart.innerHTML = `
     <div class="chart-head">
       <h3>${escapeHtml(pick.name || pick.label || "")} · ${escapeHtml(
@@ -3045,7 +3125,7 @@ function renderSectorPickChart() {
       )}">${escapeHtml(pctText(pick.month_change_pct))}</span></span>
     </div>
     <div class="chart-canvas">${svg}</div>
-    <div class="chart-foot">红涨绿跌 · 所属 ${escapeHtml(
+    <div class="chart-foot">红涨绿跌${maNote} · 所属 ${escapeHtml(
       pick.sector_label || "板块"
     )}${escapeHtml(earnNote)}</div>
   `;

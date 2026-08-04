@@ -1248,7 +1248,8 @@ body {
   color: var(--ink-soft);
 }
 
-.chart-card svg {
+.chart-card .chart-canvas > svg,
+.chart-card > svg {
   width: 100%;
   height: 140px;
   display: block;
@@ -1638,7 +1639,8 @@ body {
   color: var(--signal);
 }
 
-.portfolio-chart svg {
+.portfolio-chart .chart-canvas > svg,
+.portfolio-chart > svg {
   width: 100%;
   height: 260px;
   flex: 1 1 auto;
@@ -1691,7 +1693,8 @@ body {
     min-height: 16rem;
   }
 
-  .portfolio-chart svg {
+  .portfolio-chart .chart-canvas > svg,
+  .portfolio-chart > svg {
     height: 200px;
     min-height: 180px;
   }
@@ -2796,18 +2799,52 @@ body {
   min-height: 18rem;
 }
 
-.sector-chart .chart-canvas {
-  width: 100%;
-  height: min(38vh, 280px);
-  max-height: 280px;
-  overflow: hidden;
+.ma-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem 0.65rem;
+  margin-top: 0.4rem;
+  padding: 0 0.1rem;
 }
 
-.sector-chart .chart-canvas svg,
-.sector-chart svg {
+.ma-legend-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.28rem;
+  font-size: 0.7rem;
+  font-weight: 650;
+  color: var(--ink-soft);
+}
+
+.ma-legend-item i {
+  width: 0.7rem;
+  height: 0.18rem;
+  border-radius: 999px;
+  display: inline-block;
+}
+
+.chart-canvas .ma-legend {
+  margin-top: 0.35rem;
+}
+
+.sector-chart .chart-canvas {
+  width: 100%;
+  height: auto;
+  max-height: none;
+  overflow: visible;
+}
+
+.sector-chart .chart-canvas > svg {
   width: 100%;
   height: min(38vh, 280px);
   max-height: 280px;
+  display: block;
+}
+
+.portfolio-chart .chart-canvas > svg,
+.chart-card .chart-canvas > svg {
+  width: 100%;
+  height: 180px;
   display: block;
 }
 
@@ -3069,9 +3106,8 @@ body {
     min-height: 15rem;
   }
 
-  .sector-chart .chart-canvas,
-  .sector-chart .chart-canvas svg,
-  .sector-chart svg {
+  .sector-chart .chart-canvas > svg,
+  .sector-chart > svg {
     height: 200px;
     max-height: 200px;
   }
