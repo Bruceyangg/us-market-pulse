@@ -1,6 +1,7 @@
 package com.bruceyangg.pulsedesk.ui.nav
 
-import androidx.compose.foundation.horizontalScroll
+import androidx.compose.animation.EnterTransition
+import androidx.compose.animation.ExitTransition
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
@@ -30,7 +31,7 @@ import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
-import androidx.compose.ui.Modifier.Modifier
+import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
@@ -153,10 +154,15 @@ fun PulseRoot() {
             }
         },
     ) { padding ->
+        // No horizontal swipe between tabs — match website (tap bottom bar only).
         NavHost(
             navController = navController,
             startDestination = PulseTab.Portfolio.route,
             modifier = Modifier.padding(padding),
+            enterTransition = { EnterTransition.None },
+            exitTransition = { ExitTransition.None },
+            popEnterTransition = { EnterTransition.None },
+            popExitTransition = { ExitTransition.None },
         ) {
             composable(PulseTab.Portfolio.route) { PortfolioScreen() }
             composable(PulseTab.HoldingIntel.route) { HoldingIntelScreen() }
