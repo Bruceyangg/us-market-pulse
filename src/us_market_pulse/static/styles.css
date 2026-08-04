@@ -2965,7 +2965,8 @@ body {
   display: grid;
   grid-template-columns: minmax(15rem, 0.92fr) minmax(0, 1.45fr) minmax(16.5rem, 0.98fr);
   gap: 0.75rem;
-  align-items: stretch;
+  /* Center column defines row height; L/R match via --sectors-center-h */
+  align-items: start;
   height: auto;
   min-height: 0;
 }
@@ -2976,7 +2977,7 @@ body {
   min-width: 0;
   min-height: 0;
   height: auto;
-  align-self: stretch;
+  align-self: start;
   display: flex;
   flex-direction: column;
 }
@@ -2990,7 +2991,9 @@ body {
   display: flex;
   flex-direction: column;
   gap: 0.45rem;
-  max-height: none;
+  /* Match middle column height; list scrolls inside (card heights unchanged) */
+  height: var(--sectors-center-h, auto);
+  max-height: var(--sectors-center-h, none);
   position: relative;
   top: auto;
   overflow: hidden;
@@ -3541,46 +3544,53 @@ html[data-theme="dark"] .sector-pick-list .sector-hold-btn.is-held:hover {
 }
 
 .sectors-intel-pane {
-  max-height: none;
+  height: var(--sectors-center-h, auto);
+  max-height: var(--sectors-center-h, none);
   position: relative;
   top: auto;
   overflow: hidden;
+  /* One column shell so bottom edge flushes with left/middle */
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  background: var(--elevated);
+  box-shadow: var(--shadow);
+  padding: 0.55rem 0.5rem 0.55rem;
 }
 
 .sectors-intel-sticky {
   flex: 1 1 auto;
-  min-height: 100%;
+  min-height: 0;
   height: 100%;
-  max-height: none;
+  max-height: 100%;
   overflow: auto;
   display: grid;
-  align-content: stretch;
-  grid-auto-rows: minmax(0, auto);
-  gap: 0.65rem;
+  align-content: start;
+  grid-auto-rows: max-content;
+  gap: 0.55rem;
   padding-right: 0.1rem;
   scrollbar-width: thin;
 }
 
 .sectors-intel-block {
   border: 1px solid var(--line);
-  border-radius: 14px;
-  background: var(--elevated);
-  box-shadow: var(--shadow);
+  border-radius: 12px;
+  background: var(--elevated-soft);
+  box-shadow: none;
   padding: 0.65rem 0.7rem 0.75rem;
   display: flex;
   flex-direction: column;
   gap: 0.4rem;
-  flex: 1 1 auto;
+  flex: 0 0 auto;
   min-height: 0;
   overflow: visible;
 }
 
 .sectors-intel-block#earnings-panel {
-  flex: 1 1 12rem;
+  flex: 0 0 auto;
 }
 
 .sectors-intel-block#sector-news-mini {
-  flex: 1 1 10rem;
+  flex: 0 0 auto;
 }
 
 .sectors-intel-block .spotlight-list.compact,
@@ -3780,7 +3790,8 @@ html[data-theme="dark"] .sector-pick-list .sector-hold-btn.is-held:hover {
     grid-template-columns: minmax(14rem, 0.95fr) minmax(0, 1.35fr);
     height: auto;
     min-height: 0;
-    align-items: stretch;
+    align-items: start;
+    --sectors-center-h: auto;
   }
 
   .sectors-intel-pane {
@@ -3803,6 +3814,7 @@ html[data-theme="dark"] .sector-pick-list .sector-hold-btn.is-held:hover {
   .sectors-list-pane,
   .sectors-chart-pane {
     height: auto;
+    max-height: none;
     min-height: 0;
     overflow: hidden;
   }

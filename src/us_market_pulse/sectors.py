@@ -546,7 +546,7 @@ def _bundle_has_full_chart(bundle: dict[str, Any] | None) -> bool:
 
 
 def _spark_points_from_row(row: dict[str, Any] | None) -> list[dict[str, Any]]:
-    """Prefer 24h intraday line points for list sparklines."""
+    """Prefer full-session intraday line points for list sparklines (same as desk 分时)."""
     if not row:
         return []
     series = row.get("series") or {}
@@ -558,11 +558,16 @@ def _spark_points_from_row(row: dict[str, Any] | None) -> list[dict[str, Any]]:
     for p in pts:
         if not isinstance(p, dict):
             continue
-        if p.get("v") is not None:
+        # Candle bars carry volume in `v` — always prefer close for price sparks
+        if p.get("c") is not None and (
+            p.get("o") is not None or p.get("h") is not None or p.get("l") is not None
+        ):
+            out.append({"t": p.get("t"), "v": p.get("c")})
+        elif p.get("v") is not None and p.get("c") is None:
             out.append({"t": p.get("t"), "v": p.get("v")})
         elif p.get("c") is not None:
             out.append({"t": p.get("t"), "v": p.get("c")})
-    return out[-64:]
+    return out
 
 
 def _apply_intraday_spark(
@@ -571,8 +576,15 @@ def _apply_intraday_spark(
     *,
     change_pct: float | None = None,
 ) -> None:
-    spark = list(points or [])[-64:]
+    spark = list(points or [])
     if not spark:
+        return
+    existing = (row.get("series") or {}).get("intraday")
+    existing_pts = (
+        list(existing.get("points") or []) if isinstance(existing, dict) else []
+    )
+    # Never replace a fuller desk intraday series with a truncated list spark
+    if len(existing_pts) > len(spark):
         return
     row["points"] = spark[-48:]
     series = dict(row.get("series") or {})
@@ -581,7 +593,11 @@ def _apply_intraday_spark(
         "points": spark,
         "change_pct": change_pct
         if change_pct is not None
-        else row.get("change_pct"),
+        else (
+            existing.get("change_pct")
+            if isinstance(existing, dict) and existing.get("change_pct") is not None
+            else row.get("change_pct")
+        ),
     }
     row["series"] = series
 
@@ -633,7 +649,7 @@ def _slim_sector_etf(row: dict[str, Any]) -> dict[str, Any]:
 
 def _hydrate_sparks_from_cache(pick_rows: list[dict[str, Any]]) -> None:
     for row in pick_rows:
-        if _spark_points_from_row(row):
+        if _pick_has_chart(row) or _spark_points_from_row(row):
             continue
         sym = str(row.get("symbol") or "").upper()
         cached = _SYM_CACHE.get(f"quote:{sym}") or {}
@@ -674,7 +690,7 @@ async def _fetch_intraday_spark(
             symbol=sym,
             label=sym,
             short=sym,
-            timeframes=[dict(_INTRADAY_TF, max_points=96)],
+            timeframes=[dict(_INTRADAY_TF, max_points=160)],
             include_yearly=False,
         )
     if not bundle:
@@ -695,23 +711,27 @@ async def _fetch_intraday_spark(
         },
         "fetched_at": time.time(),
     }
-    # If a full quote already exists, only refresh its intraday slice
+    # If a full quote already exists, only refresh its intraday slice when
+    # the new spark is at least as complete (avoid truncating desk 分时).
     full = quote_cached.get("bundle")
     if isinstance(full, dict) and _bundle_has_full_chart(full):
-        series = dict(full.get("series") or {})
-        series["intraday"] = {
-            "chart": "line",
-            "points": spark,
-            "change_pct": bundle.get("change_pct", full.get("change_pct")),
-        }
-        full = dict(full)
-        full["series"] = series
-        if not full.get("points"):
-            full["points"] = spark[-48:]
-        _SYM_CACHE[f"quote:{sym}"] = {
-            "bundle": full,
-            "fetched_at": quote_cached.get("fetched_at") or time.time(),
-        }
+        existing = (full.get("series") or {}).get("intraday") or {}
+        existing_n = len(existing.get("points") or []) if isinstance(existing, dict) else 0
+        if len(spark) >= existing_n:
+            series = dict(full.get("series") or {})
+            series["intraday"] = {
+                "chart": "line",
+                "points": spark,
+                "change_pct": bundle.get("change_pct", full.get("change_pct")),
+            }
+            full = dict(full)
+            full["series"] = series
+            if not full.get("points"):
+                full["points"] = spark[-48:]
+            _SYM_CACHE[f"quote:{sym}"] = {
+                "bundle": full,
+                "fetched_at": quote_cached.get("fetched_at") or time.time(),
+            }
     return spark
 
 
@@ -727,7 +747,10 @@ async def _hydrate_list_intraday_sparks(
     missing = [
         str(r.get("symbol") or "").upper()
         for r in pick_rows
-        if str(r.get("symbol") or "") and not _spark_points_from_row(r)
+        if str(r.get("symbol") or "")
+        and not _spark_points_from_row(r)
+        # Full desk chart already carries the canonical intraday series
+        and not _pick_has_chart(r)
     ][: max(1, min(limit, _MAX_SECTOR_PICKS))]
     if not missing:
         return
@@ -746,7 +769,7 @@ async def _hydrate_list_intraday_sparks(
     by_sym = {sym: pts for sym, pts in results if pts}
     for row in pick_rows:
         sym = str(row.get("symbol") or "").upper()
-        if sym in by_sym:
+        if sym in by_sym and not _pick_has_chart(row):
             _apply_intraday_spark(row, by_sym[sym], change_pct=row.get("change_pct"))
 
 
@@ -1764,8 +1787,11 @@ async def build_sector_desk(
         earnings_by_symbol = dict(picks_cached.get("earnings_by_symbol") or {})
 
     selected = (selected_symbol or "").strip().upper()
-    if not selected or not any(p.get("symbol") == selected for p in pick_rows):
-        # Prefer first symbol by day tape once quotes land; bootstrap from universe
+    universe = {str(s).strip().upper() for s in pick_symbols if str(s).strip()}
+    in_rows = any(p.get("symbol") == selected for p in pick_rows)
+    # Keep an explicit ?symbol= even on cold refresh (pick_rows empty before quotes).
+    # Only fall back when the request has no symbol or it's outside this sector universe.
+    if not selected or (not in_rows and selected not in universe):
         selected = (
             pick_rows[0]["symbol"]
             if pick_rows
@@ -1806,7 +1832,11 @@ async def build_sector_desk(
             ),
             reverse=True,
         )
-        if not selected or not any(p.get("symbol") == selected for p in pick_rows):
+        # Do not drop an in-universe ?symbol= if its lite row failed to build.
+        if not selected or (
+            not any(p.get("symbol") == selected for p in pick_rows)
+            and selected not in universe
+        ):
             selected = pick_rows[0]["symbol"] if pick_rows else selected
 
     # Ensure selected symbol has a full chart bundle (cache miss or lite row).
@@ -1910,7 +1940,12 @@ async def build_sector_desk(
         }
 
     if not selected or not any(p.get("symbol") == selected for p in pick_rows):
-        selected = pick_rows[0]["symbol"] if pick_rows else ""
+        if selected and selected in {
+            str(s).strip().upper() for s in pick_symbols if str(s).strip()
+        }:
+            pass
+        else:
+            selected = pick_rows[0]["symbol"] if pick_rows else ""
     selected_pick = next((p for p in pick_rows if p.get("symbol") == selected), None)
 
     # Refresh value-chain blurbs (covers newly added archive entries even on warm cache)

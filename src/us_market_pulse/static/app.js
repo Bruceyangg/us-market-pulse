@@ -250,7 +250,19 @@ function renderIndicators(rows) {
 }
 
 function sparklinePath(points, width = 120, height = 36, pad = 2) {
-  const vals = (points || []).map((p) => Number(p.v)).filter((v) => !Number.isNaN(v));
+  const vals = (points || [])
+    .map((p) => {
+      if (!p) return NaN;
+      // Candle bars store volume in `v` — prefer close for price sparks
+      if (
+        p.c != null &&
+        (p.o != null || p.h != null || p.l != null)
+      ) {
+        return Number(p.c);
+      }
+      return Number(p.v ?? p.c);
+    })
+    .filter((v) => !Number.isNaN(v));
   if (vals.length < 2) return "";
   const min = Math.min(...vals);
   const max = Math.max(...vals);
@@ -904,9 +916,20 @@ function holdingSparkSvg(holding, tf) {
         []
       : series?.points || holding?.points || [];
   const kind = series?.chart || (want === "intraday" ? "line" : "candle");
+  // Color the spark from the same series used for the path (desk 分时),
+  // not the day quote %, so left/middle intraday shapes stay consistent.
   const pct =
     want === "intraday"
-      ? holding?.change_pct ?? series?.change_pct
+      ? series?.change_pct != null
+        ? series.change_pct
+        : holding?.series?.intraday?.change_pct != null
+          ? holding.series.intraday.change_pct
+          : points.length >= 2
+            ? ((Number(points[points.length - 1].v ?? points[points.length - 1].c) -
+                Number(points[0].v ?? points[0].c)) /
+                Math.abs(Number(points[0].v ?? points[0].c) || 1)) *
+              100
+            : holding?.change_pct
       : series?.change_pct != null
         ? series.change_pct
         : holdingTfPct(holding, want) != null
@@ -918,9 +941,14 @@ function holdingSparkSvg(holding, tf) {
       miniCandleSvg(points, { width: 120, height: 30 }) || pctSparkBar(pct)
     );
   }
-  const sparkPoints = points.map((p) =>
-    p && p.c != null && p.v == null ? { t: p.t, v: p.c } : p
-  );
+  const sparkPoints = points.map((p) => {
+    if (!p) return p;
+    if (p.c != null && (p.o != null || p.h != null || p.l != null)) {
+      return { t: p.t, v: p.c };
+    }
+    if (p.c != null && p.v == null) return { t: p.t, v: p.c };
+    return p;
+  });
   const path = sparklinePath(sparkPoints, 120, 30, 2);
   if (!path) return pctSparkBar(pct);
   const stroke = up ? TAPE_UP : TAPE_DOWN;
@@ -4171,6 +4199,7 @@ function renderValueChain(vc) {
 function renderSectorPicks(data) {
   const picks = data?.picks || [];
   const selected = data?.selected_symbol || state.sectorSymbol || "";
+  const selectedPick = data?.selected_pick || null;
   const sector = data?.active_sector || {};
   const tf = state.sectorTf || "intraday";
   const waveN = (data?.wave_leaders || picks.filter((p) => p.is_wave)).length;
@@ -4191,6 +4220,11 @@ function renderSectorPicks(data) {
           // List tape is always day % + 24h spark — independent of desk TF tabs
           const pct = pick.change_pct;
           const on = pick.symbol === selected;
+          // Selected row must share the same intraday series as the middle chart
+          const sparkSrc =
+            on && selectedPick?.series?.intraday?.points?.length >= 2
+              ? selectedPick
+              : pick;
           const held = isInHoldings(pick.symbol);
           return `
             <div class="holding-row sector-pick-row ${
@@ -4215,7 +4249,7 @@ function renderSectorPicks(data) {
                     pick.sector_label || "板块"
                   )} · 月 ${escapeHtml(pctText(pick.month_change_pct))}</span>
                 </span>
-                <span class="spark-wrap">${holdingSparkSvg(pick, "intraday")}</span>
+                <span class="spark-wrap">${holdingSparkSvg(sparkSrc, "intraday")}</span>
                 <span class="price ${pctClass(pct)}">${escapeHtml(
                   pick.price == null ? "—" : formatNumber(pick.price, "")
                 )}</span>
@@ -4262,6 +4296,73 @@ function renderSectorPicks(data) {
   renderSectorPickChart();
   renderEarningsCalendar(data);
   renderValueChain(data?.value_chain || data?.selected_pick?.value_chain);
+  scheduleSectorsDeskHeightSync();
+}
+
+function syncSectorsDeskHeights() {
+  const desk = els.sectorsDesk;
+  if (!desk || PAGE !== "sectors") return;
+  const center = desk.querySelector(".sectors-chart-sticky");
+  const left = desk.querySelector(".sectors-list-pane");
+  const right = desk.querySelector(".sectors-intel-pane");
+  if (!center) return;
+
+  const clear = () => {
+    desk.style.removeProperty("--sectors-center-h");
+    if (left) {
+      left.style.removeProperty("height");
+      left.style.removeProperty("max-height");
+    }
+    if (right) {
+      right.style.removeProperty("height");
+      right.style.removeProperty("max-height");
+    }
+  };
+
+  // Below the 3-col breakpoint, panes stack — clear the lock.
+  if (window.matchMedia("(max-width: 1180px)").matches) {
+    clear();
+    return;
+  }
+
+  // Measure center without L/R height locks affecting layout
+  const prevLeftH = left?.style.height || "";
+  const prevRightH = right?.style.height || "";
+  if (left) {
+    left.style.height = "auto";
+    left.style.maxHeight = "none";
+  }
+  if (right) {
+    right.style.height = "auto";
+    right.style.maxHeight = "none";
+  }
+  desk.style.removeProperty("--sectors-center-h");
+
+  const h = Math.ceil(center.getBoundingClientRect().height);
+  if (h < 120) {
+    if (left && prevLeftH) left.style.height = prevLeftH;
+    if (right && prevRightH) right.style.height = prevRightH;
+    return;
+  }
+
+  const px = `${h}px`;
+  desk.style.setProperty("--sectors-center-h", px);
+  if (left) {
+    left.style.height = px;
+    left.style.maxHeight = px;
+  }
+  if (right) {
+    right.style.height = px;
+    right.style.maxHeight = px;
+  }
+}
+
+function scheduleSectorsDeskHeightSync() {
+  if (PAGE !== "sectors") return;
+  requestAnimationFrame(() => {
+    syncSectorsDeskHeights();
+    requestAnimationFrame(syncSectorsDeskHeights);
+  });
 }
 
 function selectSectorSymbol(sym) {
@@ -4344,6 +4445,14 @@ function bindSectorDesk() {
       renderSectorPicks(state.sectors || {});
     });
   });
+  const desk = els.sectorsDesk;
+  const center = desk?.querySelector(".sectors-chart-sticky");
+  if (center && typeof ResizeObserver !== "undefined") {
+    const ro = new ResizeObserver(() => syncSectorsDeskHeights());
+    ro.observe(center);
+  }
+  window.addEventListener("resize", () => scheduleSectorsDeskHeightSync());
+  scheduleSectorsDeskHeightSync();
 }
 
 function formatCapShort(text) {
