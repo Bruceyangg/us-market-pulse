@@ -1743,8 +1743,11 @@ body {
   }
 
   .portfolio-chart-sticky {
-    grid-template-rows: auto auto auto;
     height: auto;
+  }
+
+  .portfolio-chart-sticky > .portfolio-chart {
+    max-height: none;
   }
 
   .holding-intel-sticky {
