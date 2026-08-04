@@ -349,14 +349,15 @@ async def _fetch_yahoo_series(
     spec: dict[str, str],
     tf: dict[str, Any],
 ) -> tuple[dict[str, Any] | None, str | None]:
-    period1 = period2 = None
     use_session = bool(tf.get("session_window") and tf.get("chart") == "line")
-    if use_session:
-        start_et, end_et = _session_cycle_bounds()
-        # Pad start slightly so first overnight bars aren't clipped by Yahoo
-        period1 = int((start_et - timedelta(hours=1)).timestamp())
-        period2 = int((end_et + timedelta(minutes=5)).timestamp())
-
+    # One Yahoo call only (range=5d + prepost). Clip to ET session cycle locally.
+    # Do not also hit period1/period2 — double fetches trip Yahoo 429s.
+    url = _yahoo_chart_url(
+        spec["symbol"],
+        range_=tf["range"],
+        interval=tf["interval"],
+        prepost=bool(tf.get("prepost")),
+    )
     headers = {
         "User-Agent": (
             "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
@@ -368,44 +369,13 @@ async def _fetch_yahoo_series(
         "Referer": "https://finance.yahoo.com/",
     }
 
-    urls: list[str] = []
-    if period1 is not None and period2 is not None:
-        urls.append(
-            _yahoo_chart_url(
-                spec["symbol"],
-                range_=tf["range"],
-                interval=tf["interval"],
-                prepost=bool(tf.get("prepost")),
-                period1=period1,
-                period2=period2,
-            )
-        )
-    urls.append(
-        _yahoo_chart_url(
-            spec["symbol"],
-            range_=tf["range"],
-            interval=tf["interval"],
-            prepost=bool(tf.get("prepost")),
-        )
-    )
-
     try:
-        result = None
-        last_err: str | None = None
-        for url in urls:
-            try:
-                resp = await client.get(url, timeout=25.0, headers=headers)
-                resp.raise_for_status()
-                payload = resp.json()
-                result = ((payload.get("chart") or {}).get("result") or [None])[0]
-                if result:
-                    break
-                last_err = f"{spec['label']}/{tf['label']}: empty chart"
-            except Exception as exc:  # noqa: BLE001
-                last_err = f"{spec['label']}/{tf['label']}: {exc}"
-                result = None
+        resp = await client.get(url, timeout=25.0, headers=headers)
+        resp.raise_for_status()
+        payload = resp.json()
+        result = ((payload.get("chart") or {}).get("result") or [None])[0]
         if not result:
-            return None, last_err or f"{spec['label']}/{tf['label']}: empty chart"
+            return None, f"{spec['label']}/{tf['label']}: empty chart"
 
         meta = result.get("meta") or {}
         timestamps = result.get("timestamp") or []
