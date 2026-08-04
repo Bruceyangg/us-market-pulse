@@ -38,6 +38,18 @@ _INTRADAY_TF = next(
         "session_window": True,
     },
 )
+# Left-list sparklines: classic same-day 分时 only (not the desk session window).
+_LIST_SPARK_TF: dict[str, Any] = {
+    "id": "intraday",
+    "label": "分时",
+    "blurb": "当日分时",
+    "range": "1d",
+    "interval": "5m",
+    "max_points": 96,
+    "chart": "line",
+    "prepost": True,
+    "session_window": False,
+}
 _pick_fetch_sem: asyncio.Semaphore | None = None
 
 
@@ -675,14 +687,16 @@ async def _fetch_intraday_spark(
     sym = (symbol or "").strip().upper()
     if not sym:
         return []
-    # Prefer full quote cache, then dedicated spark cache — never poison quote cache
-    quote_cached = _SYM_CACHE.get(f"quote:{sym}") or {}
+    # Prefer spark cache, then quote cache — never poison quote/desk session series
     spark_cached = _SYM_CACHE.get(f"spark:{sym}") or {}
+    quote_cached = _SYM_CACHE.get(f"quote:{sym}") or {}
     if not force:
-        for cached in (quote_cached, spark_cached):
-            if time.time() - float(cached.get("fetched_at") or 0) >= _SYM_TTL:
-                continue
-            spark = _spark_points_from_row(cached.get("bundle") or cached)
+        if time.time() - float(spark_cached.get("fetched_at") or 0) < _SYM_TTL:
+            spark = _spark_points_from_row(spark_cached.get("bundle") or spark_cached)
+            if spark:
+                return spark
+        if time.time() - float(quote_cached.get("fetched_at") or 0) < _SYM_TTL:
+            spark = _spark_points_from_row(quote_cached.get("bundle"))
             if spark:
                 return spark
     async with _get_pick_sem():
@@ -691,12 +705,17 @@ async def _fetch_intraday_spark(
             symbol=sym,
             label=sym,
             short=sym,
-            timeframes=[dict(_INTRADAY_TF, max_points=160)],
+            timeframes=[dict(_LIST_SPARK_TF)],
             include_yearly=False,
         )
     if not bundle:
-        return []
+        # Keep last good list spark when Yahoo rate-limits
+        return _spark_points_from_row(spark_cached.get("bundle") or spark_cached)
     spark = _spark_points_from_row(bundle)
+    # Strip session tags for list sparks — keep a plain price path
+    spark = [{"t": p.get("t"), "v": p.get("v")} for p in spark if p.get("v") is not None]
+    if not spark:
+        return _spark_points_from_row(spark_cached.get("bundle") or spark_cached)
     _SYM_CACHE[f"spark:{sym}"] = {
         "bundle": {
             "symbol": sym,
@@ -712,27 +731,6 @@ async def _fetch_intraday_spark(
         },
         "fetched_at": time.time(),
     }
-    # If a full quote already exists, only refresh its intraday slice when
-    # the new spark is at least as complete (avoid truncating desk 分时).
-    full = quote_cached.get("bundle")
-    if isinstance(full, dict) and _bundle_has_full_chart(full):
-        existing = (full.get("series") or {}).get("intraday") or {}
-        existing_n = len(existing.get("points") or []) if isinstance(existing, dict) else 0
-        if len(spark) >= existing_n:
-            series = dict(full.get("series") or {})
-            series["intraday"] = {
-                "chart": "line",
-                "points": spark,
-                "change_pct": bundle.get("change_pct", full.get("change_pct")),
-            }
-            full = dict(full)
-            full["series"] = series
-            if not full.get("points"):
-                full["points"] = spark[-48:]
-            _SYM_CACHE[f"quote:{sym}"] = {
-                "bundle": full,
-                "fetched_at": quote_cached.get("fetched_at") or time.time(),
-            }
     return spark
 
 

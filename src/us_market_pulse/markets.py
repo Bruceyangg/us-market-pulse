@@ -371,6 +371,18 @@ async def _fetch_yahoo_series(
 
     try:
         resp = await client.get(url, timeout=25.0, headers=headers)
+        # Soft-fallback: session window prefers 5d, but Yahoo often 429s — retry 1d once.
+        if resp.status_code == 429 and use_session and str(tf.get("range")) != "1d":
+            resp = await client.get(
+                _yahoo_chart_url(
+                    spec["symbol"],
+                    range_="1d",
+                    interval=tf["interval"],
+                    prepost=bool(tf.get("prepost")),
+                ),
+                timeout=25.0,
+                headers=headers,
+            )
         resp.raise_for_status()
         payload = resp.json()
         result = ((payload.get("chart") or {}).get("result") or [None])[0]
