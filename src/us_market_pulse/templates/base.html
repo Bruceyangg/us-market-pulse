@@ -48,7 +48,7 @@
       href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,500;9..144,700&family=Sora:wght@400;500;600;700&display=swap"
       rel="stylesheet"
     />
-    <link rel="stylesheet" href="/static/styles.css?v=20260804n" />
+    <link rel="stylesheet" href="/static/styles.css?v=20260804o" />
     {% block head %}{% endblock %}
   </head>
   <body class="page-{{ page }}" data-page="{{ page }}">
@@ -70,7 +70,6 @@
       </a>
       <nav class="desk-nav" aria-label="台面导航" data-nav-cycle="1">
         <a href="/" data-nav="desk" class="{% if page == 'desk' %}is-active{% endif %}">持仓</a>
-        <a href="/#holding-intel" data-nav="holding-intel">持仓情报</a>
         <a href="/markets" data-nav="markets" class="{% if page == 'markets' %}is-active{% endif %}">市场</a>
         <a href="/sectors" data-nav="sectors" class="{% if page == 'sectors' %}is-active{% endif %}">板块</a>
         <a href="/earnings" data-nav="earnings" class="{% if page == 'earnings' %}is-active{% endif %}">财报</a>
@@ -155,7 +154,7 @@
     </div>
     {% endblock %}
 
-    <script src="/static/app.js?v=20260804n" type="module"></script>
+    <script src="/static/app.js?v=20260804o" type="module"></script>
     <script>
       if ("serviceWorker" in navigator) {
         window.addEventListener("load", function () {

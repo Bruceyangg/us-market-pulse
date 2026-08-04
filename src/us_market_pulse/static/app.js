@@ -4166,12 +4166,7 @@ function navCycleRoutes() {
     {
       id: "desk",
       href: "/",
-      match: (p, h) => p === "/" && h !== "#holding-intel",
-    },
-    {
-      id: "holding-intel",
-      href: "/#holding-intel",
-      match: (p, h) => p === "/" && h === "#holding-intel",
+      match: (p) => p === "/",
     },
     {
       id: "markets",

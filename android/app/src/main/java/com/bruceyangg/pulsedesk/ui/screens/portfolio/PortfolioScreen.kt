@@ -1,5 +1,7 @@
 package com.bruceyangg.pulsedesk.ui.screens.portfolio
 
+import android.content.Intent
+import android.net.Uri
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
@@ -22,11 +24,13 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.bruceyangg.pulsedesk.data.model.Holding
+import com.bruceyangg.pulsedesk.data.model.IntelItem
 import com.bruceyangg.pulsedesk.data.model.StockEarnings
 import com.bruceyangg.pulsedesk.data.model.ValueChain
 import com.bruceyangg.pulsedesk.ui.components.CandleChart
@@ -36,13 +40,24 @@ import com.bruceyangg.pulsedesk.ui.components.PctBadge
 import com.bruceyangg.pulsedesk.ui.components.PulseCard
 import com.bruceyangg.pulsedesk.ui.components.ScreenHeader
 import com.bruceyangg.pulsedesk.ui.components.priceText
+import com.bruceyangg.pulsedesk.ui.theme.TapeDown
+import com.bruceyangg.pulsedesk.ui.theme.TapeUp
 import com.bruceyangg.pulsedesk.ui.theme.tapeColor
+import com.bruceyangg.pulsedesk.viewmodel.HoldingIntelViewModel
 import com.bruceyangg.pulsedesk.viewmodel.PortfolioViewModel
 
 @Composable
-fun PortfolioScreen(vm: PortfolioViewModel = viewModel()) {
+fun PortfolioScreen(
+    vm: PortfolioViewModel = viewModel(),
+    intelVm: HoldingIntelViewModel = viewModel(),
+) {
     val state by vm.state.collectAsStateWithLifecycle()
-    LaunchedEffect(Unit) { if (state.data == null) vm.load() }
+    val intelState by intelVm.state.collectAsStateWithLifecycle()
+    val context = LocalContext.current
+    LaunchedEffect(Unit) {
+        if (state.data == null) vm.load()
+        if (intelState.data == null) intelVm.load()
+    }
 
     Column(Modifier.fillMaxSize()) {
         ScreenHeader(
@@ -149,6 +164,65 @@ fun PortfolioScreen(vm: PortfolioViewModel = viewModel()) {
                                 }
                             }
                         }
+                    }
+
+                    item {
+                        Text(
+                            "持仓情报",
+                            style = MaterialTheme.typography.titleMedium,
+                            modifier = Modifier.padding(top = 4.dp),
+                        )
+                    }
+                    intelState.data?.let { intel ->
+                        if (intel.symbols.isNotEmpty()) {
+                            item {
+                                Row(
+                                    Modifier.horizontalScroll(rememberScrollState()),
+                                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                ) {
+                                    FilterChip(
+                                        selected = intel.selected.isNullOrBlank(),
+                                        onClick = { intelVm.selectSymbol(null) },
+                                        label = { Text("全部 ${intel.total ?: intel.count ?: 0}") },
+                                    )
+                                    intel.symbols.forEach { sym ->
+                                        FilterChip(
+                                            selected = intel.selected == sym.symbol,
+                                            onClick = { intelVm.selectSymbol(sym.symbol) },
+                                            label = { Text("${sym.symbol} ${sym.count ?: 0}") },
+                                        )
+                                    }
+                                }
+                            }
+                        }
+                        if (intel.items.isEmpty()) {
+                            item {
+                                Text(
+                                    "暂无与持仓匹配的情报",
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                )
+                            }
+                        } else {
+                            items(
+                                intel.items.take(8),
+                                key = { it.id ?: it.url ?: it.title.orEmpty() },
+                            ) { item ->
+                                HoldingIntelCard(item) {
+                                    item.url?.let {
+                                        context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(it)))
+                                    }
+                                }
+                            }
+                        }
+                    } ?: item {
+                        Text(
+                            when {
+                                intelState.needsLogin -> "登录后显示持仓情报"
+                                intelState.error != null -> intelState.error!!
+                                else -> "加载持仓情报…"
+                            },
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
                     }
 
                     item {
@@ -299,6 +373,55 @@ private fun ValueChainCard(vc: ValueChain?) {
                 Text(
                     loc,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(top = 4.dp),
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun HoldingIntelCard(item: IntelItem, onOpen: () -> Unit) {
+    PulseCard {
+        Column(
+            Modifier
+                .fillMaxWidth()
+                .clickable(enabled = !item.url.isNullOrBlank(), onClick = onOpen)
+                .padding(14.dp),
+        ) {
+            Row(
+                Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+            ) {
+                Text(
+                    (item.holding_matches).joinToString(" · ").ifBlank { item.source ?: "情报" },
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    style = MaterialTheme.typography.labelLarge,
+                )
+                Text(
+                    when (item.sentiment) {
+                        "bullish" -> "偏多"
+                        "bearish" -> "偏空"
+                        else -> "中性"
+                    },
+                    color = when (item.sentiment) {
+                        "bullish" -> TapeUp
+                        "bearish" -> TapeDown
+                        else -> MaterialTheme.colorScheme.onSurfaceVariant
+                    },
+                    fontWeight = FontWeight.SemiBold,
+                )
+            }
+            Text(
+                item.title ?: "无标题",
+                fontWeight = FontWeight.SemiBold,
+                modifier = Modifier.padding(top = 6.dp),
+            )
+            item.summary_zh?.takeIf { it.isNotBlank() }?.let {
+                Text(
+                    it,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    style = MaterialTheme.typography.bodyMedium,
                     modifier = Modifier.padding(top = 4.dp),
                 )
             }

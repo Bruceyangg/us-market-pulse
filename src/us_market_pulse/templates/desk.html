@@ -7,14 +7,14 @@
         <h1>我的持仓</h1>
         <p class="lede compact">
           {% if user %}
-          当前账户 <strong>{{ user.display_name or user.username }}</strong> · 持仓走势与关联情报同屏 · 红涨绿跌
+          当前账户 <strong>{{ user.display_name or user.username }}</strong> · 走势、财报与持仓情报同屏 · 红涨绿跌
           {% else %}
           登录后查看与管理你的个人持仓；每个账户数据互相隔离。
           {% endif %}
         </p>
         <div class="cta-row">
           {% if user %}
-          <a class="btn ghost" href="#holding-intel">持仓情报</a>
+          <a class="btn ghost" href="#holding-intel">跳到持仓情报</a>
           <a class="btn ghost" href="/intel?holdings=1">情报页筛选持仓</a>
           {% else %}
           <a class="btn primary" href="/login">登录 / 注册</a>

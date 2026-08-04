@@ -21,7 +21,6 @@ import androidx.compose.material.icons.outlined.GridView
 import androidx.compose.material.icons.outlined.LightMode
 import androidx.compose.material.icons.outlined.Settings
 import androidx.compose.material.icons.outlined.ShowChart
-import androidx.compose.material.icons.outlined.TipsAndUpdates
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
@@ -44,7 +43,6 @@ import androidx.navigation.compose.composable
 import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
 import com.bruceyangg.pulsedesk.ui.screens.earnings.EarningsScreen
-import com.bruceyangg.pulsedesk.ui.screens.holdingintel.HoldingIntelScreen
 import com.bruceyangg.pulsedesk.ui.screens.intel.IntelScreen
 import com.bruceyangg.pulsedesk.ui.screens.markets.MarketsScreen
 import com.bruceyangg.pulsedesk.ui.screens.portfolio.PortfolioScreen
@@ -54,14 +52,13 @@ import com.bruceyangg.pulsedesk.ui.theme.ThemeMode
 import com.bruceyangg.pulsedesk.ui.theme.ThemePreferences
 import com.bruceyangg.pulsedesk.ui.theme.rememberThemeMode
 
-/** Matches website desk-nav order exactly. */
+/** Matches website desk-nav order (持仓情报 merged into 持仓). */
 enum class PulseTab(
     val route: String,
     val label: String,
     val icon: ImageVector,
 ) {
     Portfolio("desk", "持仓", Icons.Outlined.AccountBalance),
-    HoldingIntel("holding-intel", "持仓情报", Icons.Outlined.TipsAndUpdates),
     Markets("markets", "市场", Icons.Outlined.ShowChart),
     Sectors("sectors", "板块", Icons.Outlined.GridView),
     Earnings("earnings", "财报", Icons.Outlined.CalendarMonth),
@@ -165,7 +162,6 @@ fun PulseRoot() {
             popExitTransition = { ExitTransition.None },
         ) {
             composable(PulseTab.Portfolio.route) { PortfolioScreen() }
-            composable(PulseTab.HoldingIntel.route) { HoldingIntelScreen() }
             composable(PulseTab.Markets.route) { MarketsScreen() }
             composable(PulseTab.Sectors.route) { SectorsScreen() }
             composable(PulseTab.Earnings.route) { EarningsScreen() }
