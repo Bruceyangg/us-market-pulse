@@ -8,6 +8,21 @@ from typing import Any
 from us_market_pulse.feeds import sort_items
 
 TOPICS: dict[str, dict[str, Any]] = {
+    "ai": {
+        "id": "ai",
+        "label": "AI 板块",
+        "blurb": "人工智能、算力、大模型与 AI 基础设施",
+        "query": "人工智能 OR AI OR Nvidia OR 算力",
+        "patterns": [
+            re.compile(
+                r"\b(artificial intelligence|\bAI\b|A\.I\.|generative AI|LLM|"
+                r"large language model|OpenAI|Anthropic|Nvidia|GPU|data center|"
+                r"inference|foundation model|ChatGPT|copilot)\b",
+                re.I,
+            ),
+            re.compile(r"(人工智能|大模型|算力|英伟达|生成式AI|AI泡沫|智能体|芯片)"),
+        ],
+    },
     "us_iran": {
         "id": "us_iran",
         "label": "美伊战争",

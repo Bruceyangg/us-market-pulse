@@ -966,6 +966,9 @@ body {
 .workspace-main .push-panel,
 .workspace-main .spotlight,
 .workspace-main .war-desk,
+.workspace-main .ai-desk,
+.workspace-main .hot-sectors,
+.workspace-main .sector-picks,
 .workspace-main .event-section,
 .workspace-main .timeline-section,
 .workspace-main .brief-strip,
@@ -1714,7 +1717,7 @@ body {
     bottom: 0;
     z-index: 40;
     display: grid;
-    grid-template-columns: repeat(4, minmax(0, 1fr));
+    grid-template-columns: repeat(5, minmax(0, 1fr));
     gap: 0.15rem;
     padding: 0.45rem 0.55rem calc(0.45rem + env(safe-area-inset-bottom));
     background: var(--tabbar-bg);
@@ -2395,6 +2398,139 @@ body {
 @media (max-width: 860px) {
   .war-columns,
   .war-bearish-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+.ai-desk-grid {
+  display: grid;
+  grid-template-columns: minmax(16rem, 0.95fr) minmax(0, 1.2fr);
+  gap: 0.9rem;
+  align-items: start;
+}
+
+.sector-etf-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 0.75rem;
+}
+
+.sector-etf-card {
+  appearance: none;
+  width: 100%;
+  text-align: left;
+  cursor: pointer;
+  font: inherit;
+  color: inherit;
+}
+
+.sector-etf-card.is-active {
+  border-color: rgba(47, 111, 159, 0.45);
+  box-shadow: 0 0 0 3px rgba(47, 111, 159, 0.12);
+}
+
+.sector-etf-card.is-hot .label {
+  color: var(--bear);
+}
+
+.hot-tag {
+  display: inline-block;
+  margin-left: 0.35rem;
+  padding: 0.08rem 0.35rem;
+  border-radius: 999px;
+  background: var(--bear-soft);
+  color: var(--bear);
+  font-size: 0.68rem;
+  font-weight: 700;
+  vertical-align: middle;
+}
+
+.sector-picks-body {
+  display: grid;
+  grid-template-columns: minmax(0, 1.05fr) minmax(0, 1.2fr) minmax(15rem, 0.95fr);
+  gap: 1rem;
+  align-items: start;
+}
+
+.sector-list-pane {
+  min-width: 0;
+}
+
+.sector-news-mini {
+  margin-top: 0.9rem;
+  padding-top: 0.85rem;
+  border-top: 1px solid var(--line);
+}
+
+.sector-news-mini h3 {
+  margin: 0 0 0.55rem;
+  font-family: var(--font-display);
+  font-size: 1.05rem;
+}
+
+.value-chain {
+  min-width: 0;
+}
+
+.value-chain-sticky {
+  position: sticky;
+  top: 4.8rem;
+  border: 1px solid var(--line);
+  border-radius: calc(var(--radius) + 2px);
+  background: var(--elevated);
+  box-shadow: var(--shadow);
+  padding: 1rem 1rem 1.1rem;
+}
+
+.value-chain-body {
+  display: grid;
+  gap: 0.85rem;
+}
+
+.vc-block h3 {
+  margin: 0 0 0.3rem;
+  font-size: 0.92rem;
+  font-family: var(--font-display);
+}
+
+.vc-block p,
+.vc-block li {
+  margin: 0;
+  color: var(--ink-soft);
+  font-size: 0.84rem;
+  line-height: 1.5;
+}
+
+.vc-block ul {
+  margin: 0;
+  padding-left: 1.1rem;
+}
+
+.vc-kicker {
+  color: var(--sky) !important;
+  font-weight: 700;
+  font-size: 0.78rem !important;
+  margin-bottom: 0.35rem !important;
+}
+
+@media (max-width: 1100px) {
+  .sector-picks-body {
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1.1fr);
+  }
+
+  .value-chain {
+    grid-column: 1 / -1;
+  }
+
+  .value-chain-sticky {
+    position: static;
+  }
+}
+
+@media (max-width: 860px) {
+  .ai-desk-grid,
+  .sector-etf-grid,
+  .sector-picks-body {
     grid-template-columns: 1fr;
   }
 }
@@ -3486,7 +3622,9 @@ html[data-theme="dark"] .digest-line,
 html[data-theme="dark"] .portfolio-stats,
 html[data-theme="dark"] .war-column,
 html[data-theme="dark"] .war-bearish,
-html[data-theme="dark"] .war-analysis-card {
+html[data-theme="dark"] .war-analysis-card,
+html[data-theme="dark"] .value-chain-sticky,
+html[data-theme="dark"] .sector-etf-card {
   background: var(--elevated);
   color: var(--ink);
   border-color: var(--line);

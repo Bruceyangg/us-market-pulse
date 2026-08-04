@@ -32,6 +32,10 @@ const state = {
   holdingsOnly: false,
   holdingFilter: "",
   holdingIntel: null,
+  sectors: null,
+  sectorId: "ai",
+  sectorSymbol: "",
+  sectorTf: "intraday",
 };
 
 const PORTFOLIO_TF_KEYS = ["intraday", "day", "month", "quarter", "year"];
@@ -81,6 +85,19 @@ const els = {
   warLatestUkraine: document.getElementById("war-latest-ukraine"),
   warBearishGrid: document.getElementById("war-bearish-grid"),
   warBearishBlurb: document.getElementById("war-bearish-blurb"),
+  aiDeskBlurb: document.getElementById("ai-desk-blurb"),
+  aiAnalysisCard: document.getElementById("ai-analysis-card"),
+  aiNewsList: document.getElementById("ai-news-list"),
+  hotSectorsBlurb: document.getElementById("hot-sectors-blurb"),
+  sectorEtfGrid: document.getElementById("sector-etf-grid"),
+  sectorPicksBlurb: document.getElementById("sector-picks-blurb"),
+  sectorPickList: document.getElementById("sector-pick-list"),
+  sectorPickChart: document.getElementById("sector-pick-chart"),
+  sectorTfFilters: document.getElementById("sector-tf-filters"),
+  sectorNewsList: document.getElementById("sector-news-list"),
+  valueChainBlurb: document.getElementById("value-chain-blurb"),
+  valueChainBody: document.getElementById("value-chain-body"),
+  sectorsRefresh: document.getElementById("btn-sectors-refresh"),
   briefGrid: document.getElementById("brief-grid"),
   briefBlurb: document.getElementById("brief-blurb"),
   eventRail: document.getElementById("event-rail"),
@@ -2568,6 +2585,334 @@ document.getElementById("btn-logout")?.addEventListener("click", async () => {
   }
 });
 
+function pctClass(pct) {
+  if (typeof pct !== "number" || Number.isNaN(pct)) return "";
+  return pct > 0 ? "up" : pct < 0 ? "down" : "";
+}
+
+function pctText(pct) {
+  if (typeof pct !== "number" || Number.isNaN(pct)) return "—";
+  return `${pct >= 0 ? "+" : ""}${pct.toFixed(2)}%`;
+}
+
+function renderAiDesk(aiDesk) {
+  const data = aiDesk || {};
+  const analysis = data.analysis || {};
+  const counts = analysis.counts || {};
+  const score =
+    typeof analysis.avg_score === "number"
+      ? analysis.avg_score.toFixed(2)
+      : "0.00";
+  const factors = (analysis.top_factors || []).slice(0, 4).join("、");
+  if (els.aiDeskBlurb) {
+    els.aiDeskBlurb.textContent =
+      data.blurb ||
+      `近端样本 ${counts.total || 0} · 利空 ${counts.bearish || 0}`;
+  }
+  if (els.aiAnalysisCard) {
+    els.aiAnalysisCard.innerHTML = `
+      <div class="war-analysis-head">
+        <h3>${escapeHtml(data.label || "AI 板块")}</h3>
+        <a class="btn ghost btn-compact" href="/intel?q=${encodeURIComponent(
+          "人工智能 OR AI OR Nvidia"
+        )}">在情报流查看</a>
+      </div>
+      <div class="brief-meta-row">
+        <span class="brief-chip bias-bearish">利空 ${counts.bearish || 0}</span>
+        <span class="brief-chip">利多 ${counts.bullish || 0}</span>
+        <span class="brief-chip score">均分 ${escapeHtml(score)}</span>
+        <span class="brief-chip">样本 ${counts.total || 0}</span>
+      </div>
+      <p class="war-assessment">${escapeHtml(analysis.assessment || "暂无评判")}</p>
+      ${
+        factors
+          ? `<p class="war-factors">核心利空因子：${escapeHtml(factors)}</p>`
+          : ""
+      }
+    `;
+  }
+  if (els.aiNewsList) {
+    const rows = data.latest?.length ? data.latest : data.spotlight || [];
+    if (!rows.length) {
+      els.aiNewsList.innerHTML = '<p class="empty">暂无 AI 相关新闻。</p>';
+    } else {
+      els.aiNewsList.innerHTML = rows
+        .slice(0, 5)
+        .map((item) => spotlightCardHtml(item))
+        .join("");
+    }
+  }
+}
+
+function renderSectorEtfs(sectors) {
+  if (!els.sectorEtfGrid) return;
+  const rows = sectors || [];
+  if (!rows.length) {
+    els.sectorEtfGrid.innerHTML = '<p class="empty">暂无板块行情。</p>';
+    return;
+  }
+  if (els.hotSectorsBlurb) {
+    const hot = rows.filter((r) => r.is_hot).map((r) => r.label).slice(0, 3);
+    els.hotSectorsBlurb.textContent = hot.length
+      ? `当前热点：${hot.join(" · ")}`
+      : "按当日涨跌幅排序 · 点击切换强势个股池";
+  }
+  els.sectorEtfGrid.innerHTML = rows
+    .map((row) => {
+      const pct = row.change_pct;
+      const up = !(typeof pct === "number" && pct < 0);
+      const active = row.id === state.sectorId;
+      const spark = sparklinePath(row.points || [], 120, 36, 2);
+      const stroke = up ? TAPE_UP : TAPE_DOWN;
+      return `
+        <button type="button" class="index-card sector-etf-card ${
+          active ? "is-active" : ""
+        } ${row.is_hot ? "is-hot" : ""}" data-sector="${escapeHtml(row.id)}">
+          <div class="label">${escapeHtml(row.label)}${
+            row.is_hot ? '<span class="hot-tag">热点</span>' : ""
+          }</div>
+          <div class="short">${escapeHtml(row.symbol)} · #${row.rank || "—"}</div>
+          <div class="value">${escapeHtml(
+            row.price == null ? "—" : formatNumber(row.price, "")
+          )}</div>
+          <div class="chg ${pctClass(pct)}">${escapeHtml(pctText(pct))}</div>
+          <div class="mini-spark">
+            ${
+              spark
+                ? `<svg viewBox="0 0 120 36" preserveAspectRatio="none" aria-hidden="true"><path d="${spark}" fill="none" stroke="${stroke}" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"></path></svg>`
+                : ""
+            }
+          </div>
+        </button>
+      `;
+    })
+    .join("");
+
+  els.sectorEtfGrid.querySelectorAll("[data-sector]").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      const id = btn.getAttribute("data-sector");
+      if (!id || id === state.sectorId) return;
+      state.sectorId = id;
+      state.sectorSymbol = "";
+      loadSectorDesk();
+    });
+  });
+}
+
+function renderSectorPickChart() {
+  if (!els.sectorPickChart) return;
+  const data = state.sectors || {};
+  const pick = data.selected_pick;
+  const tf = state.sectorTf || "intraday";
+  if (els.sectorTfFilters) {
+    els.sectorTfFilters.querySelectorAll("[data-stf]").forEach((btn) => {
+      const on = btn.getAttribute("data-stf") === tf;
+      btn.classList.toggle("is-active", on);
+      btn.setAttribute("aria-selected", on ? "true" : "false");
+    });
+  }
+  if (!pick) {
+    els.sectorPickChart.innerHTML =
+      '<p class="chart-placeholder">选择个股后显示最新走势</p>';
+    return;
+  }
+  const series = pick.series?.[tf];
+  const points = series?.points || pick.points || [];
+  const pct = series?.change_pct != null ? series.change_pct : pick.change_pct;
+  const up = !(typeof pct === "number" && pct < 0);
+  const kind =
+    series?.chart || (tf === "intraday" ? "line" : "candle");
+  const stats = seriesStats(points, kind);
+  const svg =
+    kind === "candle"
+      ? renderCandleSvg(points)
+      : renderChartSvg(points, { up });
+  els.sectorPickChart.innerHTML = `
+    <div class="chart-head">
+      <h3>${escapeHtml(pick.name || pick.label || "")} · ${escapeHtml(
+        pick.symbol || ""
+      )}</h3>
+      <span class="range chg ${up ? "up" : "down"}">${escapeHtml(
+        pctText(pct)
+      )}</span>
+    </div>
+    <div class="portfolio-stats" aria-label="区间读数">
+      <span><span class="k">现价</span><span class="v ${up ? "up" : "down"}">${escapeHtml(
+        pick.price == null ? "—" : formatNumber(pick.price, "")
+      )}</span></span>
+      <span><span class="k">开</span><span class="v">${escapeHtml(
+        stats.open == null ? "—" : formatNumber(stats.open, "")
+      )}</span></span>
+      <span><span class="k">高</span><span class="v up">${escapeHtml(
+        stats.high == null ? "—" : formatNumber(stats.high, "")
+      )}</span></span>
+      <span><span class="k">低</span><span class="v down">${escapeHtml(
+        stats.low == null ? "—" : formatNumber(stats.low, "")
+      )}</span></span>
+      <span><span class="k">相对板块</span><span class="v ${pctClass(
+        pick.vs_sector_pct
+      )}">${escapeHtml(pctText(pick.vs_sector_pct))}</span></span>
+    </div>
+    ${svg}
+    <div class="chart-foot">红涨绿跌 · 延迟报价 · Yahoo Finance</div>
+  `;
+}
+
+function renderValueChain(vc) {
+  if (!els.valueChainBody) return;
+  const data = vc || {};
+  if (!data.symbol) {
+    els.valueChainBody.innerHTML =
+      '<p class="empty">选择个股后显示业务背景与产业链位置</p>';
+    return;
+  }
+  if (els.valueChainBlurb) {
+    els.valueChainBlurb.textContent = `${data.name || data.symbol} · 主营 / 产业 / 上下游`;
+  }
+  const list = (items) =>
+    (items || []).length
+      ? `<ul>${items.map((x) => `<li>${escapeHtml(x)}</li>`).join("")}</ul>`
+      : "<p class='empty'>暂无</p>";
+  els.valueChainBody.innerHTML = `
+    <div class="vc-block">
+      <p class="vc-kicker">${escapeHtml(data.symbol)} · ${escapeHtml(
+        data.name || ""
+      )}</p>
+      <h3>业务背景</h3>
+      <p>${escapeHtml(data.business || "")}</p>
+    </div>
+    <div class="vc-block">
+      <h3>产业背景</h3>
+      <p>${escapeHtml(data.industry || "")}</p>
+    </div>
+    <div class="vc-block">
+      <h3>产业链位置</h3>
+      <p>${escapeHtml(data.chain_position || "")}</p>
+    </div>
+    <div class="vc-block">
+      <h3>上游</h3>
+      ${list(data.upstream)}
+    </div>
+    <div class="vc-block">
+      <h3>下游</h3>
+      ${list(data.downstream)}
+    </div>
+    <div class="vc-block">
+      <h3>主要利空风险</h3>
+      ${list(data.bear_risks)}
+    </div>
+  `;
+}
+
+function renderSectorPicks(data) {
+  const picks = data?.picks || [];
+  const selected = data?.selected_symbol || state.sectorSymbol || "";
+  const sector = data?.active_sector || {};
+  const tf = state.sectorTf || "intraday";
+  if (els.sectorPicksBlurb) {
+    els.sectorPicksBlurb.textContent = `${sector.label || "板块"}观察名单 · 相对 ETF ${
+      sector.symbol || ""
+    } 更强优先`;
+  }
+  if (els.sectorPickList) {
+    if (!picks.length) {
+      els.sectorPickList.innerHTML = '<p class="empty">暂无强势个股样本。</p>';
+    } else {
+      els.sectorPickList.innerHTML = picks
+        .map((pick) => {
+          const pct = holdingTfPct(pick, tf);
+          const on = pick.symbol === selected;
+          return `
+            <button type="button" class="holding-row ${
+              on ? "is-active" : ""
+            } ${pctClass(pct)}" data-symbol="${escapeHtml(pick.symbol)}" role="option" aria-selected="${
+              on ? "true" : "false"
+            }">
+              <span class="meta">
+                <span class="nm">${escapeHtml(pick.name || pick.symbol)}${
+                  pick.is_strong ? '<span class="hot-tag">强</span>' : ""
+                }</span>
+                <span class="sym">${escapeHtml(pick.symbol)}</span>
+              </span>
+              <span class="spark-wrap">${holdingSparkSvg(pick, tf)}</span>
+              <span class="price ${pctClass(pct)}">${escapeHtml(
+                pick.price == null ? "—" : formatNumber(pick.price, "")
+              )}</span>
+              <span class="chg ${pctClass(pct)}">${escapeHtml(pctText(pct))}</span>
+            </button>
+          `;
+        })
+        .join("");
+      els.sectorPickList.querySelectorAll("[data-symbol]").forEach((btn) => {
+        btn.addEventListener("click", () => {
+          const sym = btn.getAttribute("data-symbol") || "";
+          if (!sym || sym === state.sectorSymbol) return;
+          state.sectorSymbol = sym;
+          loadSectorDesk();
+        });
+      });
+    }
+  }
+
+  if (els.sectorNewsList) {
+    const news = data?.sector_news || [];
+    els.sectorNewsList.innerHTML = news.length
+      ? news.slice(0, 4).map((item) => spotlightCardHtml(item)).join("")
+      : '<p class="empty">暂无该板块匹配新闻。</p>';
+  }
+
+  renderSectorPickChart();
+  renderValueChain(data?.value_chain || data?.selected_pick?.value_chain);
+}
+
+function renderSectorDesk(data) {
+  state.sectors = data || null;
+  if (data?.active_sector_id) state.sectorId = data.active_sector_id;
+  if (data?.selected_symbol) state.sectorSymbol = data.selected_symbol;
+  renderAiDesk(data?.ai_desk);
+  renderSectorEtfs(data?.sectors || []);
+  renderSectorPicks(data);
+}
+
+async function loadSectorDesk({ force = false } = {}) {
+  if (PAGE !== "sectors") return null;
+  const params = new URLSearchParams();
+  if (state.sectorId) params.set("sector", state.sectorId);
+  if (state.sectorSymbol) params.set("symbol", state.sectorSymbol);
+  if (force) params.set("refresh", "true");
+  setStatus(force ? "强制刷新板块…" : "同步板块行情与情报…");
+  if (els.sectorsRefresh) els.sectorsRefresh.disabled = true;
+  try {
+    const res = await fetch(`/api/sectors?${params.toString()}`);
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const data = await res.json();
+    renderSectorDesk(data);
+    const hot = (data.hot_sectors || []).map((s) => s.label).slice(0, 2).join("、");
+    setStatus(
+      `板块已更新${data.cached ? "（缓存）" : ""}${hot ? ` · 热点 ${hot}` : ""}`
+    );
+    return data;
+  } catch (err) {
+    setStatus(`板块加载失败：${err.message || err}`);
+    return null;
+  } finally {
+    if (els.sectorsRefresh) els.sectorsRefresh.disabled = false;
+  }
+}
+
+function bindSectorDesk() {
+  if (PAGE !== "sectors") return;
+  els.sectorsRefresh?.addEventListener("click", () => loadSectorDesk({ force: true }));
+  els.sectorTfFilters?.querySelectorAll("[data-stf]").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      const tf = btn.getAttribute("data-stf");
+      if (!tf || tf === state.sectorTf) return;
+      state.sectorTf = tf;
+      renderSectorPicks(state.sectors || {});
+    });
+  });
+}
+
 function bootPage() {
   if (PAGE === "login") {
     bindAuthPage();
@@ -2592,6 +2937,10 @@ function bootPage() {
   } else if (PAGE === "markets") {
     loadMarketsDesk();
     setInterval(() => loadMarketsDesk(), 90 * 1000);
+  } else if (PAGE === "sectors") {
+    bindSectorDesk();
+    loadSectorDesk();
+    setInterval(() => loadSectorDesk(), 90 * 1000);
   } else if (PAGE === "intel") {
     readIntelQueryFlags();
     loadIntel();
@@ -2669,6 +3018,11 @@ function navCycleRoutes() {
       id: "markets",
       href: "/markets",
       match: (p) => p === "/markets",
+    },
+    {
+      id: "sectors",
+      href: "/sectors",
+      match: (p) => p === "/sectors",
     },
     {
       id: "intel",

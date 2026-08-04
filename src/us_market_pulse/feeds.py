@@ -157,6 +157,27 @@ FEED_SOURCES: list[dict[str, str]] = [
             "&hl=en-US&gl=US&ceid=US:en"
         ),
     },
+    {
+        "id": "gn-ai",
+        "name": "AI 板块",
+        "category": "markets",
+        "url": (
+            "https://news.google.com/rss/search?q="
+            "%22artificial+intelligence%22+OR+Nvidia+OR+OpenAI+OR+"
+            "%22data+center%22+OR+GPU+OR+semiconductor+AI"
+            "&hl=en-US&gl=US&ceid=US:en"
+        ),
+    },
+    {
+        "id": "gn-semis",
+        "name": "半导体",
+        "category": "markets",
+        "url": (
+            "https://news.google.com/rss/search?q="
+            "semiconductor+OR+chip+OR+TSMC+OR+ASML+OR+%22memory+chip%22"
+            "&hl=en-US&gl=US&ceid=US:en"
+        ),
+    },
 ]
 
 # FRED series (public CSV, no API key)

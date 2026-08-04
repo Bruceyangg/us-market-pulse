@@ -33,6 +33,15 @@ THEME_RULES: list[tuple[re.Pattern[str], str, str]] = [
     ),
     (
         re.compile(
+            r"\b(artificial intelligence|\bAI\b|generative AI|LLM|OpenAI|Nvidia|"
+            r"data center|GPU|ChatGPT)\b",
+            re.I,
+        ),
+        "AI 板块",
+        "人工智能与算力叙事，关注资本开支、GPU 供需与估值泡沫风险。",
+    ),
+    (
+        re.compile(
             r"\b(iran|tehran|hormuz|hezbollah|houthi|israel[- ]iran|us[- ]iran)\b",
             re.I,
         ),

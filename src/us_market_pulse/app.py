@@ -36,6 +36,7 @@ from us_market_pulse.feeds import (
     refresh_intel,
     refresh_market_desk,
 )
+from us_market_pulse.sectors import build_sector_desk
 from us_market_pulse.topics import build_war_desk
 from us_market_pulse.portfolio import (
     add_holding,
@@ -148,6 +149,11 @@ async def markets_page(request: Request) -> HTMLResponse:
     return _page(request, "markets.html", "markets")
 
 
+@app.get("/sectors", response_class=HTMLResponse)
+async def sectors_page(request: Request) -> HTMLResponse:
+    return _page(request, "sectors.html", "sectors")
+
+
 @app.get("/intel", response_class=HTMLResponse)
 async def intel_page(request: Request) -> HTMLResponse:
     return _page(request, "intel.html", "intel")
@@ -195,6 +201,25 @@ async def api_auth_logout(request: Request) -> dict[str, Any]:
 @app.get("/api/markets")
 async def api_markets(refresh: bool = Query(default=False)) -> dict[str, Any]:
     return await refresh_market_desk(force=refresh)
+
+
+@app.get("/api/sectors")
+async def api_sectors(
+    refresh: bool = Query(default=False),
+    sector: str | None = Query(default=None),
+    symbol: str | None = Query(default=None),
+) -> dict[str, Any]:
+    intel = await refresh_intel(force=False)
+    desk = await build_sector_desk(
+        intel.get("items") or [],
+        force=refresh,
+        selected_sector=sector,
+        selected_symbol=symbol,
+    )
+    return {
+        **desk,
+        "intel_fetched_at": intel.get("fetched_at"),
+    }
 
 
 @app.get("/api/portfolio/intel")
