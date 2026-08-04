@@ -106,6 +106,7 @@ const els = {
   earningsBlurb: document.getElementById("earnings-blurb"),
   monthChart: document.getElementById("month-chart"),
   monthPanelBlurb: document.getElementById("month-panel-blurb"),
+  moveAnalysis: document.getElementById("move-analysis"),
   sectorsRefresh: document.getElementById("btn-sectors-refresh"),
   earningsPageBlurb: document.getElementById("earnings-page-blurb"),
   earningsRefresh: document.getElementById("btn-earnings-refresh"),
@@ -2808,6 +2809,47 @@ function renderMonthPanel(pick) {
   `;
 }
 
+function renderMoveAnalysis(pick) {
+  if (!els.moveAnalysis) return;
+  if (!pick) {
+    els.moveAnalysis.innerHTML =
+      '<p class="empty">选择个股后显示涨跌解读</p>';
+    return;
+  }
+  const analysis = pick.move_analysis || {};
+  const bias = analysis.bias || "neutral";
+  const factors = analysis.factors || [];
+  const sector = pick.sector_label || "";
+  els.moveAnalysis.innerHTML = `
+    <div class="move-analysis-head">
+      <div>
+        <p class="move-kicker">涨跌解读</p>
+        <h3>${escapeHtml(pick.name || pick.symbol || "")} · ${escapeHtml(
+          pick.symbol || ""
+        )}</h3>
+      </div>
+      <span class="move-bias bias-${escapeHtml(bias)}">${escapeHtml(
+        analysis.bias_zh || "中性"
+      )}</span>
+    </div>
+    <p class="move-sector">所属板块 · ${escapeHtml(sector || "未标注")}${
+      pick.vs_sector_pct != null
+        ? ` · 相对板块 ${escapeHtml(pctText(pick.vs_sector_pct))}`
+        : ""
+    }</p>
+    <p class="move-summary">${escapeHtml(
+      analysis.summary || "暂无解读"
+    )}</p>
+    ${
+      factors.length
+        ? `<ul class="move-factors">${factors
+            .map((f) => `<li>${escapeHtml(f)}</li>`)
+            .join("")}</ul>`
+        : ""
+    }
+  `;
+}
+
 function renderSectorPickChart() {
   if (!els.sectorPickChart) return;
   const data = state.sectors || {};
@@ -2824,6 +2866,7 @@ function renderSectorPickChart() {
     els.sectorPickChart.innerHTML =
       '<p class="chart-placeholder">点左侧个股，显示分时 / K 线</p>';
     renderMonthPanel(null);
+    renderMoveAnalysis(null);
     return;
   }
   const series = pick.series?.[tf];
@@ -2872,11 +2915,12 @@ function renderSectorPickChart() {
       )}">${escapeHtml(pctText(pick.month_change_pct))}</span></span>
     </div>
     <div class="chart-canvas">${svg}</div>
-    <div class="chart-foot">红涨绿跌 · ${escapeHtml(
-      pick.sector_label || ""
+    <div class="chart-foot">红涨绿跌 · 所属 ${escapeHtml(
+      pick.sector_label || "板块"
     )}${escapeHtml(earnNote)}</div>
   `;
   renderMonthPanel(pick);
+  renderMoveAnalysis(pick);
 }
 
 function renderValueChain(vc) {
@@ -2931,7 +2975,9 @@ function renderSectorPicks(data) {
   const tf = state.sectorTf || "intraday";
   const waveN = (data?.wave_leaders || picks.filter((p) => p.is_wave)).length;
   if (els.sectorPicksBlurb) {
-    els.sectorPicksBlurb.textContent = `${sector.label || "热点"} · ${waveN} 只一轮涨势`;
+    els.sectorPicksBlurb.textContent = `${sector.label || "热点"} · ${
+      picks.length
+    } 只推荐 · ${waveN} 只一轮涨势`;
   }
   if (els.sectorPickList) {
     if (!picks.length) {
@@ -2955,9 +3001,9 @@ function renderSectorPicks(data) {
                       ? '<span class="hot-tag">强</span>'
                       : ""
                 }</span>
-                <span class="sym">${escapeHtml(pick.symbol)} · 月 ${escapeHtml(
-                  pctText(pick.month_change_pct)
-                )}</span>
+                <span class="sym">${escapeHtml(pick.symbol)} · ${escapeHtml(
+                  pick.sector_label || "板块"
+                )} · 月 ${escapeHtml(pctText(pick.month_change_pct))}</span>
               </span>
               <span class="spark-wrap">${holdingSparkSvg(pick, "month")}</span>
               <span class="price ${pctClass(pct)}">${escapeHtml(

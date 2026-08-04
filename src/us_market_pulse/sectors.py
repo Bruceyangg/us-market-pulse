@@ -28,7 +28,18 @@ SECTOR_ETFS: list[dict[str, Any]] = [
         "short": "AI",
         "topic_id": "ai",
         "blurb": "人工智能、机器人与自动化主题",
-        "picks": ["NVDA", "AMD", "AVGO", "PLTR", "SMCI"],
+        "picks": [
+            "NVDA",
+            "AMD",
+            "AVGO",
+            "PLTR",
+            "SMCI",
+            "ARM",
+            "META",
+            "MSFT",
+            "GOOGL",
+            "SNOW",
+        ],
     },
     {
         "id": "semis",
@@ -37,7 +48,18 @@ SECTOR_ETFS: list[dict[str, Any]] = [
         "short": "Semis",
         "topic_id": "semis",
         "blurb": "芯片设计、制造与设备周期",
-        "picks": ["NVDA", "TSM", "ASML", "AVGO", "AMAT"],
+        "picks": [
+            "NVDA",
+            "TSM",
+            "ASML",
+            "AVGO",
+            "AMAT",
+            "MU",
+            "LRCX",
+            "KLAC",
+            "QCOM",
+            "AMD",
+        ],
     },
     {
         "id": "tech",
@@ -46,7 +68,18 @@ SECTOR_ETFS: list[dict[str, Any]] = [
         "short": "Tech",
         "topic_id": "tech",
         "blurb": "广义科技板块（软件 + 硬件）",
-        "picks": ["MSFT", "AAPL", "NVDA", "AVGO", "CRM"],
+        "picks": [
+            "MSFT",
+            "AAPL",
+            "NVDA",
+            "AVGO",
+            "CRM",
+            "ADBE",
+            "ORCL",
+            "NOW",
+            "PANW",
+            "IBM",
+        ],
     },
     {
         "id": "nasdaq",
@@ -55,7 +88,18 @@ SECTOR_ETFS: list[dict[str, Any]] = [
         "short": "QQQ",
         "topic_id": "tech",
         "blurb": "纳斯达克 100 成长与流动性风向标",
-        "picks": ["NVDA", "MSFT", "META", "AMZN", "GOOGL"],
+        "picks": [
+            "NVDA",
+            "MSFT",
+            "META",
+            "AMZN",
+            "GOOGL",
+            "AVGO",
+            "COST",
+            "NFLX",
+            "TSLA",
+            "AMD",
+        ],
     },
     {
         "id": "cloud",
@@ -64,7 +108,18 @@ SECTOR_ETFS: list[dict[str, Any]] = [
         "short": "Cloud",
         "topic_id": "cloud",
         "blurb": "云基础设施与软件即服务",
-        "picks": ["MSFT", "AMZN", "GOOGL", "ORCL", "SNOW"],
+        "picks": [
+            "MSFT",
+            "AMZN",
+            "GOOGL",
+            "ORCL",
+            "SNOW",
+            "DDOG",
+            "NET",
+            "CRWD",
+            "PANW",
+            "NOW",
+        ],
     },
     {
         "id": "energy",
@@ -73,7 +128,18 @@ SECTOR_ETFS: list[dict[str, Any]] = [
         "short": "Energy",
         "topic_id": "energy",
         "blurb": "原油、天然气与油气产业链",
-        "picks": ["XOM", "CVX", "COP", "SLB", "EOG"],
+        "picks": [
+            "XOM",
+            "CVX",
+            "COP",
+            "SLB",
+            "EOG",
+            "OXY",
+            "MPC",
+            "VLO",
+            "WMB",
+            "OKE",
+        ],
     },
     {
         "id": "finance",
@@ -82,7 +148,18 @@ SECTOR_ETFS: list[dict[str, Any]] = [
         "short": "Finance",
         "topic_id": "finance",
         "blurb": "银行、券商与保险利率敏感板块",
-        "picks": ["JPM", "BAC", "GS", "MS", "V"],
+        "picks": [
+            "JPM",
+            "BAC",
+            "GS",
+            "MS",
+            "V",
+            "MA",
+            "SCHW",
+            "C",
+            "AXP",
+            "BLK",
+        ],
     },
     {
         "id": "health",
@@ -91,7 +168,18 @@ SECTOR_ETFS: list[dict[str, Any]] = [
         "short": "Health",
         "topic_id": "health",
         "blurb": "制药、器械与医疗保健防御板块",
-        "picks": ["LLY", "UNH", "JNJ", "ABBV", "MRK"],
+        "picks": [
+            "LLY",
+            "UNH",
+            "JNJ",
+            "ABBV",
+            "MRK",
+            "AMGN",
+            "ISRG",
+            "SYK",
+            "PFE",
+            "VRTX",
+        ],
     },
 ]
 
@@ -286,6 +374,60 @@ VALUE_CHAIN: dict[str, dict[str, Any]] = {
         "downstream": ["台积电、三星、英特尔等晶圆厂"],
         "bear_risks": ["资本开支下行", "对华出口限制", "竞争"],
     },
+    "ARM": {
+        "name": "Arm",
+        "business": "CPU 架构授权与版税模式，覆盖手机、PC 与数据中心设计。",
+        "industry": "半导体 IP。",
+        "chain_position": "设计最上游 IP：不代工，向芯片公司授权架构。",
+        "upstream": ["EDA 与研发人才"],
+        "downstream": ["手机/PC/服务器芯片设计公司"],
+        "bear_risks": ["客户自研架构", "版税增速波动", "估值"],
+    },
+    "MU": {
+        "name": "美光",
+        "business": "DRAM / HBM 存储，AI 服务器高带宽内存关键供应商之一。",
+        "industry": "半导体存储。",
+        "chain_position": "存储配套：与 GPU 出货共振，决定训练集群可交付规模。",
+        "upstream": ["设备与晶圆材料"],
+        "downstream": ["服务器 OEM、云厂商、消费电子"],
+        "bear_risks": ["存储价格周期", "产能扩张", "竞争"],
+    },
+    "TSLA": {
+        "name": "特斯拉",
+        "business": "电动车、储能与自动驾驶软件，兼具科技成长与制造业属性。",
+        "industry": "汽车 / 清洁能源。",
+        "chain_position": "整车与能源系统集成商，向上游采购电池与芯片。",
+        "upstream": ["电池与芯片供应链"],
+        "downstream": ["消费者、电网储能客户"],
+        "bear_risks": ["交付与价格战", "Robotaxi 预期差", "监管"],
+    },
+    "LLY": {
+        "name": "礼来",
+        "business": "减重与糖尿病等代谢药物管线驱动增长的大型制药公司。",
+        "industry": "制药。",
+        "chain_position": "创新药研发与商业化，产能与医保覆盖影响放量。",
+        "upstream": ["原料药与代工产能"],
+        "downstream": ["医保支付方、医院与患者"],
+        "bear_risks": ["产能瓶颈", "定价与医保", "竞品进度"],
+    },
+    "JPM": {
+        "name": "摩根大通",
+        "business": "全能银行：零售、投行、交易与财富管理，利率与信贷周期敏感。",
+        "industry": "银行。",
+        "chain_position": "金融体系核心中介，连接储户、企业融资与资本市场。",
+        "upstream": ["存款与批发融资"],
+        "downstream": ["企业与零售客户、资本市场"],
+        "bear_risks": ["净息差回落", "信贷质量", "监管资本"],
+    },
+    "XOM": {
+        "name": "埃克森美孚",
+        "business": "上下游一体化油气巨头，原油价格与炼化利润是主驱动。",
+        "industry": "综合能源。",
+        "chain_position": "勘探开采到炼化销售全链，油价与资本开支周期核心受益/承压方。",
+        "upstream": ["油田服务与设备"],
+        "downstream": ["炼厂、化工与终端燃料需求"],
+        "bear_risks": ["油价回落", "能源转型政策", "项目执行"],
+    },
 }
 
 _CACHE: dict[str, Any] = {"fetched_at": 0.0, "payload": None}
@@ -447,6 +589,154 @@ def _is_wave_up(day_pct: Any, month_pct: Any) -> bool:
     except (TypeError, ValueError):
         return False
     return m >= 6.0 and d >= -2.0
+
+
+def _pct(value: Any) -> float | None:
+    if value is None:
+        return None
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _move_analysis(
+    *,
+    day_pct: Any,
+    month_pct: Any,
+    quarter_pct: Any,
+    vs_sector_pct: Any,
+    is_wave: bool,
+    sector_label: str,
+    etf_day_pct: Any,
+    earnings: dict[str, Any] | None,
+    value_chain: dict[str, Any] | None,
+    news: list[dict[str, Any]] | None = None,
+) -> dict[str, Any]:
+    """Rule-based Chinese explanation for near-term stock move."""
+    d = _pct(day_pct)
+    m = _pct(month_pct)
+    q = _pct(quarter_pct)
+    rs = _pct(vs_sector_pct)
+    etf_d = _pct(etf_day_pct)
+    factors: list[str] = []
+
+    if d is None and m is None:
+        return {
+            "bias": "neutral",
+            "bias_zh": "中性",
+            "summary": "行情数据不足，暂无法判断涨跌驱动。",
+            "factors": ["等待报价刷新后再解读"],
+        }
+
+    score = 0.0
+    if d is not None:
+        score += d * 0.45
+    if m is not None:
+        score += m * 0.35
+    if rs is not None:
+        score += rs * 0.35
+
+    if score >= 1.2:
+        bias, bias_zh = "bullish", "偏多"
+    elif score <= -1.2:
+        bias, bias_zh = "bearish", "偏空"
+    else:
+        bias, bias_zh = "neutral", "震荡"
+
+    if d is not None:
+        if d >= 2:
+            factors.append(f"今日大涨 {d:+.1f}%，短线资金推动明显")
+        elif d >= 0.4:
+            factors.append(f"今日上涨 {d:+.1f}%，盘面偏强")
+        elif d <= -2:
+            factors.append(f"今日大跌 {d:+.1f}%，短线抛压较重")
+        elif d <= -0.4:
+            factors.append(f"今日下跌 {d:+.1f}%，盘面偏弱")
+        else:
+            factors.append(f"今日涨跌有限（{d:+.1f}%），多为跟随波动")
+
+    if m is not None:
+        if m >= 10:
+            factors.append(f"近 1 月走强约 {m:+.1f}%，一轮涨势仍在延续")
+        elif m >= 4:
+            factors.append(f"近 1 月累计 {m:+.1f}%，中期趋势偏多")
+        elif m <= -8:
+            factors.append(f"近 1 月回撤约 {m:+.1f}%，中期动能转弱")
+        elif m <= -3:
+            factors.append(f"近 1 月偏弱（{m:+.1f}%），反弹需看量能确认")
+
+    if q is not None and abs(q) >= 8:
+        factors.append(
+            f"近一季约 {q:+.1f}%，{'趋势上行' if q > 0 else '趋势承压'}仍是主背景"
+        )
+
+    if is_wave:
+        factors.append("同时满足近月/近季偏强条件，归入“一轮涨势”样本")
+
+    sector = sector_label or "所属板块"
+    if rs is not None and etf_d is not None:
+        if rs >= 1.2:
+            factors.append(
+                f"强于 {sector}（相对板块约 {rs:+.1f}%），更偏个股逻辑"
+            )
+        elif rs <= -1.2:
+            factors.append(
+                f"弱于 {sector}（相对板块约 {rs:+.1f}%），注意个股拖累"
+            )
+        else:
+            factors.append(
+                f"与 {sector} 同步（板块日涨跌 {etf_d:+.1f}%），板块β为主"
+            )
+    elif etf_d is not None:
+        factors.append(f"{sector} 今日 {etf_d:+.1f}%，提供板块方向参考")
+
+    earn = earnings or {}
+    days = earn.get("days_to_earnings")
+    if isinstance(days, int) and 0 <= days <= 14:
+        label = earn.get("next_earnings_label") or f"{days} 天后"
+        factors.append(f"临近财报窗口（{label}），波动与预期差风险上升")
+
+    vc = value_chain or {}
+    risks = [str(x) for x in (vc.get("bear_risks") or []) if x][:2]
+    if bias == "bearish" and risks:
+        factors.append("关注既有风险：" + "、".join(risks))
+    elif bias == "bullish" and vc.get("chain_position"):
+        pos = str(vc.get("chain_position") or "")
+        if pos and len(pos) > 8:
+            factors.append(f"产业位置：{pos[:48]}{'…' if len(pos) > 48 else ''}")
+
+    headlines: list[str] = []
+    for item in (news or [])[:6]:
+        title = str(item.get("title_zh") or item.get("title") or "").strip()
+        if not title:
+            continue
+        sent = item.get("sentiment")
+        if bias == "bearish" and sent == "bullish":
+            continue
+        if bias == "bullish" and sent == "bearish":
+            continue
+        headlines.append(title[:42] + ("…" if len(title) > 42 else ""))
+        if len(headlines) >= 2:
+            break
+    if headlines:
+        factors.append("相关报道：" + "；".join(headlines))
+
+    day_bit = f"今日 {d:+.1f}%" if d is not None else "今日数据缺失"
+    month_bit = f"近月 {m:+.1f}%" if m is not None else "近月待定"
+    if bias == "bullish":
+        summary = f"{day_bit}，{month_bit}，整体偏多；主要看动能与相对 {sector} 的强弱。"
+    elif bias == "bearish":
+        summary = f"{day_bit}，{month_bit}，整体偏空；优先核对板块拖累、风险事件与财报窗口。"
+    else:
+        summary = f"{day_bit}，{month_bit}，多空拉锯；更宜看相对 {sector} 是否走强/走弱。"
+
+    return {
+        "bias": bias,
+        "bias_zh": bias_zh,
+        "summary": summary,
+        "factors": factors[:6],
+    }
 
 
 async def _fetch_earnings(
@@ -617,19 +907,19 @@ async def build_sector_desk(
         active = sectors[0]
         sector_id = active["id"]
 
-    # Universe: active sector picks + leaders from other hot sectors
+    # Universe: full active-sector picks + a few leaders from other hot sectors
     hot = [s for s in sectors if s.get("is_hot")][:3]
     pick_symbols: list[str] = []
-    for sym in list((active or {}).get("picks") or [])[:5]:
+    for sym in list((active or {}).get("picks") or [])[:12]:
         if sym not in pick_symbols:
             pick_symbols.append(sym)
     for hot_sec in hot:
         if hot_sec.get("id") == sector_id:
             continue
-        for sym in list(hot_sec.get("picks") or [])[:2]:
+        for sym in list(hot_sec.get("picks") or [])[:3]:
             if sym not in pick_symbols:
                 pick_symbols.append(sym)
-        if len(pick_symbols) >= 10:
+        if len(pick_symbols) >= 16:
             break
 
     pick_rows: list[dict[str, Any]] = []
@@ -658,13 +948,31 @@ async def build_sector_desk(
             if not bundle:
                 continue
             vc = _value_chain_for(sym)
-            home = sector_by_sym.get(sym) or {}
+            home = sector_by_sym.get(sym) or active or {}
+            # Prefer currently selected sector label when the symbol belongs there
+            if sym in list((active or {}).get("picks") or []):
+                home = active or home
             home_etf = next(
                 (s for s in sectors if s.get("id") == home.get("id")), active
             )
             rs = _relative_strength(bundle, home_etf)
             wave = _momentum_fields(bundle)
             day_pct = bundle.get("change_pct")
+            sector_label = (
+                home.get("label") or (active or {}).get("label") or ""
+            )
+            analysis = _move_analysis(
+                day_pct=day_pct,
+                month_pct=wave["month_change_pct"],
+                quarter_pct=wave["quarter_change_pct"],
+                vs_sector_pct=rs,
+                is_wave=bool(wave["is_wave"]),
+                sector_label=sector_label,
+                etf_day_pct=(home_etf or {}).get("change_pct"),
+                earnings=earnings,
+                value_chain=vc,
+                news=None,  # filled after sector_news is ready
+            )
             pick_rows.append(
                 {
                     **bundle,
@@ -679,11 +987,10 @@ async def build_sector_desk(
                     or float(day_pct or 0)
                     > float((home_etf or {}).get("change_pct") or 0),
                     "sector_id": home.get("id") or sector_id,
-                    "sector_label": home.get("label")
-                    or (active or {}).get("label")
-                    or "",
+                    "sector_label": sector_label,
                     "earnings": earnings,
                     "value_chain": vc,
+                    "move_analysis": analysis,
                 }
             )
         pick_rows.sort(
@@ -704,6 +1011,26 @@ async def build_sector_desk(
     sector_news = _match_sector_news(
         news_items, (active or {}).get("topic_id") or sector_id
     )
+    # Enrich move analysis with sector headlines once news is available
+    for row in pick_rows:
+        home_etf = next(
+            (s for s in sectors if s.get("id") == row.get("sector_id")), active
+        )
+        row["move_analysis"] = _move_analysis(
+            day_pct=row.get("change_pct"),
+            month_pct=row.get("month_change_pct"),
+            quarter_pct=row.get("quarter_change_pct"),
+            vs_sector_pct=row.get("vs_sector_pct"),
+            is_wave=bool(row.get("is_wave")),
+            sector_label=str(row.get("sector_label") or ""),
+            etf_day_pct=(home_etf or {}).get("change_pct"),
+            earnings=row.get("earnings") if isinstance(row.get("earnings"), dict) else None,
+            value_chain=row.get("value_chain")
+            if isinstance(row.get("value_chain"), dict)
+            else None,
+            news=sector_news,
+        )
+
     topic_key = (active or {}).get("topic_id")
     if topic_key in TOPICS:
         sector_bear = topic_bearish_analysis(news_items, topic_key)
@@ -767,7 +1094,7 @@ async def build_sector_desk(
         "sector_news": sector_news,
         "sector_bearish": sector_bear,
         "picks": pick_rows,
-        "wave_leaders": [p for p in pick_rows if p.get("is_wave")][:6],
+        "wave_leaders": [p for p in pick_rows if p.get("is_wave")][:10],
         "selected_symbol": selected,
         "selected_pick": selected_pick,
         "value_chain": (selected_pick or {}).get("value_chain")
