@@ -2,17 +2,10 @@
 
 from __future__ import annotations
 
-import asyncio
 import time
 from typing import Any
-from urllib.parse import quote
 
-import httpx
-
-USER_AGENT = (
-    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
-    "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
-)
+from us_market_pulse.quotes import fetch_day_quotes
 
 # Nested market map (sector → subgroup → stocks). Weights are relative tile sizes.
 MARKET_MAP: list[dict[str, Any]] = [
@@ -397,58 +390,6 @@ MARKET_MAP: list[dict[str, Any]] = [
 
 _MAP_CACHE: dict[str, Any] = {"fetched_at": 0.0, "payload": None}
 _MAP_TTL = 120.0
-_QUOTE_CACHE: dict[str, dict[str, Any]] = {}
-_QUOTE_TTL = 90.0
-
-
-def _yahoo_day_url(symbol: str) -> str:
-    enc = quote(symbol, safe="")
-    return (
-        f"https://query1.finance.yahoo.com/v8/finance/chart/{enc}"
-        f"?range=5d&interval=1d&includePrePost=false"
-    )
-
-
-async def _fetch_light_quote(
-    client: httpx.AsyncClient, symbol: str, *, force: bool = False
-) -> dict[str, Any] | None:
-    sym = symbol.upper().strip()
-    now = time.time()
-    cached = _QUOTE_CACHE.get(sym)
-    if (
-        not force
-        and cached
-        and now - float(cached.get("fetched_at") or 0) < _QUOTE_TTL
-    ):
-        return dict(cached.get("quote") or {})
-
-    try:
-        resp = await client.get(_yahoo_day_url(sym), timeout=18.0)
-        resp.raise_for_status()
-        result = ((resp.json().get("chart") or {}).get("result") or [None])[0]
-        if not result:
-            return None
-        meta = result.get("meta") or {}
-        price = meta.get("regularMarketPrice")
-        prev = meta.get("chartPreviousClose") or meta.get("previousClose")
-        change_pct = meta.get("regularMarketChangePercent")
-        change = meta.get("regularMarketChange")
-        if change_pct is None and price is not None and prev not in (None, 0):
-            change = float(price) - float(prev)
-            change_pct = (change / float(prev)) * 100.0
-        quote = {
-            "symbol": sym,
-            "price": round(float(price), 2) if price is not None else None,
-            "change": round(float(change), 4) if change is not None else None,
-            "change_pct": round(float(change_pct), 3)
-            if change_pct is not None
-            else None,
-            "as_of": meta.get("regularMarketTime"),
-        }
-        _QUOTE_CACHE[sym] = {"quote": quote, "fetched_at": now}
-        return quote
-    except Exception:  # noqa: BLE001
-        return None
 
 
 def _map_symbols() -> list[str]:
@@ -466,41 +407,21 @@ def _map_symbols() -> list[str]:
 
 async def build_market_map(*, force: bool = False) -> dict[str, Any]:
     now = time.time()
+    cached_payload = _MAP_CACHE.get("payload")
+    cached_quoted = int(((cached_payload or {}).get("stats") or {}).get("quoted") or 0)
     if (
         not force
-        and _MAP_CACHE["payload"]
+        and cached_payload
+        and cached_quoted > 0
         and now - float(_MAP_CACHE["fetched_at"]) < _MAP_TTL
     ):
-        payload = dict(_MAP_CACHE["payload"])
+        payload = dict(cached_payload)
         payload["cached"] = True
         return payload
 
     symbols = _map_symbols()
-    quotes: dict[str, dict[str, Any]] = {}
-    errors: list[str] = []
-    sem = asyncio.Semaphore(8)
-
-    async with httpx.AsyncClient(
-        headers={
-            "User-Agent": USER_AGENT,
-            "Accept": "application/json",
-            "Accept-Language": "en-US,en;q=0.9",
-            "Origin": "https://finance.yahoo.com",
-            "Referer": "https://finance.yahoo.com/",
-        },
-        follow_redirects=True,
-        trust_env=False,
-    ) as client:
-
-        async def one(sym: str) -> None:
-            async with sem:
-                q = await _fetch_light_quote(client, sym, force=force)
-                if q:
-                    quotes[sym] = q
-                else:
-                    errors.append(f"{sym}: quote failed")
-
-        await asyncio.gather(*[one(sym) for sym in symbols])
+    quotes = await fetch_day_quotes(symbols)
+    errors = [f"{sym}: quote failed" for sym in symbols if sym not in quotes]
 
     sectors_out: list[dict[str, Any]] = []
     up = down = flat = 0
@@ -583,8 +504,10 @@ async def build_market_map(*, force: bool = False) -> dict[str, Any]:
         "errors": errors[-20:],
         "fetched_at": now,
         "cached": False,
-        "source": "Yahoo Finance 日涨跌 · 权重为相对市值近似",
+        "source": "CNBC / Yahoo 日涨跌 · 权重为相对市值近似",
     }
-    _MAP_CACHE["payload"] = payload
-    _MAP_CACHE["fetched_at"] = now
+    # Never cache an empty quote set — keeps UI stuck on "—" after Yahoo outages.
+    if quotes:
+        _MAP_CACHE["payload"] = payload
+        _MAP_CACHE["fetched_at"] = now
     return dict(payload)
