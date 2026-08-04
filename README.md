@@ -77,12 +77,26 @@ curl -X POST http://127.0.0.1:8765/api/push/test
 
 若设置了 `PULSE_PUSH_SECRET`，测试接口需带请求头 `X-Pulse-Secret`。
 
+## Android 原生客户端
+
+原生 Kotlin / Jetpack Compose 工程在 [`android/`](android/)：
+
+```bash
+# 用 Android Studio 打开 android/ 目录后 Run
+```
+
+详见 [android/README.md](android/README.md)。
+
 ## API
 
 - `GET /api/intel?category=fed&sentiment=bullish&q=rate&refresh=false`
 - `GET /api/push/status`
 - `POST /api/push/test`
 - `GET /api/health`
+- `GET /api/markets`
+- `GET /api/sectors`
+- `GET /api/sectors/map`
+- `GET /api/earnings`
 
 ## 说明
 
