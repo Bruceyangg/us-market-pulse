@@ -100,6 +100,8 @@ const els = {
   aiAnalysisCard: document.getElementById("ai-analysis-card"),
   aiNewsList: document.getElementById("ai-news-list"),
   hotSectorsBlurb: document.getElementById("hot-sectors-blurb"),
+  sectorMapBlurb: document.getElementById("sector-map-blurb"),
+  sectorMapCanvas: document.getElementById("sector-map-canvas"),
   sectorEtfGrid: document.getElementById("sector-etf-grid"),
   sectorPicksBlurb: document.getElementById("sector-picks-blurb"),
   sectorPickList: document.getElementById("sector-pick-list"),
@@ -2954,6 +2956,243 @@ function renderAiDesk(aiDesk) {
   }
 }
 
+function heatColor(pct) {
+  if (pct == null || Number.isNaN(Number(pct))) {
+    return "color-mix(in srgb, var(--panel-2, #243041) 88%, #6b7c90)";
+  }
+  const t = clamp(Number(pct) / 3.5, -1, 1);
+  if (t >= 0) {
+    const a = 0.22 + t * 0.78;
+    return `color-mix(in srgb, ${TAPE_UP} ${Math.round(a * 100)}%, #2a3340)`;
+  }
+  const a = 0.22 + -t * 0.78;
+  return `color-mix(in srgb, ${TAPE_DOWN} ${Math.round(a * 100)}%, #2a3340)`;
+}
+
+function layoutTreemap(nodes, x, y, w, h, out) {
+  const items = (nodes || []).filter((n) => n && n.value > 0);
+  if (!items.length || w < 1 || h < 1) return;
+  if (items.length === 1) {
+    out.push({ ...items[0], x, y, w, h });
+    return;
+  }
+  const total = items.reduce((s, n) => s + n.value, 0) || 1;
+  let acc = 0;
+  let split = 1;
+  for (let i = 0; i < items.length; i += 1) {
+    acc += items[i].value;
+    if (acc >= total * 0.5) {
+      split = Math.max(1, Math.min(items.length - 1, i + 1));
+      break;
+    }
+  }
+  const left = items.slice(0, split);
+  const right = items.slice(split);
+  const leftSum = left.reduce((s, n) => s + n.value, 0);
+  const ratio = leftSum / total;
+  if (w >= h) {
+    const lw = w * ratio;
+    layoutTreemap(left, x, y, lw, h, out);
+    layoutTreemap(right, x + lw, y, w - lw, h, out);
+  } else {
+    const lh = h * ratio;
+    layoutTreemap(left, x, y, w, lh, out);
+    layoutTreemap(right, x, y + lh, w, h - lh, out);
+  }
+}
+
+function renderSectorMap(map) {
+  if (!els.sectorMapCanvas) return;
+  const sectors = map?.sectors || [];
+  const stats = map?.stats || {};
+  if (els.sectorMapBlurb) {
+    if (!sectors.length) {
+      els.sectorMapBlurb.textContent = "全板块涨跌图暂不可用，稍后刷新";
+    } else {
+      const bits = [
+        `已覆盖 ${stats.quoted || 0}/${stats.symbols || 0} 只龙头`,
+        typeof stats.up === "number" ? `涨 ${stats.up}` : "",
+        typeof stats.down === "number" ? `跌 ${stats.down}` : "",
+        map?.cached ? "缓存" : "",
+      ].filter(Boolean);
+      els.sectorMapBlurb.textContent = `${bits.join(" · ")} · 点击板块或个股下钻`;
+    }
+  }
+  if (!sectors.length) {
+    els.sectorMapCanvas.innerHTML =
+      '<p class="empty">暂无全板块数据，请点击刷新重试。</p>';
+    return;
+  }
+
+  const width = 1000;
+  const height = 520;
+  const sectorNodes = sectors.map((s) => ({
+    ...s,
+    value: Math.max(0.5, Number(s.weight) || 1),
+  }));
+  const sectorRects = [];
+  layoutTreemap(sectorNodes, 0, 0, width, height, sectorRects);
+
+  const gap = 1.1;
+  const html = sectorRects
+    .map((sec) => {
+      const sx = sec.x + gap;
+      const sy = sec.y + gap;
+      const sw = Math.max(1, sec.w - gap * 2);
+      const sh = Math.max(1, sec.h - gap * 2);
+      const showHead = sh > 64 && sw > 70;
+      const innerW = Math.max(1, sw - 2);
+      const innerH = Math.max(1, sh - (showHead ? 17 : 2));
+      const groups = (sec.groups || []).map((g) => ({
+        ...g,
+        value: Math.max(0.4, Number(g.weight) || 1),
+      }));
+      const groupRects = [];
+      layoutTreemap(groups, 0, 0, innerW, innerH, groupRects);
+      const groupsHtml = groupRects
+        .map((grp) => {
+          const showGHead = grp.h > 42 && grp.w > 50;
+          const bodyW = Math.max(1, grp.w - 1);
+          const bodyH = Math.max(1, grp.h - (showGHead ? 13 : 1));
+          const stocks = (grp.children || []).map((c) => ({
+            ...c,
+            value: Math.max(0.3, Number(c.weight) || 1),
+          }));
+          const stockRects = [];
+          layoutTreemap(stocks, 0, 0, bodyW, bodyH, stockRects);
+          const stocksHtml = stockRects
+            .map((st) => {
+              const showName = st.w / bodyW > 0.28 && st.h / bodyH > 0.34;
+              const showPct = st.w / bodyW > 0.18 && st.h / bodyH > 0.22;
+              const pct = st.change_pct;
+              const cls =
+                pct == null || Number.isNaN(Number(pct))
+                  ? ""
+                  : Number(pct) >= 0
+                    ? "up"
+                    : "down";
+              return `
+                <button type="button" class="map-stock ${cls}"
+                  style="left:${((st.x / bodyW) * 100).toFixed(3)}%;top:${(
+                    (st.y / bodyH) *
+                    100
+                  ).toFixed(3)}%;width:${((Math.max(0, st.w - 0.6) / bodyW) * 100).toFixed(
+                    3
+                  )}%;height:${((Math.max(0, st.h - 0.6) / bodyH) * 100).toFixed(
+                    3
+                  )}%;background:${heatColor(pct)}"
+                  data-symbol="${escapeHtml(st.symbol || "")}"
+                  data-desk="${escapeHtml(sec.desk_id || sec.id || "")}"
+                  title="${escapeHtml(st.name || st.symbol || "")} ${escapeHtml(
+                    pctText(pct)
+                  )}">
+                  <span class="sym">${escapeHtml(st.symbol || "")}</span>
+                  ${
+                    showName
+                      ? `<span class="nm">${escapeHtml(st.name || "")}</span>`
+                      : ""
+                  }
+                  ${
+                    showPct
+                      ? `<span class="pct">${escapeHtml(pctText(pct))}</span>`
+                      : ""
+                  }
+                </button>
+              `;
+            })
+            .join("");
+          return `
+            <div class="map-group" style="left:${((grp.x / innerW) * 100).toFixed(
+              3
+            )}%;top:${((grp.y / innerH) * 100).toFixed(3)}%;width:${(
+              (Math.max(0, grp.w - 0.5) / innerW) *
+              100
+            ).toFixed(3)}%;height:${((Math.max(0, grp.h - 0.5) / innerH) * 100).toFixed(
+              3
+            )}%">
+              ${
+                showGHead
+                  ? `<div class="map-group-label">${escapeHtml(
+                      grp.label || ""
+                    )}</div>`
+                  : ""
+              }
+              <div class="map-group-body${
+                showGHead ? " has-label" : ""
+              }">${stocksHtml}</div>
+            </div>
+          `;
+        })
+        .join("");
+      return `
+        <div class="map-sector" style="left:${((sx / width) * 100).toFixed(
+          3
+        )}%;top:${((sy / height) * 100).toFixed(3)}%;width:${((sw / width) * 100).toFixed(
+          3
+        )}%;height:${((sh / height) * 100).toFixed(3)}%;--sector-tint:${heatColor(
+          sec.change_pct
+        )}">
+          ${
+            showHead
+              ? `<button type="button" class="map-sector-label" data-desk="${escapeHtml(
+                  sec.desk_id || sec.id || ""
+                )}" title="${escapeHtml(sec.label || "")} ${escapeHtml(
+                  pctText(sec.change_pct)
+                )}">${escapeHtml(sec.label || "")}<span>${escapeHtml(
+                  pctText(sec.change_pct)
+                )}</span></button>`
+              : ""
+          }
+          <div class="map-sector-body${showHead ? " has-label" : ""}">${groupsHtml}</div>
+        </div>
+      `;
+    })
+    .join("");
+
+  els.sectorMapCanvas.innerHTML = `<div class="sector-map-stage">${html}</div>`;
+
+  els.sectorMapCanvas.querySelectorAll("[data-desk].map-sector-label").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      const desk = btn.getAttribute("data-desk") || "";
+      if (!desk) return;
+      state.sectorId = desk;
+      state.sectorSymbol = "";
+      loadSectorDesk();
+    });
+  });
+  els.sectorMapCanvas.querySelectorAll(".map-stock[data-symbol]").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      const sym = (btn.getAttribute("data-symbol") || "").toUpperCase();
+      const desk = btn.getAttribute("data-desk") || "";
+      if (!sym) return;
+      if (desk) state.sectorId = desk;
+      selectSectorSymbol(sym);
+    });
+  });
+}
+
+async function loadSectorMap({ force = false } = {}) {
+  if (PAGE !== "sectors" || !els.sectorMapCanvas) return null;
+  if (force) {
+    els.sectorMapCanvas.innerHTML = '<p class="empty">刷新全板块涨跌图…</p>';
+  }
+  try {
+    const params = force ? "?refresh=true" : "";
+    const res = await fetch(`/api/sectors/map${params}`);
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const data = await res.json();
+    renderSectorMap(data);
+    return data;
+  } catch (err) {
+    if (els.sectorMapBlurb) {
+      els.sectorMapBlurb.textContent = `涨跌图加载失败：${err.message || err}`;
+    }
+    els.sectorMapCanvas.innerHTML =
+      '<p class="empty">全板块涨跌图加载失败，请稍后刷新。</p>';
+    return null;
+  }
+}
+
 function renderSectorEtfs(sectors) {
   if (!els.sectorEtfGrid) return;
   const rows = sectors || [];
@@ -3494,6 +3733,7 @@ async function loadSectorDesk({ force = false } = {}) {
   if (force) params.set("refresh", "true");
   setStatus(force ? "强制刷新板块…" : "同步板块行情与情报…");
   if (els.sectorsRefresh) els.sectorsRefresh.disabled = true;
+  const mapPromise = loadSectorMap({ force });
   try {
     const res = await fetch(`/api/sectors?${params.toString()}`);
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
@@ -3503,9 +3743,11 @@ async function loadSectorDesk({ force = false } = {}) {
     setStatus(
       `板块已更新${data.cached ? "（缓存）" : ""}${hot ? ` · 热点 ${hot}` : ""}`
     );
+    await mapPromise;
     return data;
   } catch (err) {
     setStatus(`板块加载失败：${err.message || err}`);
+    await mapPromise;
     return null;
   } finally {
     if (els.sectorsRefresh) els.sectorsRefresh.disabled = false;

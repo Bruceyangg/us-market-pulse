@@ -40,6 +40,7 @@ from us_market_pulse.earnings_calendar import (
     build_earnings_calendar,
     parse_day_param,
 )
+from us_market_pulse.market_map import build_market_map
 from us_market_pulse.sectors import build_sector_desk
 from us_market_pulse.topics import build_war_desk
 from us_market_pulse.portfolio import (
@@ -229,6 +230,11 @@ async def api_sectors(
         **desk,
         "intel_fetched_at": intel.get("fetched_at"),
     }
+
+
+@app.get("/api/sectors/map")
+async def api_sectors_map(refresh: bool = Query(default=False)) -> dict[str, Any]:
+    return await build_market_map(force=refresh)
 
 
 @app.get("/api/earnings")

@@ -2443,6 +2443,219 @@ body {
   gap: 0.75rem;
 }
 
+.sector-map-pane {
+  border: 1px solid var(--line);
+  border-radius: 18px;
+  background: color-mix(in srgb, var(--elevated-soft) 92%, transparent);
+  padding: 0.75rem 0.8rem 0.85rem;
+  display: grid;
+  gap: 0.55rem;
+}
+
+.sector-map-head {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 0.75rem;
+  flex-wrap: wrap;
+}
+
+.sector-map-head h2 {
+  margin: 0;
+  font-size: 1.05rem;
+  font-weight: 750;
+  letter-spacing: -0.02em;
+}
+
+.sector-map-head p {
+  margin: 0.15rem 0 0;
+  color: var(--ink-soft);
+  font-size: 0.78rem;
+}
+
+.sector-map-legend {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  font-size: 0.72rem;
+  font-weight: 700;
+}
+
+.sector-map-legend .map-lg.up {
+  color: var(--tape-up, #d92b2b);
+}
+
+.sector-map-legend .map-lg.down {
+  color: var(--tape-down, #0f8a6a);
+}
+
+.sector-map-legend .map-lg-bar {
+  width: 4.2rem;
+  height: 0.45rem;
+  border-radius: 999px;
+  background: linear-gradient(
+    90deg,
+    var(--tape-down, #0f8a6a),
+    #3a4450 48%,
+    var(--tape-up, #d92b2b)
+  );
+}
+
+.sector-map-canvas {
+  width: 100%;
+  min-height: 16rem;
+}
+
+.sector-map-stage {
+  position: relative;
+  width: 100%;
+  aspect-ratio: 1000 / 520;
+  min-height: 16rem;
+  max-height: min(52vh, 34rem);
+  border-radius: 12px;
+  overflow: hidden;
+  background: color-mix(in srgb, #121820 88%, var(--panel));
+  border: 1px solid color-mix(in srgb, var(--line) 70%, transparent);
+}
+
+.map-sector {
+  position: absolute;
+  box-sizing: border-box;
+  border: 1px solid color-mix(in srgb, #000 55%, transparent);
+  background: var(--sector-tint, #243041);
+  overflow: hidden;
+}
+
+.map-sector-label {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  z-index: 2;
+  height: 1.1rem;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.35rem;
+  padding: 0 0.28rem;
+  border: 0;
+  background: color-mix(in srgb, #0d1218 72%, transparent);
+  color: #f4f7fb;
+  font: inherit;
+  font-size: 0.68rem;
+  font-weight: 750;
+  letter-spacing: 0.01em;
+  cursor: pointer;
+  text-align: left;
+}
+
+.map-sector-label span {
+  color: #d7e0ea;
+  font-weight: 650;
+  font-variant-numeric: tabular-nums;
+}
+
+.map-sector-body {
+  position: absolute;
+  inset: 0;
+}
+
+.map-sector-body.has-label {
+  top: 1.1rem;
+}
+
+.map-group {
+  position: absolute;
+  box-sizing: border-box;
+  border: 1px solid color-mix(in srgb, #000 35%, transparent);
+  overflow: hidden;
+  background: color-mix(in srgb, #10151c 28%, transparent);
+}
+
+.map-group-label {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  z-index: 1;
+  height: 0.85rem;
+  padding: 0 0.2rem;
+  font-size: 0.58rem;
+  font-weight: 700;
+  color: color-mix(in srgb, #fff 82%, transparent);
+  background: color-mix(in srgb, #0b1016 55%, transparent);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  line-height: 0.85rem;
+}
+
+.map-group-body {
+  position: absolute;
+  inset: 0;
+}
+
+.map-group-body.has-label {
+  top: 0.85rem;
+}
+
+.map-stock {
+  position: absolute;
+  box-sizing: border-box;
+  border: 1px solid color-mix(in srgb, #000 28%, transparent);
+  border-radius: 2px;
+  padding: 0.12rem 0.16rem;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  justify-content: center;
+  gap: 0.02rem;
+  color: #f7fafc;
+  font: inherit;
+  cursor: pointer;
+  overflow: hidden;
+  text-align: left;
+  min-width: 0;
+  transition: filter 0.12s ease, transform 0.12s ease;
+}
+
+.map-stock:hover {
+  filter: brightness(1.12);
+  z-index: 3;
+  transform: scale(1.015);
+}
+
+.map-stock .sym {
+  font-size: 0.62rem;
+  font-weight: 800;
+  letter-spacing: 0.02em;
+  line-height: 1.1;
+}
+
+.map-stock .nm {
+  font-size: 0.52rem;
+  opacity: 0.88;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 100%;
+}
+
+.map-stock .pct {
+  font-size: 0.58rem;
+  font-weight: 750;
+  font-variant-numeric: tabular-nums;
+  line-height: 1.1;
+}
+
+.map-stock.up .pct {
+  color: #ffe1e1;
+}
+
+.map-stock.down .pct {
+  color: #d9fff3;
+}
+
 .sector-chip-strip {
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));
