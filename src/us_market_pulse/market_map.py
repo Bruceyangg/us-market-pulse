@@ -405,6 +405,26 @@ def _map_symbols() -> list[str]:
     return out
 
 
+def symbols_for_desk(desk_id: str) -> list[str]:
+    """Unique stock symbols mapped to a sectors-desk id (e.g. cloud, energy)."""
+    key = (desk_id or "").strip().lower()
+    if not key:
+        return []
+    seen: set[str] = set()
+    out: list[str] = []
+    for sector in MARKET_MAP:
+        mapped = str(sector.get("desk_id") or sector.get("id") or "").lower()
+        if mapped != key:
+            continue
+        for group in sector.get("groups") or []:
+            for stock in group.get("stocks") or []:
+                sym = str(stock.get("symbol") or "").upper()
+                if sym and sym not in seen:
+                    seen.add(sym)
+                    out.append(sym)
+    return out
+
+
 async def build_market_map(*, force: bool = False) -> dict[str, Any]:
     now = time.time()
     cached_payload = _MAP_CACHE.get("payload")

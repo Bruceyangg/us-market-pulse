@@ -1,5 +1,5 @@
 /* Pulse Desk lightweight shell cache — keep API traffic network-first. */
-const CACHE = "pulse-desk-shell-v3";
+const CACHE = "pulse-desk-shell-v4";
 const SHELL = [
   "/",
   "/markets",
@@ -8,8 +8,8 @@ const SHELL = [
   "/intel",
   "/settings",
   "/install",
-  "/static/styles.css?v=20260804o",
-  "/static/app.js?v=20260804o",
+  "/static/styles.css?v=20260804p",
+  "/static/app.js?v=20260804p",
   "/static/manifest.webmanifest",
   "/static/icons/apple-touch-icon.png",
   "/static/icons/icon-192.png",

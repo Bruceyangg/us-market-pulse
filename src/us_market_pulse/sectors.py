@@ -15,8 +15,25 @@ from us_market_pulse.earnings_calendar import (
     get_upcoming_earnings_map,
     lookup_upcoming_earnings,
 )
+from us_market_pulse.market_map import symbols_for_desk
 from us_market_pulse.markets import PORTFOLIO_TIMEFRAMES, fetch_symbol_bundle
 from us_market_pulse.topics import TOPICS, filter_topic_items, topic_bearish_analysis
+
+# Cap concurrent Yahoo chart fetches per sector switch
+_MAX_SECTOR_PICKS = 28
+
+
+def _universe_for_sector(sector_id: str, curated: list[str] | None = None) -> list[str]:
+    """Full constituent list: market-map stocks ∪ curated picks."""
+    out: list[str] = []
+    for sym in symbols_for_desk(sector_id):
+        if sym not in out:
+            out.append(sym)
+    for sym in curated or []:
+        up = str(sym or "").upper()
+        if up and up not in out:
+            out.append(up)
+    return out[:_MAX_SECTOR_PICKS]
 
 _ET = ZoneInfo("America/New_York")
 
@@ -1232,6 +1249,7 @@ async def build_sector_desk(
                 if not bundle:
                     continue
                 wave = _momentum_fields(bundle)
+                universe = _universe_for_sector(spec["id"], list(spec["picks"]))
                 sectors.append(
                     {
                         "id": spec["id"],
@@ -1241,6 +1259,9 @@ async def build_sector_desk(
                         "blurb": spec["blurb"],
                         "topic_id": spec["topic_id"],
                         "picks": list(spec["picks"]),
+                        "universe": universe,
+                        "pick_count": len(universe),
+                        "pick_preview": universe[:6],
                         "price": bundle.get("price"),
                         "change": bundle.get("change"),
                         "change_pct": bundle.get("change_pct"),
@@ -1283,6 +1304,14 @@ async def build_sector_desk(
 
     news_items = items or []
     sectors = list(payload.get("sectors") or [])
+    # Backfill universe metadata for cached ETF rows
+    for row in sectors:
+        if row.get("universe"):
+            continue
+        universe = _universe_for_sector(row.get("id") or "", list(row.get("picks") or []))
+        row["universe"] = universe
+        row["pick_count"] = len(universe)
+        row["pick_preview"] = universe[:6]
 
     # Default to current hottest sector (not hard-coded AI)
     sector_id = (selected_sector or "").strip().lower()
@@ -1293,20 +1322,12 @@ async def build_sector_desk(
         active = sectors[0]
         sector_id = active["id"]
 
-    # Universe: full active-sector picks + a few leaders from other hot sectors
-    hot = [s for s in sectors if s.get("is_hot")][:3]
-    pick_symbols: list[str] = []
-    for sym in list((active or {}).get("picks") or [])[:12]:
-        if sym not in pick_symbols:
-            pick_symbols.append(sym)
-    for hot_sec in hot:
-        if hot_sec.get("id") == sector_id:
-            continue
-        for sym in list(hot_sec.get("picks") or [])[:3]:
-            if sym not in pick_symbols:
-                pick_symbols.append(sym)
-        if len(pick_symbols) >= 16:
-            break
+    # Universe: all market-map constituents for this desk sector ∪ curated picks
+    pick_symbols = list((active or {}).get("universe") or [])
+    if not pick_symbols:
+        pick_symbols = _universe_for_sector(
+            sector_id, list((active or {}).get("picks") or [])
+        )
 
     pick_rows: list[dict[str, Any]] = []
     pick_errors: list[str] = []
@@ -1353,7 +1374,7 @@ async def build_sector_desk(
             )
         sector_by_sym: dict[str, dict[str, Any]] = {}
         for sec in SECTOR_ETFS:
-            for sym in sec.get("picks") or []:
+            for sym in _universe_for_sector(sec["id"], list(sec.get("picks") or [])):
                 sector_by_sym.setdefault(sym, sec)
 
         for sym, (bundle, errs), earnings in zip(
@@ -1365,10 +1386,8 @@ async def build_sector_desk(
             if not bundle:
                 continue
             vc = _value_chain_for(sym)
-            home = sector_by_sym.get(sym) or active or {}
-            # Prefer currently selected sector label when the symbol belongs there
-            if sym in list((active or {}).get("picks") or []):
-                home = active or home
+            # Desk is scoped to the active sector — always attribute home there
+            home = active or sector_by_sym.get(sym) or {}
             home_etf = next(
                 (s for s in sectors if s.get("id") == home.get("id")), active
             )

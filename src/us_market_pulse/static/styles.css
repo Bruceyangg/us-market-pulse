@@ -2780,9 +2780,9 @@ body {
 .sector-chip-strip {
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));
-  gap: 0.5rem;
+  gap: 0.55rem;
   overflow: visible;
-  padding: 0.1rem 0 0.2rem;
+  padding: 0.1rem 0 0.35rem;
 }
 
 .sector-chip {
@@ -2796,16 +2796,16 @@ body {
   cursor: pointer;
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
-  align-items: center;
-  gap: 0.2rem 0.45rem;
-  padding: 0.55rem 0.7rem;
-  min-height: 0;
+  align-items: start;
+  gap: 0.28rem 0.45rem;
+  padding: 0.65rem 0.75rem 0.7rem;
+  min-height: 6.4rem;
   text-align: left;
   transition: border-color 0.15s ease, background 0.15s ease, transform 0.15s ease;
 }
 
 .sector-chip.skeleton {
-  min-height: 3.2rem;
+  min-height: 6.4rem;
   border-radius: 14px;
   pointer-events: none;
 }
@@ -2813,6 +2813,7 @@ body {
 .sector-chip:hover {
   border-color: rgba(47, 111, 159, 0.35);
   background: var(--elevated);
+  transform: translateY(-1px);
 }
 
 .sector-chip.is-active {
@@ -2827,10 +2828,55 @@ body {
 
 .sector-chip .chip-name {
   font-weight: 750;
-  font-size: 0.86rem;
+  font-size: 0.92rem;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+
+.sector-chip .chip-count {
+  flex: 0 0 auto;
+  font-size: 0.68rem;
+  font-weight: 700;
+  color: var(--ink-soft);
+  padding: 0.12rem 0.4rem;
+  border-radius: 999px;
+  border: 1px solid var(--line);
+  background: var(--chip-bg);
+  white-space: nowrap;
+}
+
+.sector-chip .chip-blurb {
+  grid-column: 1 / -1;
+  margin: 0;
+  font-size: 0.72rem;
+  font-weight: 500;
+  color: var(--ink-soft);
+  line-height: 1.35;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  min-height: 1.9em;
+}
+
+.sector-chip .chip-tickers {
+  grid-column: 1 / -1;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.22rem;
+  min-width: 0;
+}
+
+.sector-chip .chip-ticker {
+  font-size: 0.66rem;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  padding: 0.08rem 0.32rem;
+  border-radius: 6px;
+  border: 1px solid var(--line);
+  background: var(--chip-bg);
+  color: var(--ink-soft);
 }
 
 .sector-chip .chip-meta {
@@ -2843,6 +2889,7 @@ body {
   font-size: 0.72rem;
   font-weight: 650;
   min-width: 0;
+  margin-top: 0.1rem;
 }
 
 .sector-chip .chip-meta > span:first-child {
@@ -2853,8 +2900,8 @@ body {
 }
 
 .sector-chip .chip-spark {
-  width: 2.8rem;
-  height: 1rem;
+  width: 3.4rem;
+  height: 1.15rem;
   display: block;
   flex: 0 0 auto;
 }

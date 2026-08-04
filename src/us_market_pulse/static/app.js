@@ -103,8 +103,10 @@ const els = {
   sectorMapBlurb: document.getElementById("sector-map-blurb"),
   sectorMapCanvas: document.getElementById("sector-map-canvas"),
   sectorEtfGrid: document.getElementById("sector-etf-grid"),
+  sectorPicksTitle: document.getElementById("sector-picks-title"),
   sectorPicksBlurb: document.getElementById("sector-picks-blurb"),
   sectorPickList: document.getElementById("sector-pick-list"),
+  sectorsDesk: document.querySelector(".sectors-desk"),
   sectorPickChart: document.getElementById("sector-pick-chart"),
   sectorTfFilters: document.getElementById("sector-tf-filters"),
   sectorNewsList: document.getElementById("sector-news-list"),
@@ -3168,11 +3170,7 @@ function renderSectorMap(map) {
 
   els.sectorMapCanvas.querySelectorAll("[data-desk].map-sector-label").forEach((btn) => {
     btn.addEventListener("click", () => {
-      const desk = btn.getAttribute("data-desk") || "";
-      if (!desk) return;
-      state.sectorId = desk;
-      state.sectorSymbol = "";
-      loadSectorDesk();
+      openSectorDesk(btn.getAttribute("data-desk"), { scroll: true });
     });
   });
   els.sectorMapCanvas.querySelectorAll(".map-stock[data-symbol]").forEach((btn) => {
@@ -3180,8 +3178,16 @@ function renderSectorMap(map) {
       const sym = (btn.getAttribute("data-symbol") || "").toUpperCase();
       const desk = btn.getAttribute("data-desk") || "";
       if (!sym) return;
-      if (desk) state.sectorId = desk;
+      if (desk && desk !== state.sectorId) {
+        state.sectorId = desk;
+        state.sectorSymbol = sym;
+        loadSectorDesk().finally(() => {
+          els.sectorsDesk?.scrollIntoView({ behavior: "smooth", block: "start" });
+        });
+        return;
+      }
       selectSectorSymbol(sym);
+      els.sectorsDesk?.scrollIntoView({ behavior: "smooth", block: "start" });
     });
   });
 }
@@ -3208,6 +3214,37 @@ async function loadSectorMap({ force = false } = {}) {
   }
 }
 
+function syncSectorQuery() {
+  if (PAGE !== "sectors" || typeof history === "undefined" || !history.replaceState) {
+    return;
+  }
+  const params = new URLSearchParams(location.search);
+  if (state.sectorId) params.set("sector", state.sectorId);
+  else params.delete("sector");
+  if (state.sectorSymbol) params.set("symbol", state.sectorSymbol);
+  else params.delete("symbol");
+  const qs = params.toString();
+  const next = `${location.pathname}${qs ? `?${qs}` : ""}${location.hash || ""}`;
+  if (next !== `${location.pathname}${location.search}${location.hash || ""}`) {
+    history.replaceState(null, "", next);
+  }
+}
+
+function openSectorDesk(id, { scroll = true } = {}) {
+  const sectorId = (id || "").trim().toLowerCase();
+  if (!sectorId) return;
+  const same = sectorId === state.sectorId;
+  state.sectorId = sectorId;
+  if (!same) state.sectorSymbol = "";
+  syncSectorQuery();
+  const load = same && state.sectors ? Promise.resolve(state.sectors) : loadSectorDesk();
+  Promise.resolve(load).finally(() => {
+    if (scroll && els.sectorsDesk) {
+      els.sectorsDesk.scrollIntoView({ behavior: "smooth", block: "start" });
+    }
+  });
+}
+
 function renderSectorEtfs(sectors) {
   if (!els.sectorEtfGrid) return;
   const rows = sectors || [];
@@ -3218,11 +3255,12 @@ function renderSectorEtfs(sectors) {
   if (els.hotSectorsBlurb) {
     const hot = rows.filter((r) => r.is_hot).map((r) => r.label).slice(0, 3);
     const active = rows.find((r) => r.id === state.sectorId);
+    const count = active?.pick_count || active?.universe?.length || active?.picks?.length || 0;
     els.hotSectorsBlurb.textContent = active
-      ? `${active.label} · ${hot.length ? `热点 ${hot.join(" / ")}` : "按一轮涨势排序"}`
+      ? `${active.label} · ${count} 只成分 · 点卡片进入下方走势台`
       : hot.length
-        ? `当前热点 ${hot.join(" · ")} · 点选板块切换个股池`
-        : "点选板块 → 左侧涨势个股 → 中间走势";
+        ? `当前热点 ${hot.join(" · ")} · 点选板块查看全部成分股`
+        : "点选板块 → 左侧成分股 → 中间分时 / K 线";
   }
   els.sectorEtfGrid.innerHTML = rows
     .map((row) => {
@@ -3230,14 +3268,22 @@ function renderSectorEtfs(sectors) {
       const month = row.month_change_pct;
       const up = !(typeof pct === "number" && pct < 0);
       const active = row.id === state.sectorId;
-      const spark = sparklinePath(row.points || [], 42, 16, 1);
+      const spark = sparklinePath(row.points || [], 54, 18, 1);
       const stroke = up ? TAPE_UP : TAPE_DOWN;
+      const preview = row.pick_preview || row.universe || row.picks || [];
+      const count = row.pick_count || preview.length || 0;
+      const tickers = preview
+        .slice(0, 5)
+        .map((sym) => `<span class="chip-ticker">${escapeHtml(sym)}</span>`)
+        .join("");
+      const more =
+        count > 5 ? `<span class="chip-ticker">+${count - 5}</span>` : "";
       return `
         <button type="button" class="sector-chip ${active ? "is-active" : ""} ${
           row.is_hot ? "is-hot" : ""
         }" data-sector="${escapeHtml(row.id)}" aria-pressed="${
           active ? "true" : "false"
-        }">
+        }" title="查看 ${escapeHtml(row.label)} 全部成分股走势">
           <span class="chip-name">${escapeHtml(row.label)}${
             row.is_wave
               ? '<span class="hot-tag">涨势</span>'
@@ -3245,6 +3291,11 @@ function renderSectorEtfs(sectors) {
                 ? '<span class="hot-tag">热</span>'
                 : ""
           }</span>
+          <span class="chip-count">${count || "—"} 只</span>
+          <p class="chip-blurb">${escapeHtml(
+            row.blurb || `${row.symbol || ""} 板块代理`
+          )}</p>
+          <span class="chip-tickers">${tickers}${more}</span>
           <span class="chip-meta">
             <span>
               <span class="chg ${pctClass(pct)}">${escapeHtml(pctText(pct))}</span>
@@ -3252,7 +3303,7 @@ function renderSectorEtfs(sectors) {
             </span>
             ${
               spark
-                ? `<span class="chip-spark" aria-hidden="true"><svg viewBox="0 0 42 16" preserveAspectRatio="none"><path d="${spark}" fill="none" stroke="${stroke}" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"></path></svg></span>`
+                ? `<span class="chip-spark" aria-hidden="true"><svg viewBox="0 0 54 18" preserveAspectRatio="none"><path d="${spark}" fill="none" stroke="${stroke}" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"></path></svg></span>`
                 : ""
             }
           </span>
@@ -3263,11 +3314,7 @@ function renderSectorEtfs(sectors) {
 
   els.sectorEtfGrid.querySelectorAll("[data-sector]").forEach((btn) => {
     btn.addEventListener("click", () => {
-      const id = btn.getAttribute("data-sector");
-      if (!id || id === state.sectorId) return;
-      state.sectorId = id;
-      state.sectorSymbol = "";
-      loadSectorDesk();
+      openSectorDesk(btn.getAttribute("data-sector"), { scroll: true });
     });
   });
 }
@@ -3679,14 +3726,17 @@ function renderSectorPicks(data) {
   const sector = data?.active_sector || {};
   const tf = state.sectorTf || "intraday";
   const waveN = (data?.wave_leaders || picks.filter((p) => p.is_wave)).length;
+  if (els.sectorPicksTitle) {
+    els.sectorPicksTitle.textContent = sector.label
+      ? `${sector.label} · 成分`
+      : "板块成分";
+  }
   if (els.sectorPicksBlurb) {
-    els.sectorPicksBlurb.textContent = `${sector.label || "热点"} · ${
-      picks.length
-    } 只推荐 · ${waveN} 只一轮涨势`;
+    els.sectorPicksBlurb.textContent = `${picks.length} 只成分 · ${waveN} 只一轮涨势 · 点选看分时 / K 线`;
   }
   if (els.sectorPickList) {
     if (!picks.length) {
-      els.sectorPickList.innerHTML = '<p class="empty">暂无涨势个股样本。</p>';
+      els.sectorPickList.innerHTML = '<p class="empty">暂无该板块成分股。</p>';
     } else {
       els.sectorPickList.innerHTML = picks
         .map((pick) => {
@@ -3752,11 +3802,13 @@ function selectSectorSymbol(sym) {
     data.selected_pick = pick;
     data.selected_earnings = pick.earnings || null;
     data.value_chain = pick.value_chain || data.value_chain;
+    syncSectorQuery();
     renderSectorPicks(data);
     setStatus(`已切换 ${pick.name || symbol} · ${pick.sector_label || ""}`);
     return;
   }
   state.sectorSymbol = symbol;
+  syncSectorQuery();
   loadSectorDesk();
 }
 
@@ -3783,9 +3835,13 @@ async function loadSectorDesk({ force = false } = {}) {
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     const data = await res.json();
     renderSectorDesk(data);
+    syncSectorQuery();
     const hot = (data.hot_sectors || []).map((s) => s.label).slice(0, 2).join("、");
+    const n = (data.picks || []).length;
     setStatus(
-      `板块已更新${data.cached ? "（缓存）" : ""}${hot ? ` · 热点 ${hot}` : ""}`
+      `板块已更新${data.cached ? "（缓存）" : ""}${
+        data.active_sector?.label ? ` · ${data.active_sector.label}` : ""
+      }${n ? ` · ${n} 只成分` : ""}${hot ? ` · 热点 ${hot}` : ""}`
     );
     await mapPromise;
     return data;
@@ -4093,6 +4149,11 @@ function bootPage() {
     loadMarketsDesk();
     setInterval(() => loadMarketsDesk(), 90 * 1000);
   } else if (PAGE === "sectors") {
+    const params = new URLSearchParams(location.search);
+    const qSector = (params.get("sector") || "").trim().toLowerCase();
+    const qSymbol = (params.get("symbol") || "").trim().toUpperCase();
+    if (qSector) state.sectorId = qSector;
+    if (qSymbol) state.sectorSymbol = qSymbol;
     bindSectorDesk();
     loadSectorDesk();
     setInterval(() => loadSectorDesk(), 90 * 1000);
