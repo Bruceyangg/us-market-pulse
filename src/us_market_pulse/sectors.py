@@ -12,7 +12,9 @@ import httpx
 
 from us_market_pulse.earnings_calendar import (
     _parse_money,
+    get_upcoming_earnings_map,
     lookup_upcoming_earnings,
+    peek_upcoming_earnings_map,
 )
 from us_market_pulse.market_map import symbols_for_desk
 from us_market_pulse.markets import PORTFOLIO_TIMEFRAMES, fetch_symbol_bundle
@@ -410,6 +412,42 @@ VALUE_CHAIN: dict[str, dict[str, Any]] = {
         "upstream": ["精密零部件"],
         "downstream": ["台积电、三星、英特尔等晶圆厂"],
         "bear_risks": ["资本开支下行", "对华出口限制", "竞争"],
+    },
+    "LRCX": {
+        "name": "拉姆研究",
+        "business": "刻蚀与沉积设备龙头，先进制程与存储扩产核心供应商。",
+        "industry": "半导体设备。",
+        "chain_position": "晶圆厂前端设备：与资本开支和先进节点导入强相关。",
+        "upstream": ["真空泵、射频电源、精密零部件"],
+        "downstream": ["台积电、三星、美光、SK 海力士等晶圆厂"],
+        "bear_risks": ["晶圆厂资本开支下滑", "对华出口管制", "竞争加剧"],
+    },
+    "KLAC": {
+        "name": "科磊",
+        "business": "制程控制与检测设备，监控良率与缺陷的关键量测环节。",
+        "industry": "半导体检测设备。",
+        "chain_position": "量测/检测：先进制程必备，随节点升级提升单厂价值量。",
+        "upstream": ["光学与传感器组件"],
+        "downstream": ["逻辑与存储晶圆厂"],
+        "bear_risks": ["扩产节奏", "出口限制", "客户自研检测"],
+    },
+    "QCOM": {
+        "name": "高通",
+        "business": "手机与汽车 SoC、射频与许可收入，连接与端侧 AI 芯片平台。",
+        "industry": "半导体设计。",
+        "chain_position": "无晶圆设计：依赖台积电等代工，面向手机/汽车/IoT 终端。",
+        "upstream": ["台积电等代工", "EDA / IP"],
+        "downstream": ["手机制造商、汽车与 IoT 客户"],
+        "bear_risks": ["安卓周期", "大客户自研芯片", "许可纠纷"],
+    },
+    "TXN": {
+        "name": "德州仪器",
+        "business": "模拟与嵌入式芯片，工业、汽车与电子系统广泛基础件。",
+        "industry": "模拟半导体。",
+        "chain_position": "模拟/嵌入式：偏周期与库存，自有制造产能占比高。",
+        "upstream": ["硅片与制造设备"],
+        "downstream": ["工业自动化、汽车电子、消费电子"],
+        "bear_risks": ["工业去库存", "汽车需求波动", "自建产能利用率"],
     },
     "ARM": {
         "name": "Arm",
@@ -1187,6 +1225,46 @@ async def _fetch_earnings_yahoo(
         return None
 
 
+def _earnings_from_calendar_row(
+    symbol: str, row: dict[str, Any] | None
+) -> dict[str, Any] | None:
+    """Build a minimal earnings payload from a Nasdaq calendar row (no network)."""
+    if not isinstance(row, dict):
+        return None
+    sym = (symbol or "").strip().upper()
+    next_label = str(row.get("next_earnings_label") or row.get("date") or "")
+    if not next_label and row.get("eps_forecast") is None:
+        return None
+    next_day = _parse_us_date(next_label) if next_label else None
+    next_ts = _day_ts(next_day) if next_day else None
+    days_to = None
+    if next_ts:
+        days_to = int((next_ts - time.time()) / 86400)
+    eps_avg = row.get("eps_forecast")
+    if eps_avg is None:
+        eps_avg = _parse_money(row.get("eps"))
+    return {
+        "symbol": sym,
+        "earnings_dates": (
+            [{"ts": next_ts, "label": next_label}] if next_label else []
+        ),
+        "next_earnings_ts": next_ts,
+        "next_earnings_label": next_label,
+        "days_to_earnings": days_to,
+        "prev_earnings_ts": None,
+        "prev_earnings_label": "",
+        "is_estimate": True,
+        "eps_avg": eps_avg,
+        "next_eps_estimate": eps_avg,
+        "expect_eps": eps_avg,
+        "analyst_count": row.get("estimate_count") or row.get("noOfEsts"),
+        "last_eps_actual": None,
+        "last_eps_estimate": None,
+        "beat_pct": row.get("surprise_pct"),
+        "source": "nasdaq-calendar",
+    }
+
+
 async def _fetch_earnings_nasdaq(
     client: httpx.AsyncClient,
     symbol: str,
@@ -1578,6 +1656,83 @@ async def build_sector_desk(
     if not selected or not any(p.get("symbol") == selected for p in pick_rows):
         selected = pick_rows[0]["symbol"] if pick_rows else ""
     selected_pick = next((p for p in pick_rows if p.get("symbol") == selected), None)
+
+    # Refresh value-chain blurbs (covers newly added archive entries even on warm cache)
+    for row in pick_rows:
+        vc = _value_chain_for(str(row.get("symbol") or ""))
+        row["value_chain"] = vc
+        if not row.get("name") or row.get("name") == row.get("symbol"):
+            row["name"] = vc.get("name") or row.get("symbol")
+
+    # Fast earnings: cached Nasdaq calendar first (no network), then a short
+    # surprise-API fetch only for the selected symbol.
+    upcoming_peek = peek_upcoming_earnings_map()
+    for row in pick_rows:
+        sym = str(row.get("symbol") or "").upper()
+        if not sym:
+            continue
+        earn = row.get("earnings") if isinstance(row.get("earnings"), dict) else None
+        if not _earnings_has_core(earn):
+            earn = earnings_by_symbol.get(sym) or _earnings_from_calendar_row(
+                sym, upcoming_peek.get(sym)
+            )
+        if earn:
+            row["earnings"] = earn
+            earnings_by_symbol[sym] = earn
+
+    if selected and not _earnings_has_core(earnings_by_symbol.get(selected)):
+        try:
+            async with httpx.AsyncClient(
+                headers={
+                    "User-Agent": USER_AGENT,
+                    "Accept": "application/json, text/plain, */*",
+                },
+                follow_redirects=True,
+                trust_env=False,
+                timeout=httpx.Timeout(3.5, connect=2.0),
+            ) as client:
+                earn = await asyncio.wait_for(
+                    _fetch_earnings_nasdaq(
+                        client,
+                        selected,
+                        upcoming=upcoming_peek.get(selected),
+                    ),
+                    timeout=3.5,
+                )
+        except (asyncio.TimeoutError, httpx.HTTPError):
+            earn = None
+        if earn:
+            earnings_by_symbol[selected] = earn
+            for row in pick_rows:
+                if row.get("symbol") == selected:
+                    row["earnings"] = earn
+                    break
+
+    if selected_pick is not None:
+        selected_pick = next(
+            (p for p in pick_rows if p.get("symbol") == selected), selected_pick
+        )
+        selected_pick["earnings"] = earnings_by_symbol.get(selected) or selected_pick.get(
+            "earnings"
+        )
+        selected_pick["value_chain"] = _value_chain_for(selected)
+
+    # Persist enriched earnings / value-chain back into the sector cache
+    if pick_rows:
+        _PICKS_CACHE[sector_id] = {
+            "key": picks_key,
+            "pick_rows": [dict(r) for r in pick_rows],
+            "earnings_by_symbol": dict(earnings_by_symbol),
+            "fetched_at": (_PICKS_CACHE.get(sector_id) or {}).get("fetched_at")
+            or time.time(),
+        }
+
+    # Warm the upcoming calendar in the background for next sector click (non-blocking)
+    if not upcoming_peek:
+        try:
+            asyncio.get_running_loop().create_task(get_upcoming_earnings_map(force=False))
+        except RuntimeError:
+            pass
 
     sector_news = _match_sector_news(
         news_items, (active or {}).get("topic_id") or sector_id

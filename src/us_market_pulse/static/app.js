@@ -822,24 +822,44 @@ function miniCandleSvg(points, { width = 140, height = 42 } = {}) {
   return `<svg class="spark" viewBox="0 0 ${width} ${height}" preserveAspectRatio="none" aria-hidden="true">${shapes}</svg>`;
 }
 
+function pctSparkBar(pct) {
+  if (typeof pct !== "number" || Number.isNaN(pct)) {
+    return `<span class="empty">—</span>`;
+  }
+  const up = pct >= 0;
+  const color = up ? TAPE_UP : TAPE_DOWN;
+  const track = "rgba(128,128,128,0.22)";
+  const mid = 60;
+  const mag = Math.max(4, Math.min(52, Math.abs(pct) * 10));
+  const x = up ? mid : mid - mag;
+  return `<svg class="spark spark-pct" viewBox="0 0 120 30" preserveAspectRatio="none" aria-hidden="true">
+    <line x1="60" y1="4" x2="60" y2="26" stroke="${track}" stroke-width="1"/>
+    <rect x="8" y="12" width="104" height="6" rx="3" fill="${track}"/>
+    <rect x="${x}" y="12" width="${mag}" height="6" rx="3" fill="${color}"/>
+  </svg>`;
+}
+
 function holdingSparkSvg(holding, tf) {
   const series = holding?.series?.[tf];
   const points = series?.points || holding?.points || [];
   const kind = series?.chart || (tf === "intraday" ? "line" : "candle");
   const pct =
-    series?.change_pct != null ? series.change_pct : holding?.change_pct;
+    series?.change_pct != null
+      ? series.change_pct
+      : holdingTfPct(holding, tf) != null
+        ? holdingTfPct(holding, tf)
+        : holding?.change_pct;
   const up = !(typeof pct === "number" && pct < 0);
   if (kind === "candle") {
     return (
-      miniCandleSvg(points, { width: 120, height: 30 }) ||
-      `<span class="empty">暂无</span>`
+      miniCandleSvg(points, { width: 120, height: 30 }) || pctSparkBar(pct)
     );
   }
   const sparkPoints = points.map((p) =>
     p && p.c != null && p.v == null ? { t: p.t, v: p.c } : p
   );
   const path = sparklinePath(sparkPoints, 120, 30, 2);
-  if (!path) return `<span class="empty">暂无</span>`;
+  if (!path) return pctSparkBar(pct);
   const stroke = up ? TAPE_UP : TAPE_DOWN;
   return `<svg class="spark" viewBox="0 0 120 30" preserveAspectRatio="none" aria-hidden="true"><path d="${path}" fill="none" stroke="${stroke}" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"></path></svg>`;
 }
@@ -3517,12 +3537,46 @@ function renderStockEarnings(earn, pick) {
     data.eps_avg != null ||
     data.last_eps_actual != null;
   if (!hasCore) {
+    // Fall back to sector earnings calendar row for this symbol if present
+    const cal = (state.sectors?.earnings_calendar || []).find(
+      (r) => (r.symbol || "").toUpperCase() === (pick.symbol || "").toUpperCase()
+    );
+    if (cal && (cal.next_earnings_label || cal.days_to_earnings != null)) {
+      renderStockEarnings(
+        {
+          next_earnings_label: cal.next_earnings_label,
+          days_to_earnings: cal.days_to_earnings,
+          expect_eps: cal.expect_eps ?? cal.eps_avg ?? cal.next_eps_estimate,
+          eps_avg: cal.eps_avg ?? cal.expect_eps,
+          last_eps_actual: cal.last_eps_actual,
+          last_eps_estimate: cal.last_eps_estimate,
+          beat_pct: cal.beat_pct,
+          analyst_count: cal.analyst_count,
+        },
+        pick
+      );
+      return;
+    }
     els.stockEarnings.innerHTML = `
       <div class="stock-earnings-head">
         <p class="move-kicker">个股财报</p>
-        <h3>${escapeHtml(pick.symbol || "")}</h3>
+        <h3>${escapeHtml(pick.name || pick.symbol || "")} · ${escapeHtml(
+          pick.symbol || ""
+        )}</h3>
       </div>
-      <p class="empty">暂无财报明细（接口限流或未披露）· <a href="/earnings">看日历</a></p>
+      <div class="earn-date-row">
+        <div>
+          <span class="k">下一发布日</span>
+          <strong>待日历同步</strong>
+        </div>
+        <div>
+          <span class="k">上次实际</span>
+          <strong>—</strong>
+        </div>
+      </div>
+      <p class="empty compact">完整 EPS 明细稍后补齐 · <a href="/earnings?q=${encodeURIComponent(
+        pick.symbol || ""
+      )}">打开财报日历</a></p>
     `;
     return;
   }

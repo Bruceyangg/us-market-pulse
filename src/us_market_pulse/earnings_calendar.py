@@ -512,6 +512,11 @@ def parse_day_param(value: str | None) -> date | None:
         return None
 
 
+def peek_upcoming_earnings_map() -> dict[str, dict[str, Any]]:
+    """Return cached upcoming map only — never triggers a network refresh."""
+    return dict(_UPCOMING.get("by_symbol") or {})
+
+
 async def get_upcoming_earnings_map(
     *, force: bool = False, days: int = _UPCOMING_DAYS
 ) -> dict[str, dict[str, Any]]:
