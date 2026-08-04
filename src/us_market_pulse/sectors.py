@@ -19,7 +19,7 @@ from us_market_pulse.earnings_calendar import (
 from us_market_pulse.market_map import symbols_for_desk
 from us_market_pulse.markets import PORTFOLIO_TIMEFRAMES, fetch_symbol_bundle
 from us_market_pulse.portfolio_intel import match_portfolio_intel
-from us_market_pulse.quotes import fetch_day_quotes
+from us_market_pulse.quotes import fetch_day_quotes, fetch_nasdaq_intraday, fetch_nasdaq_intraday_many
 from us_market_pulse.topics import TOPICS, filter_topic_items, topic_bearish_analysis
 
 # Cap concurrent Yahoo chart fetches per sector switch
@@ -554,6 +554,10 @@ def _pick_has_chart(row: dict[str, Any] | None) -> bool:
     return len(month.get("points") or []) >= 2
 
 
+def _pick_has_intraday(row: dict[str, Any] | None) -> bool:
+    return len(_spark_points_from_row(row)) >= 2
+
+
 def _bundle_has_full_chart(bundle: dict[str, Any] | None) -> bool:
     return _pick_has_chart(bundle)
 
@@ -619,7 +623,7 @@ def _slim_pick_row(row: dict[str, Any], selected: str) -> dict[str, Any]:
     """Strip heavy multi-TF series from list rows; keep 24h spark + full selected chart."""
     out = dict(row)
     sym = str(out.get("symbol") or "").upper()
-    if sym == selected and _pick_has_chart(out):
+    if sym == selected and (_pick_has_chart(out) or _pick_has_intraday(out)):
         return out
     spark = _spark_points_from_row(out)
     intra = (out.get("series") or {}).get("intraday")
@@ -699,6 +703,11 @@ async def _fetch_intraday_spark(
             spark = _spark_points_from_row(quote_cached.get("bundle"))
             if spark:
                 return spark
+
+    spark: list[dict[str, Any]] = []
+    change_pct: float | None = None
+
+    # 1) Yahoo 1d (classic list spark) — may 429
     async with _get_pick_sem():
         bundle, _errs = await fetch_symbol_bundle(
             client,
@@ -708,24 +717,40 @@ async def _fetch_intraday_spark(
             timeframes=[dict(_LIST_SPARK_TF)],
             include_yearly=False,
         )
-    if not bundle:
-        # Keep last good list spark when Yahoo rate-limits
+    if bundle:
+        spark = _spark_points_from_row(bundle)
+        spark = [
+            {"t": p.get("t"), "v": p.get("v")}
+            for p in spark
+            if p.get("v") is not None
+        ]
+        change_pct = bundle.get("change_pct")
+
+    # 2) Nasdaq official chart — reliable when Yahoo is blocked
+    if len(spark) < 2:
+        nd = await fetch_nasdaq_intraday(client, sym, max_points=96)
+        if nd and len(nd.get("points") or []) >= 2:
+            spark = [
+                {"t": p.get("t"), "v": p.get("v")}
+                for p in (nd.get("points") or [])
+                if p.get("v") is not None
+            ]
+            change_pct = nd.get("change_pct")
+
+    if len(spark) < 2:
+        # Keep last good list spark when all live sources fail
         return _spark_points_from_row(spark_cached.get("bundle") or spark_cached)
-    spark = _spark_points_from_row(bundle)
-    # Strip session tags for list sparks — keep a plain price path
-    spark = [{"t": p.get("t"), "v": p.get("v")} for p in spark if p.get("v") is not None]
-    if not spark:
-        return _spark_points_from_row(spark_cached.get("bundle") or spark_cached)
+
     _SYM_CACHE[f"spark:{sym}"] = {
         "bundle": {
             "symbol": sym,
             "points": spark,
-            "change_pct": bundle.get("change_pct"),
+            "change_pct": change_pct,
             "series": {
                 "intraday": {
                     "chart": "line",
                     "points": spark,
-                    "change_pct": bundle.get("change_pct"),
+                    "change_pct": change_pct,
                 }
             },
         },
@@ -741,17 +766,61 @@ async def _hydrate_list_intraday_sparks(
     force: bool = False,
     limit: int = 18,
 ) -> None:
-    """Fill 24h list sparklines without waiting on full multi-TF charts."""
+    """Fill same-day list sparklines (Yahoo → Nasdaq fallback)."""
     _hydrate_sparks_from_cache(pick_rows)
     missing = [
         str(r.get("symbol") or "").upper()
         for r in pick_rows
         if str(r.get("symbol") or "")
         and not _spark_points_from_row(r)
-        # Full desk chart already carries the canonical intraday series
         and not _pick_has_chart(r)
     ][: max(1, min(limit, _MAX_SECTOR_PICKS))]
     if not missing:
+        return
+
+    # Prefer one Nasdaq batch pass first (avoids N Yahoo 429s when blocked)
+    try:
+        nd_map = await asyncio.wait_for(
+            fetch_nasdaq_intraday_many(missing, concurrency=4, max_points=96),
+            timeout=8.0,
+        )
+    except (asyncio.TimeoutError, httpx.HTTPError):
+        nd_map = {}
+
+    still: list[str] = []
+    for sym in missing:
+        row_nd = nd_map.get(sym)
+        if row_nd and len(row_nd.get("points") or []) >= 2:
+            pts = [
+                {"t": p.get("t"), "v": p.get("v")}
+                for p in (row_nd.get("points") or [])
+                if p.get("v") is not None
+            ]
+            _SYM_CACHE[f"spark:{sym}"] = {
+                "bundle": {
+                    "symbol": sym,
+                    "points": pts,
+                    "change_pct": row_nd.get("change_pct"),
+                    "series": {
+                        "intraday": {
+                            "chart": "line",
+                            "points": pts,
+                            "change_pct": row_nd.get("change_pct"),
+                        }
+                    },
+                },
+                "fetched_at": time.time(),
+            }
+            for row in pick_rows:
+                if str(row.get("symbol") or "").upper() == sym:
+                    _apply_intraday_spark(
+                        row, pts, change_pct=row_nd.get("change_pct") or row.get("change_pct")
+                    )
+                    break
+        else:
+            still.append(sym)
+
+    if not still:
         return
 
     async def one(sym: str) -> tuple[str, list[dict[str, Any]]]:
@@ -764,7 +833,7 @@ async def _hydrate_list_intraday_sparks(
         except (asyncio.TimeoutError, httpx.HTTPError):
             return sym, []
 
-    results = await asyncio.gather(*(one(sym) for sym in missing))
+    results = await asyncio.gather(*(one(sym) for sym in still))
     by_sym = {sym: pts for sym, pts in results if pts}
     for row in pick_rows:
         sym = str(row.get("symbol") or "").upper()
@@ -948,7 +1017,109 @@ async def _fetch_quote(
     )
     if bundle and _bundle_has_full_chart(bundle):
         _SYM_CACHE[cache_key] = {"bundle": bundle, "fetched_at": time.time()}
+        return bundle, errs
+
+    # Yahoo blocked/empty — still serve desk 分时 from Nasdaq chart API
+    nd = await fetch_nasdaq_intraday(client, sym, max_points=240)
+    if nd and len(nd.get("points") or []) >= 2:
+        pts = [
+            {"t": int(p["t"]), "v": float(p["v"]), "session": _session_id_et(int(p["t"]))}
+            for p in (nd.get("points") or [])
+            if p.get("t") and p.get("v") is not None
+        ]
+        sessions = _session_segments_local(pts)
+        labels = []
+        seen: set[str] = set()
+        for s in sessions:
+            if s["id"] not in seen:
+                seen.add(s["id"])
+                labels.append(s["label"])
+        intra = {
+            "tf": "intraday",
+            "label": "分时",
+            "blurb": "盘前·盘中·盘后·夜盘一体分时（Nasdaq）",
+            "range": "1d",
+            "interval": "1m",
+            "chart": "line",
+            "points": pts,
+            "change": nd.get("change"),
+            "change_pct": nd.get("change_pct"),
+            "previous_close": nd.get("previous_close"),
+            "sessions": sessions,
+            "session_labels": labels or ["盘前", "盘中", "盘后", "夜盘"],
+        }
+        fallback = {
+            "id": sym.lower(),
+            "symbol": sym,
+            "label": label or sym,
+            "short": sym,
+            "price": nd.get("price"),
+            "change": nd.get("change"),
+            "change_pct": nd.get("change_pct"),
+            "points": pts[-64:],
+            "series": {"intraday": intra},
+            "url": f"https://finance.yahoo.com/quote/{sym}",
+            "source": "nasdaq",
+        }
+        # Cache briefly so desk can paint; do not pretend we have day/month K
+        _SYM_CACHE[cache_key] = {
+            "bundle": fallback,
+            "fetched_at": time.time() - max(0, _SYM_TTL - 45),
+        }
+        return fallback, errs + [f"{sym}: Yahoo chart unavailable; using Nasdaq 分时"]
     return bundle, errs
+
+
+def _session_id_et(ts: int) -> str:
+    dt = datetime.fromtimestamp(int(ts), tz=_ET)
+    mins = dt.hour * 60 + dt.minute
+    if mins >= 20 * 60 or mins < 4 * 60:
+        return "night"
+    if mins < 9 * 60 + 30:
+        return "pre"
+    if mins < 16 * 60:
+        return "regular"
+    return "post"
+
+
+def _session_segments_local(points: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    if not points:
+        return []
+    label_map = {
+        "night": "夜盘",
+        "pre": "盘前",
+        "regular": "盘中",
+        "post": "盘后",
+    }
+    segs: list[dict[str, Any]] = []
+    cur = points[0].get("session") or "regular"
+    start_i = 0
+    for i, p in enumerate(points):
+        sid = p.get("session") or "regular"
+        if sid != cur:
+            segs.append(
+                {
+                    "id": cur,
+                    "label": label_map.get(cur, cur),
+                    "i0": start_i,
+                    "i1": i - 1,
+                    "t0": points[start_i].get("t"),
+                    "t1": points[i - 1].get("t"),
+                }
+            )
+            cur = sid
+            start_i = i
+    segs.append(
+        {
+            "id": cur,
+            "label": label_map.get(cur, cur),
+            "i0": start_i,
+            "i1": len(points) - 1,
+            "t0": points[start_i].get("t"),
+            "t1": points[-1].get("t"),
+        }
+    )
+    return segs
 
 
 async def _fetch_earnings_cached(
@@ -1841,7 +2012,9 @@ async def build_sector_desk(
     # Ensure selected symbol has a full chart bundle (cache miss or lite row).
     # Skip per-symbol earnings here — Yahoo quoteSummary can take 20s+ and blocks the desk.
     selected_pick = next((p for p in pick_rows if p.get("symbol") == selected), None)
-    need_selected_chart = bool(selected) and not _pick_has_chart(selected_pick)
+    need_selected_chart = bool(selected) and not (
+        _pick_has_chart(selected_pick) or _pick_has_intraday(selected_pick)
+    )
     # Always (re)fetch when the selected row lacks day/month charts. Do not let a
     # prior chart_attempted / intraday-only spark cache block the full desk chart.
     if selected and need_selected_chart:
@@ -1859,7 +2032,7 @@ async def build_sector_desk(
         except (asyncio.TimeoutError, httpx.HTTPError) as exc:
             bundle, errs = None, [f"{selected}: chart timeout ({exc.__class__.__name__})"]
         pick_errors.extend(errs)
-        if bundle and _bundle_has_full_chart(bundle):
+        if bundle and (_bundle_has_full_chart(bundle) or _pick_has_intraday(bundle)):
             vc = _value_chain_for(selected)
             rs = _relative_strength(bundle, home_etf)
             wave = _momentum_fields(bundle)
@@ -2113,8 +2286,10 @@ async def build_sector_desk(
 
     wire_picks = [_slim_pick_row(dict(p), selected) for p in pick_rows]
     wire_selected = next((p for p in wire_picks if p.get("symbol") == selected), None)
-    # Always expose the full selected chart even if slim list row is lite-flagged
-    if selected_pick and _pick_has_chart(selected_pick):
+    # Always expose the selected desk chart (full multi-TF or Nasdaq 分时 fallback)
+    if selected_pick and (
+        _pick_has_chart(selected_pick) or _pick_has_intraday(selected_pick)
+    ):
         wire_selected = dict(selected_pick)
         wire_picks = [
             wire_selected if p.get("symbol") == selected else p for p in wire_picks
