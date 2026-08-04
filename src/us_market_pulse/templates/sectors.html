@@ -2,108 +2,79 @@
 {% block title %}Pulse Desk · 热点板块{% endblock %}
 {% block status_default %}同步板块行情与情报…{% endblock %}
 {% block content %}
-      <section class="page-intro">
-        <p class="page-kicker">板块台</p>
-        <h1>AI 与热点板块追踪</h1>
-        <p class="lede compact">
-          AI 利空分析、热点板块涨跌、强势个股走势，以及业务与产业链位置同屏对照。
-        </p>
-        <div class="cta-row">
-          <button class="btn primary" id="btn-sectors-refresh" type="button">刷新板块</button>
-          <a class="btn ghost" href="/intel">回到情报</a>
-          <a class="btn ghost" href="/markets">市场看板</a>
+      <section class="page-intro sectors-intro">
+        <div class="sectors-intro-main">
+          <p class="page-kicker">板块台</p>
+          <h1>AI 与热点板块</h1>
+          <p class="lede compact" id="hot-sectors-blurb">按涨跌排序 · 同屏看利空、走势与产业链</p>
+        </div>
+        <div class="cta-row sectors-intro-actions">
+          <button class="btn primary btn-compact" id="btn-sectors-refresh" type="button">刷新</button>
+          <div class="tf-filters" id="sector-tf-filters" role="tablist" aria-label="个股走势周期">
+            <button type="button" class="filter is-active" data-stf="intraday" aria-selected="true">分时</button>
+            <button type="button" class="filter" data-stf="day" aria-selected="false">日图</button>
+            <button type="button" class="filter" data-stf="month" aria-selected="false">月图</button>
+          </div>
         </div>
       </section>
 
-      <div class="workspace workspace-single">
-        <div class="workspace-main">
-          <section class="ai-desk" id="ai-desk" aria-label="AI 板块利空与新闻">
-            <div class="section-head">
-              <div>
-                <h2>AI 板块利空分析</h2>
-                <p id="ai-desk-blurb">算力、大模型与 AI 基础设施相关利空与新闻</p>
+      <div class="sectors-board" id="sectors-board">
+        <div class="sector-etf-strip" id="sector-etf-grid" aria-label="热点板块">
+          <div class="index-card skeleton"></div>
+          <div class="index-card skeleton"></div>
+          <div class="index-card skeleton"></div>
+        </div>
+
+        <div class="sectors-workspace">
+          <aside class="sectors-rail sectors-rail-left" aria-label="AI 利空与强势个股">
+            <section class="sectors-panel" id="ai-desk">
+              <div class="sectors-panel-head">
+                <h2>AI 利空</h2>
+                <p id="ai-desk-blurb">算力与大模型风险</p>
               </div>
-            </div>
-            <div class="ai-desk-grid">
-              <article class="war-analysis-card" id="ai-analysis-card">
-                <div class="live-brief-skeleton">正在汇总 AI 板块利空…</div>
+              <article class="war-analysis-card compact" id="ai-analysis-card">
+                <div class="live-brief-skeleton">汇总中…</div>
               </article>
-              <div class="spotlight-list" id="ai-news-list">
-                <div class="spotlight-card skeleton"></div>
-                <div class="spotlight-card skeleton"></div>
+              <div class="spotlight-list compact" id="ai-news-list"></div>
+            </section>
+
+            <section class="sectors-panel" id="sector-picks">
+              <div class="sectors-panel-head">
+                <h2>强势个股</h2>
+                <p id="sector-picks-blurb">相对板块更强</p>
               </div>
+              <div class="holding-list sector-pick-list" id="sector-pick-list" role="listbox" aria-label="强势个股列表">
+                <p class="empty">加载中…</p>
+              </div>
+            </section>
+          </aside>
+
+          <section class="sectors-center" aria-label="个股走势">
+            <div class="portfolio-chart sector-chart" id="sector-pick-chart">
+              <p class="chart-placeholder">选择个股后显示走势</p>
             </div>
           </section>
 
-          <section class="hot-sectors" id="hot-sectors" aria-label="热点板块涨跌">
-            <div class="section-head">
-              <div>
-                <h2>最新热点板块</h2>
-                <p id="hot-sectors-blurb">按当日涨跌幅排序 · 点击切换强势个股池</p>
+          <aside class="sectors-rail sectors-rail-right" aria-label="产业链与板块消息">
+            <section class="sectors-panel value-chain" id="value-chain">
+              <div class="sectors-panel-head">
+                <h2>业务与产业链</h2>
+                <p id="value-chain-blurb">主营 / 上下游</p>
               </div>
-            </div>
-            <div class="sector-etf-grid" id="sector-etf-grid">
-              <div class="index-card skeleton"></div>
-              <div class="index-card skeleton"></div>
-              <div class="index-card skeleton"></div>
-            </div>
-          </section>
+              <div class="value-chain-body" id="value-chain-body">
+                <p class="empty">选择个股后显示</p>
+              </div>
+            </section>
 
-          <section class="sector-picks" id="sector-picks" aria-label="强势个股与产业链">
-            <div class="section-head">
-              <div>
-                <h2>强势个股推荐</h2>
-                <p id="sector-picks-blurb">相对板块更强的观察名单 · 红涨绿跌</p>
+            <section class="sectors-panel" id="sector-news-mini">
+              <div class="sectors-panel-head">
+                <h2>板块消息</h2>
               </div>
-              <div class="tf-filters" id="sector-tf-filters" role="tablist" aria-label="个股走势周期">
-                <button type="button" class="filter is-active" data-stf="intraday" aria-selected="true">分时</button>
-                <button type="button" class="filter" data-stf="day" aria-selected="false">日图</button>
-                <button type="button" class="filter" data-stf="month" aria-selected="false">月图</button>
+              <div class="spotlight-list compact" id="sector-news-list">
+                <p class="empty">加载中…</p>
               </div>
-            </div>
-
-            <div class="sector-picks-body">
-              <div class="portfolio-list-pane sector-list-pane">
-                <div class="holding-list-head">
-                  <span>个股</span>
-                  <span>走势</span>
-                  <span>价格</span>
-                  <span>涨跌</span>
-                </div>
-                <div class="holding-list" id="sector-pick-list" role="listbox" aria-label="强势个股列表">
-                  <p class="empty">加载强势个股…</p>
-                </div>
-              </div>
-
-              <div class="portfolio-chart-pane">
-                <div class="portfolio-chart-sticky">
-                  <div class="portfolio-chart" id="sector-pick-chart">
-                    <p class="chart-placeholder">选择个股后显示最新走势</p>
-                  </div>
-                  <div class="sector-news-mini" id="sector-news-mini">
-                    <h3>板块最新消息</h3>
-                    <div class="spotlight-list" id="sector-news-list">
-                      <p class="empty">加载板块消息…</p>
-                    </div>
-                  </div>
-                </div>
-              </div>
-
-              <aside class="value-chain" id="value-chain" aria-label="业务与产业链">
-                <div class="value-chain-sticky">
-                  <div class="section-head holding-intel-head">
-                    <div>
-                      <h2>业务与产业链</h2>
-                      <p id="value-chain-blurb">主营、产业背景与上下游位置</p>
-                    </div>
-                  </div>
-                  <div class="value-chain-body" id="value-chain-body">
-                    <p class="empty">选择个股后显示业务背景与产业链位置</p>
-                  </div>
-                </div>
-              </aside>
-            </div>
-          </section>
+            </section>
+          </aside>
         </div>
       </div>
 {% endblock %}

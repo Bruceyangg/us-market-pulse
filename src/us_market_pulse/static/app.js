@@ -2615,18 +2615,17 @@ function renderAiDesk(aiDesk) {
         <h3>${escapeHtml(data.label || "AI 板块")}</h3>
         <a class="btn ghost btn-compact" href="/intel?q=${encodeURIComponent(
           "人工智能 OR AI OR Nvidia"
-        )}">在情报流查看</a>
+        )}">情报流</a>
       </div>
       <div class="brief-meta-row">
         <span class="brief-chip bias-bearish">利空 ${counts.bearish || 0}</span>
-        <span class="brief-chip">利多 ${counts.bullish || 0}</span>
         <span class="brief-chip score">均分 ${escapeHtml(score)}</span>
         <span class="brief-chip">样本 ${counts.total || 0}</span>
       </div>
       <p class="war-assessment">${escapeHtml(analysis.assessment || "暂无评判")}</p>
       ${
         factors
-          ? `<p class="war-factors">核心利空因子：${escapeHtml(factors)}</p>`
+          ? `<p class="war-factors">因子：${escapeHtml(factors)}</p>`
           : ""
       }
     `;
@@ -2637,7 +2636,7 @@ function renderAiDesk(aiDesk) {
       els.aiNewsList.innerHTML = '<p class="empty">暂无 AI 相关新闻。</p>';
     } else {
       els.aiNewsList.innerHTML = rows
-        .slice(0, 5)
+        .slice(0, 2)
         .map((item) => spotlightCardHtml(item))
         .join("");
     }
@@ -2654,24 +2653,24 @@ function renderSectorEtfs(sectors) {
   if (els.hotSectorsBlurb) {
     const hot = rows.filter((r) => r.is_hot).map((r) => r.label).slice(0, 3);
     els.hotSectorsBlurb.textContent = hot.length
-      ? `当前热点：${hot.join(" · ")}`
-      : "按当日涨跌幅排序 · 点击切换强势个股池";
+      ? `热点 ${hot.join(" · ")} · 点选切换个股池`
+      : "按涨跌排序 · 点选切换个股池";
   }
   els.sectorEtfGrid.innerHTML = rows
     .map((row) => {
       const pct = row.change_pct;
       const up = !(typeof pct === "number" && pct < 0);
       const active = row.id === state.sectorId;
-      const spark = sparklinePath(row.points || [], 120, 36, 2);
+      const spark = sparklinePath(row.points || [], 96, 22, 1);
       const stroke = up ? TAPE_UP : TAPE_DOWN;
       return `
         <button type="button" class="index-card sector-etf-card ${
           active ? "is-active" : ""
         } ${row.is_hot ? "is-hot" : ""}" data-sector="${escapeHtml(row.id)}">
           <div class="label">${escapeHtml(row.label)}${
-            row.is_hot ? '<span class="hot-tag">热点</span>' : ""
+            row.is_hot ? '<span class="hot-tag">热</span>' : ""
           }</div>
-          <div class="short">${escapeHtml(row.symbol)} · #${row.rank || "—"}</div>
+          <div class="short">${escapeHtml(row.symbol)}</div>
           <div class="value">${escapeHtml(
             row.price == null ? "—" : formatNumber(row.price, "")
           )}</div>
@@ -2679,7 +2678,7 @@ function renderSectorEtfs(sectors) {
           <div class="mini-spark">
             ${
               spark
-                ? `<svg viewBox="0 0 120 36" preserveAspectRatio="none" aria-hidden="true"><path d="${spark}" fill="none" stroke="${stroke}" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"></path></svg>`
+                ? `<svg viewBox="0 0 96 22" preserveAspectRatio="none" aria-hidden="true"><path d="${spark}" fill="none" stroke="${stroke}" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"></path></svg>`
                 : ""
             }
           </div>
@@ -2769,37 +2768,36 @@ function renderValueChain(vc) {
   if (els.valueChainBlurb) {
     els.valueChainBlurb.textContent = `${data.name || data.symbol} · 主营 / 产业 / 上下游`;
   }
-  const list = (items) =>
+  const chips = (items) =>
     (items || []).length
-      ? `<ul>${items.map((x) => `<li>${escapeHtml(x)}</li>`).join("")}</ul>`
+      ? `<div class="vc-chips">${items
+          .map((x) => `<span class="vc-chip">${escapeHtml(x)}</span>`)
+          .join("")}</div>`
       : "<p class='empty'>暂无</p>";
   els.valueChainBody.innerHTML = `
     <div class="vc-block">
       <p class="vc-kicker">${escapeHtml(data.symbol)} · ${escapeHtml(
         data.name || ""
       )}</p>
-      <h3>业务背景</h3>
+      <h3>业务</h3>
       <p>${escapeHtml(data.business || "")}</p>
     </div>
     <div class="vc-block">
-      <h3>产业背景</h3>
+      <h3>产业 / 位置</h3>
       <p>${escapeHtml(data.industry || "")}</p>
-    </div>
-    <div class="vc-block">
-      <h3>产业链位置</h3>
       <p>${escapeHtml(data.chain_position || "")}</p>
     </div>
     <div class="vc-block">
       <h3>上游</h3>
-      ${list(data.upstream)}
+      ${chips(data.upstream)}
     </div>
     <div class="vc-block">
       <h3>下游</h3>
-      ${list(data.downstream)}
+      ${chips(data.downstream)}
     </div>
     <div class="vc-block">
-      <h3>主要利空风险</h3>
-      ${list(data.bear_risks)}
+      <h3>风险</h3>
+      ${chips(data.bear_risks)}
     </div>
   `;
 }
@@ -2857,7 +2855,7 @@ function renderSectorPicks(data) {
   if (els.sectorNewsList) {
     const news = data?.sector_news || [];
     els.sectorNewsList.innerHTML = news.length
-      ? news.slice(0, 4).map((item) => spotlightCardHtml(item)).join("")
+      ? news.slice(0, 3).map((item) => spotlightCardHtml(item)).join("")
       : '<p class="empty">暂无该板块匹配新闻。</p>';
   }
 
