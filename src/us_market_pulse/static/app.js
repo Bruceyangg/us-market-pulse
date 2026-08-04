@@ -33,9 +33,11 @@ const state = {
   holdingFilter: "",
   holdingIntel: null,
   sectors: null,
+  sectorCache: {},
   sectorId: "",
   sectorSymbol: "",
   sectorTf: "day",
+  sectorPrefetchTimer: null,
   earnings: null,
   earningsDate: "",
   earningsSession: "all",
@@ -3230,6 +3232,23 @@ function syncSectorQuery() {
   }
 }
 
+function sectorCacheGet(id) {
+  const row = state.sectorCache?.[id];
+  if (!row?.data) return null;
+  if (Date.now() - Number(row.at || 0) > 45_000) return null;
+  return row.data;
+}
+
+function sectorCachePut(id, data) {
+  if (!id || !data) return;
+  state.sectorCache[id] = { at: Date.now(), data };
+}
+
+function pickHasChart(pick) {
+  const series = pick?.series || {};
+  return Boolean(series.intraday || series.day || (pick?.points || []).length);
+}
+
 function openSectorDesk(id, { scroll = true } = {}) {
   const sectorId = (id || "").trim().toLowerCase();
   if (!sectorId) return;
@@ -3237,12 +3256,42 @@ function openSectorDesk(id, { scroll = true } = {}) {
   state.sectorId = sectorId;
   if (!same) state.sectorSymbol = "";
   syncSectorQuery();
-  const load = same && state.sectors ? Promise.resolve(state.sectors) : loadSectorDesk();
+
+  // Optimistic: paint cached desk immediately while a refresh runs in background
+  const cached = sectorCacheGet(sectorId);
+  if (cached && (!same || !state.sectors)) {
+    renderSectorDesk(cached);
+  } else if (!same && els.sectorPickList) {
+    els.sectorPickList.innerHTML = '<p class="empty">加载成分股…</p>';
+    if (els.sectorPicksTitle) {
+      const label =
+        (state.sectors?.sectors || []).find((s) => s.id === sectorId)?.label ||
+        sectorId;
+      els.sectorPicksTitle.textContent = `${label} · 成分`;
+    }
+  }
+
+  const load =
+    same && state.sectors && pickHasChart(state.sectors.selected_pick)
+      ? Promise.resolve(state.sectors)
+      : loadSectorDesk();
   Promise.resolve(load).finally(() => {
     if (scroll && els.sectorsDesk) {
       els.sectorsDesk.scrollIntoView({ behavior: "smooth", block: "start" });
     }
   });
+}
+
+function prefetchSectorDesk(id) {
+  const sectorId = (id || "").trim().toLowerCase();
+  if (!sectorId || sectorCacheGet(sectorId)) return;
+  const params = new URLSearchParams({ sector: sectorId });
+  fetch(`/api/sectors?${params.toString()}`)
+    .then((res) => (res.ok ? res.json() : null))
+    .then((data) => {
+      if (data) sectorCachePut(sectorId, data);
+    })
+    .catch(() => {});
 }
 
 function renderSectorEtfs(sectors) {
@@ -3315,6 +3364,12 @@ function renderSectorEtfs(sectors) {
   els.sectorEtfGrid.querySelectorAll("[data-sector]").forEach((btn) => {
     btn.addEventListener("click", () => {
       openSectorDesk(btn.getAttribute("data-sector"), { scroll: true });
+    });
+    btn.addEventListener("pointerenter", () => {
+      const id = btn.getAttribute("data-sector");
+      if (!id) return;
+      clearTimeout(state.sectorPrefetchTimer);
+      state.sectorPrefetchTimer = setTimeout(() => prefetchSectorDesk(id), 120);
     });
   });
 }
@@ -3795,8 +3850,8 @@ function selectSectorSymbol(sym) {
   if (!symbol || symbol === state.sectorSymbol) return;
   const data = state.sectors;
   const pick = (data?.picks || []).find((p) => p.symbol === symbol);
-  // Instant local switch when quote/series already loaded — no round-trip
-  if (data && pick) {
+  // Instant local switch when full chart series already loaded
+  if (data && pick && pickHasChart(pick)) {
     state.sectorSymbol = symbol;
     data.selected_symbol = symbol;
     data.selected_pick = pick;
@@ -3809,6 +3864,9 @@ function selectSectorSymbol(sym) {
   }
   state.sectorSymbol = symbol;
   syncSectorQuery();
+  if (els.sectorPickChart) {
+    els.sectorPickChart.innerHTML = '<p class="chart-placeholder">加载走势…</p>';
+  }
   loadSectorDesk();
 }
 
@@ -3834,6 +3892,7 @@ async function loadSectorDesk({ force = false } = {}) {
     const res = await fetch(`/api/sectors?${params.toString()}`);
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     const data = await res.json();
+    if (data?.active_sector_id) sectorCachePut(data.active_sector_id, data);
     renderSectorDesk(data);
     syncSectorQuery();
     const hot = (data.hot_sectors || []).map((s) => s.label).slice(0, 2).join("、");

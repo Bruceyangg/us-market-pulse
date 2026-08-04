@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Any
 
 from fastapi import FastAPI, Header, HTTPException, Query, Request
-from fastapi.responses import HTMLResponse, RedirectResponse
+from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from pydantic import BaseModel, Field
@@ -33,6 +33,7 @@ from us_market_pulse.feeds import (
     clear_cache,
     filter_items,
     get_event,
+    peek_intel_items,
     refresh_intel,
     refresh_market_desk,
 )
@@ -174,6 +175,24 @@ async def settings_page(request: Request) -> HTMLResponse:
     return _page(request, "settings.html", "settings")
 
 
+@app.get("/install", response_class=HTMLResponse)
+async def install_page(request: Request) -> HTMLResponse:
+    return _page(request, "install.html", "install")
+
+
+@app.get("/sw.js")
+async def service_worker() -> FileResponse:
+    return FileResponse(
+        BASE_DIR / "static" / "sw.js",
+        media_type="application/javascript",
+        headers={
+            "Service-Worker-Allowed": "/",
+            "Cache-Control": "no-cache",
+        },
+    )
+
+
+
 @app.get("/api/auth/me")
 async def api_auth_me(request: Request) -> dict[str, Any]:
     user = current_user(request)
@@ -219,17 +238,18 @@ async def api_sectors(
     sector: str | None = Query(default=None),
     symbol: str | None = Query(default=None),
 ) -> dict[str, Any]:
-    intel = await refresh_intel(force=False)
+    # Avoid refresh_intel() here — it may refresh the unrelated market board.
+    items = peek_intel_items()
+    if not items and refresh:
+        intel = await refresh_intel(force=False)
+        items = intel.get("items") or []
     desk = await build_sector_desk(
-        intel.get("items") or [],
+        items,
         force=refresh,
         selected_sector=sector,
         selected_symbol=symbol,
     )
-    return {
-        **desk,
-        "intel_fetched_at": intel.get("fetched_at"),
-    }
+    return desk
 
 
 @app.get("/api/sectors/map")

@@ -12,15 +12,23 @@ import httpx
 
 from us_market_pulse.earnings_calendar import (
     _parse_money,
-    get_upcoming_earnings_map,
     lookup_upcoming_earnings,
 )
 from us_market_pulse.market_map import symbols_for_desk
 from us_market_pulse.markets import PORTFOLIO_TIMEFRAMES, fetch_symbol_bundle
+from us_market_pulse.quotes import fetch_day_quotes
 from us_market_pulse.topics import TOPICS, filter_topic_items, topic_bearish_analysis
 
 # Cap concurrent Yahoo chart fetches per sector switch
 _MAX_SECTOR_PICKS = 28
+_pick_fetch_sem: asyncio.Semaphore | None = None
+
+
+def _get_pick_sem() -> asyncio.Semaphore:
+    global _pick_fetch_sem
+    if _pick_fetch_sem is None:
+        _pick_fetch_sem = asyncio.Semaphore(6)
+    return _pick_fetch_sem
 
 
 def _universe_for_sector(sector_id: str, curated: list[str] | None = None) -> list[str]:
@@ -460,13 +468,117 @@ VALUE_CHAIN: dict[str, dict[str, Any]] = {
 }
 
 _CACHE: dict[str, Any] = {"fetched_at": 0.0, "payload": None}
-_CACHE_TTL = 90.0
+_CACHE_TTL = 180.0
 # Per-sector pick boards (quotes + earnings) — avoids refetch on every symbol click
 _PICKS_CACHE: dict[str, Any] = {}
-_PICKS_TTL = 90.0
+_PICKS_TTL = 180.0
 # Per-symbol Yahoo quote/earnings snippets shared across sectors
 _SYM_CACHE: dict[str, Any] = {}
-_SYM_TTL = 90.0
+_SYM_TTL = 180.0
+
+
+def _pick_has_chart(row: dict[str, Any] | None) -> bool:
+    if not row:
+        return False
+    series = row.get("series") or {}
+    return bool(series.get("intraday") or series.get("day") or row.get("points"))
+
+
+def _slim_pick_row(row: dict[str, Any], selected: str) -> dict[str, Any]:
+    """Strip heavy multi-TF series from list rows; keep full chart for selection."""
+    out = dict(row)
+    sym = str(out.get("symbol") or "").upper()
+    if sym == selected and _pick_has_chart(out):
+        return out
+    points = list(out.get("points") or [])[:48]
+    out["points"] = points
+    out["series"] = {}
+    out["lite"] = True
+    # Drop bulky nested blobs from wire payload
+    earn = out.get("earnings")
+    if isinstance(earn, dict):
+        out["earnings"] = {
+            k: earn.get(k)
+            for k in (
+                "symbol",
+                "next_earnings_label",
+                "prev_earnings_label",
+                "days_to_earnings",
+                "next_earnings_ts",
+                "expect_eps",
+                "eps_avg",
+                "last_eps_actual",
+            )
+            if earn.get(k) is not None
+        } or None
+    return out
+
+
+def _slim_sector_etf(row: dict[str, Any]) -> dict[str, Any]:
+    out = {k: v for k, v in row.items() if k != "series"}
+    out["points"] = list(row.get("points") or [])[:64]
+    return out
+
+
+async def _fetch_quote_limited(
+    client: httpx.AsyncClient,
+    symbol: str,
+    label: str | None = None,
+    *,
+    force: bool = False,
+) -> tuple[dict[str, Any] | None, list[str]]:
+    async with _get_pick_sem():
+        return await _fetch_quote(client, symbol, label, force=force)
+
+
+def _lite_pick_from_quote(
+    sym: str,
+    quote: dict[str, Any] | None,
+    *,
+    active: dict[str, Any] | None,
+    home_etf: dict[str, Any] | None,
+    sector_id: str,
+) -> dict[str, Any]:
+    vc = _value_chain_for(sym)
+    day_pct = (quote or {}).get("change_pct")
+    price = (quote or {}).get("price")
+    change = (quote or {}).get("change")
+    etf_day = (home_etf or {}).get("change_pct")
+    rs = None
+    if day_pct is not None and etf_day is not None:
+        try:
+            rs = round(float(day_pct) - float(etf_day), 3)
+        except (TypeError, ValueError):
+            rs = None
+    sector_label = (active or {}).get("label") or ""
+    is_strong = (rs is not None and rs > 0) or (
+        day_pct is not None
+        and etf_day is not None
+        and float(day_pct) > float(etf_day)
+    )
+    return {
+        "symbol": sym,
+        "name": vc.get("name") or sym,
+        "label": vc.get("name") or sym,
+        "price": price,
+        "change": change,
+        "change_pct": day_pct,
+        "month_change_pct": day_pct,
+        "quarter_change_pct": None,
+        "vs_sector_pct": rs,
+        "momentum": float(day_pct or 0),
+        "is_wave": bool(is_strong and float(day_pct or 0) > 1.5),
+        "is_strong": bool(is_strong),
+        "sector_id": (active or {}).get("id") or sector_id,
+        "sector_label": sector_label,
+        "points": [],
+        "series": {},
+        "lite": True,
+        "earnings": None,
+        "value_chain": vc,
+        "move_analysis": None,
+        "url": f"https://finance.yahoo.com/quote/{sym}",
+    }
 
 
 def _etf_by_id(sector_id: str) -> dict[str, Any] | None:
@@ -1231,73 +1343,66 @@ async def build_sector_desk(
     ):
         payload = dict(_CACHE["payload"])
     else:
+        # Fast ETF strip via CNBC/Yahoo light quotes (avoid 8× multi-TF Yahoo charts)
         errors: list[str] = []
-        async with httpx.AsyncClient(
-            headers={"User-Agent": USER_AGENT, "Accept": "application/json"},
-            follow_redirects=True,
-        ) as client:
-            etf_results = await asyncio.gather(
-                *[
-                    _fetch_quote(client, row["symbol"], row["label"])
-                    for row in SECTOR_ETFS
-                ]
+        etf_symbols = [row["symbol"] for row in SECTOR_ETFS]
+        etf_quotes = await fetch_day_quotes(etf_symbols)
+        sectors: list[dict[str, Any]] = []
+        for spec in SECTOR_ETFS:
+            quote = etf_quotes.get(str(spec["symbol"]).upper())
+            if not quote:
+                errors.append(f"{spec['symbol']}: quote failed")
+                # Keep the card even without a live quote so navigation still works
+                quote = {}
+            day_pct = quote.get("change_pct")
+            universe = _universe_for_sector(spec["id"], list(spec["picks"]))
+            sectors.append(
+                {
+                    "id": spec["id"],
+                    "symbol": spec["symbol"],
+                    "label": spec["label"],
+                    "short": spec["short"],
+                    "blurb": spec["blurb"],
+                    "topic_id": spec["topic_id"],
+                    "picks": list(spec["picks"]),
+                    "universe": universe,
+                    "pick_count": len(universe),
+                    "pick_preview": universe[:6],
+                    "price": quote.get("price"),
+                    "change": quote.get("change"),
+                    "change_pct": day_pct,
+                    "month_change_pct": day_pct,
+                    "quarter_change_pct": None,
+                    "momentum": float(day_pct or 0),
+                    "is_wave": bool(day_pct is not None and float(day_pct) > 1.2),
+                    "points": [],
+                    "series": {},
+                    "url": f"https://finance.yahoo.com/quote/{spec['symbol']}",
+                    "as_of": None,
+                }
             )
 
-            sectors: list[dict[str, Any]] = []
-            for spec, (bundle, errs) in zip(SECTOR_ETFS, etf_results, strict=True):
-                errors.extend(errs)
-                if not bundle:
-                    continue
-                wave = _momentum_fields(bundle)
-                universe = _universe_for_sector(spec["id"], list(spec["picks"]))
-                sectors.append(
-                    {
-                        "id": spec["id"],
-                        "symbol": spec["symbol"],
-                        "label": spec["label"],
-                        "short": spec["short"],
-                        "blurb": spec["blurb"],
-                        "topic_id": spec["topic_id"],
-                        "picks": list(spec["picks"]),
-                        "universe": universe,
-                        "pick_count": len(universe),
-                        "pick_preview": universe[:6],
-                        "price": bundle.get("price"),
-                        "change": bundle.get("change"),
-                        "change_pct": bundle.get("change_pct"),
-                        "month_change_pct": wave["month_change_pct"],
-                        "quarter_change_pct": wave["quarter_change_pct"],
-                        "momentum": wave["momentum"],
-                        "is_wave": wave["is_wave"],
-                        "points": bundle.get("points") or [],
-                        "series": bundle.get("series") or {},
-                        "url": bundle.get("url"),
-                        "as_of": bundle.get("as_of"),
-                    }
-                )
+        # Hot rank: day tape first (month spark optional / filled later)
+        sectors.sort(
+            key=lambda r: (
+                float(r.get("momentum") or -999),
+                float(r.get("change_pct") or -999),
+            ),
+            reverse=True,
+        )
+        for idx, row in enumerate(sectors):
+            row["rank"] = idx + 1
+            row["is_hot"] = idx < 3 or bool(row.get("is_wave"))
 
-            # Hot rank: near-term wave score, then 1M / 1D tape
-            sectors.sort(
-                key=lambda r: (
-                    float(r.get("momentum") or -999),
-                    float(r.get("month_change_pct") or -999),
-                    float(r.get("change_pct") or -999),
-                ),
-                reverse=True,
-            )
-            for idx, row in enumerate(sectors):
-                row["rank"] = idx + 1
-                row["is_hot"] = idx < 3 or bool(row.get("is_wave"))
-
-            payload = {
-                "sectors": sectors,
-                "errors": errors[-30:],
-                "fetched_at": now,
-                "source": "Yahoo Finance + 情报源关键词",
-                "cached": False,
-            }
-            _CACHE["payload"] = payload
-            _CACHE["fetched_at"] = now
+        payload = {
+            "sectors": sectors,
+            "errors": errors[-30:],
+            "fetched_at": now,
+            "source": "CNBC / Yahoo light quotes + 情报源",
+            "cached": False,
+        }
+        _CACHE["payload"] = payload
+        _CACHE["fetched_at"] = now
 
         payload = dict(payload)
         payload["cached"] = False
@@ -1343,97 +1448,122 @@ async def build_sector_desk(
     if picks_fresh:
         pick_rows = [dict(r) for r in picks_cached["pick_rows"]]
         earnings_by_symbol = dict(picks_cached.get("earnings_by_symbol") or {})
-    elif pick_symbols:
-        upcoming_map = await get_upcoming_earnings_map(force=force)
-        async with httpx.AsyncClient(
-            headers={
-                "User-Agent": USER_AGENT,
-                "Accept": "application/json",
-                "Accept-Language": "en-US,en;q=0.9",
-                "Origin": "https://finance.yahoo.com",
-                "Referer": "https://finance.yahoo.com/",
-            },
-            follow_redirects=True,
-            trust_env=False,
-        ) as client:
-            pick_results, earnings_results = await asyncio.gather(
-                asyncio.gather(
-                    *[_fetch_quote(client, sym, sym, force=force) for sym in pick_symbols]
-                ),
-                asyncio.gather(
-                    *[
-                        _fetch_earnings_cached(
-                            client,
-                            sym,
-                            force=force,
-                            upcoming_map=upcoming_map,
-                        )
-                        for sym in pick_symbols
-                    ]
-                ),
-            )
-        sector_by_sym: dict[str, dict[str, Any]] = {}
-        for sec in SECTOR_ETFS:
-            for sym in _universe_for_sector(sec["id"], list(sec.get("picks") or [])):
-                sector_by_sym.setdefault(sym, sec)
 
-        for sym, (bundle, errs), earnings in zip(
-            pick_symbols, pick_results, earnings_results, strict=True
-        ):
-            pick_errors.extend(errs)
-            if earnings:
-                earnings_by_symbol[sym] = earnings
-            if not bundle:
+    selected = (selected_symbol or "").strip().upper()
+    if not selected or not any(p.get("symbol") == selected for p in pick_rows):
+        # Prefer first symbol by day tape once quotes land; bootstrap from universe
+        selected = (
+            pick_rows[0]["symbol"]
+            if pick_rows
+            else (pick_symbols[0] if pick_symbols else "")
+        )
+
+    home_etf = active
+    yahoo_headers = {
+        "User-Agent": USER_AGENT,
+        "Accept": "application/json",
+        "Accept-Language": "en-US,en;q=0.9",
+        "Origin": "https://finance.yahoo.com",
+        "Referer": "https://finance.yahoo.com/",
+    }
+
+    # Fast path: batch day quotes for the whole list; full multi-TF chart only
+    # for the selected symbol (biggest latency win on sector switch).
+    if not picks_fresh and pick_symbols:
+        day_quotes = await fetch_day_quotes(pick_symbols)
+        for sym in pick_symbols:
+            quote = day_quotes.get(sym)
+            if not quote and sym != selected:
                 continue
-            vc = _value_chain_for(sym)
-            # Desk is scoped to the active sector — always attribute home there
-            home = active or sector_by_sym.get(sym) or {}
-            home_etf = next(
-                (s for s in sectors if s.get("id") == home.get("id")), active
-            )
-            rs = _relative_strength(bundle, home_etf)
-            wave = _momentum_fields(bundle)
-            day_pct = bundle.get("change_pct")
-            sector_label = (
-                home.get("label") or (active or {}).get("label") or ""
-            )
-            analysis = _move_analysis(
-                day_pct=day_pct,
-                month_pct=wave["month_change_pct"],
-                quarter_pct=wave["quarter_change_pct"],
-                vs_sector_pct=rs,
-                is_wave=bool(wave["is_wave"]),
-                sector_label=sector_label,
-                etf_day_pct=(home_etf or {}).get("change_pct"),
-                earnings=earnings,
-                value_chain=vc,
-                news=None,  # filled after sector_news is ready
-            )
             pick_rows.append(
-                {
-                    **bundle,
-                    "name": vc.get("name") or sym,
-                    "month_change_pct": wave["month_change_pct"],
-                    "quarter_change_pct": wave["quarter_change_pct"],
-                    "vs_sector_pct": rs,
-                    "momentum": wave["momentum"],
-                    "is_wave": wave["is_wave"],
-                    "is_strong": wave["is_wave"]
-                    or (rs is not None and rs > 0)
-                    or float(day_pct or 0)
-                    > float((home_etf or {}).get("change_pct") or 0),
-                    "sector_id": home.get("id") or sector_id,
-                    "sector_label": sector_label,
-                    "earnings": earnings,
-                    "value_chain": vc,
-                    "move_analysis": analysis,
-                }
+                _lite_pick_from_quote(
+                    sym,
+                    quote,
+                    active=active,
+                    home_etf=home_etf,
+                    sector_id=sector_id,
+                )
             )
         pick_rows.sort(
             key=lambda r: (
                 1 if r.get("is_wave") else 0,
                 float(r.get("momentum") or -999),
-                float(r.get("month_change_pct") or -999),
+                float(r.get("change_pct") or -999),
+            ),
+            reverse=True,
+        )
+        if not selected or not any(p.get("symbol") == selected for p in pick_rows):
+            selected = pick_rows[0]["symbol"] if pick_rows else selected
+
+    # Ensure selected symbol has a full chart bundle (cache miss or lite row).
+    # Skip per-symbol earnings here — Yahoo quoteSummary can take 20s+ and blocks the desk.
+    selected_pick = next((p for p in pick_rows if p.get("symbol") == selected), None)
+    need_selected_chart = bool(selected) and not _pick_has_chart(selected_pick)
+    already_tried = bool(selected_pick and selected_pick.get("chart_attempted"))
+    if selected and need_selected_chart and (not already_tried or force):
+        try:
+            async with httpx.AsyncClient(
+                headers=yahoo_headers,
+                follow_redirects=True,
+                trust_env=False,
+                timeout=httpx.Timeout(6.0, connect=2.5),
+            ) as client:
+                bundle, errs = await asyncio.wait_for(
+                    _fetch_quote_limited(client, selected, selected, force=force),
+                    timeout=6.0,
+                )
+        except (asyncio.TimeoutError, httpx.HTTPError) as exc:
+            bundle, errs = None, [f"{selected}: chart timeout ({exc.__class__.__name__})"]
+        pick_errors.extend(errs)
+        if bundle:
+            vc = _value_chain_for(selected)
+            rs = _relative_strength(bundle, home_etf)
+            wave = _momentum_fields(bundle)
+            day_pct = bundle.get("change_pct")
+            sector_label = (active or {}).get("label") or ""
+            rich = {
+                **bundle,
+                "name": vc.get("name") or selected,
+                "month_change_pct": wave["month_change_pct"],
+                "quarter_change_pct": wave["quarter_change_pct"],
+                "vs_sector_pct": rs,
+                "momentum": wave["momentum"],
+                "is_wave": wave["is_wave"],
+                "is_strong": wave["is_wave"]
+                or (rs is not None and rs > 0)
+                or float(day_pct or 0) > float((home_etf or {}).get("change_pct") or 0),
+                "sector_id": sector_id,
+                "sector_label": sector_label,
+                "earnings": earnings_by_symbol.get(selected),
+                "value_chain": vc,
+                "move_analysis": None,
+                "lite": False,
+                "chart_attempted": True,
+            }
+            replaced = False
+            for idx, row in enumerate(pick_rows):
+                if row.get("symbol") == selected:
+                    pick_rows[idx] = rich
+                    replaced = True
+                    break
+            if not replaced:
+                pick_rows.insert(0, rich)
+            selected_pick = rich
+        else:
+            # Remember failure so warm cache hits stay instant
+            for row in pick_rows:
+                if row.get("symbol") == selected:
+                    row["chart_attempted"] = True
+                    break
+            if selected_pick is not None:
+                selected_pick["chart_attempted"] = True
+
+    if pick_rows:
+        pick_rows.sort(
+            key=lambda r: (
+                1 if r.get("is_wave") else 0,
+                float(r.get("momentum") or -999),
+                float(r.get("month_change_pct") or r.get("change_pct") or -999),
                 float(r.get("change_pct") or -999),
             ),
             reverse=True,
@@ -1445,7 +1575,6 @@ async def build_sector_desk(
             "fetched_at": time.time(),
         }
 
-    selected = (selected_symbol or "").strip().upper()
     if not selected or not any(p.get("symbol") == selected for p in pick_rows):
         selected = pick_rows[0]["symbol"] if pick_rows else ""
     selected_pick = next((p for p in pick_rows if p.get("symbol") == selected), None)
@@ -1525,25 +1654,35 @@ async def build_sector_desk(
         ),
     )
 
+    wire_picks = [_slim_pick_row(dict(p), selected) for p in pick_rows]
+    wire_selected = next((p for p in wire_picks if p.get("symbol") == selected), None)
+    # Always expose the full selected chart even if slim list row is lite-flagged
+    if selected_pick and _pick_has_chart(selected_pick):
+        wire_selected = dict(selected_pick)
+        wire_picks = [
+            wire_selected if p.get("symbol") == selected else p for p in wire_picks
+        ]
+
     return {
         **payload,
+        "sectors": [_slim_sector_etf(dict(s)) for s in sectors],
         "cached": bool(_CACHE["payload"]) and not force,
         "ai_desk": hot_desk,
         "hot_desk": hot_desk,
         "hot_sectors": [s for s in sectors if s.get("is_hot")][:4],
         "active_sector_id": sector_id,
-        "active_sector": active,
-        "sector_news": sector_news,
+        "active_sector": _slim_sector_etf(dict(active)) if active else active,
+        "sector_news": sector_news[:6],
         "sector_bearish": sector_bear,
-        "picks": pick_rows,
-        "wave_leaders": [p for p in pick_rows if p.get("is_wave")][:10],
+        "picks": wire_picks,
+        "wave_leaders": [p for p in wire_picks if p.get("is_wave")][:10],
         "selected_symbol": selected,
-        "selected_pick": selected_pick,
-        "value_chain": (selected_pick or {}).get("value_chain")
+        "selected_pick": wire_selected,
+        "value_chain": (wire_selected or {}).get("value_chain")
         or _value_chain_for(selected),
-        "earnings_calendar": earnings_calendar,
+        "earnings_calendar": earnings_calendar[:12],
         "selected_earnings": earnings_by_symbol.get(selected)
-        or (selected_pick or {}).get("earnings"),
+        or (wire_selected or {}).get("earnings"),
         "timeframes": [
             {
                 "id": tf["id"],

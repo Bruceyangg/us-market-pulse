@@ -410,6 +410,11 @@ async def _fetch_fred_series(
         return None, f"FRED {series['id']}: {exc}"
 
 
+def peek_intel_items() -> list[dict[str, Any]]:
+    """Return cached intel items without refreshing RSS or the market board."""
+    return list(_CACHE.get("items") or [])
+
+
 async def refresh_intel(force: bool = False) -> dict[str, Any]:
     now = time.time()
     if (
