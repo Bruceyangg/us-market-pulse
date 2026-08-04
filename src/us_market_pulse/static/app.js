@@ -2785,9 +2785,7 @@ function renderEarningsCalendar(data) {
   els.earningsList.querySelectorAll("[data-symbol]").forEach((btn) => {
     btn.addEventListener("click", () => {
       const sym = btn.getAttribute("data-symbol") || "";
-      if (!sym || sym === state.sectorSymbol) return;
-      state.sectorSymbol = sym;
-      loadSectorDesk();
+      selectSectorSymbol(sym);
     });
   });
 }
@@ -3150,9 +3148,7 @@ function renderSectorPicks(data) {
       els.sectorPickList.querySelectorAll("[data-symbol]").forEach((btn) => {
         btn.addEventListener("click", () => {
           const sym = btn.getAttribute("data-symbol") || "";
-          if (!sym || sym === state.sectorSymbol) return;
-          state.sectorSymbol = sym;
-          loadSectorDesk();
+          selectSectorSymbol(sym);
         });
       });
     }
@@ -3168,6 +3164,26 @@ function renderSectorPicks(data) {
   renderSectorPickChart();
   renderEarningsCalendar(data);
   renderValueChain(data?.value_chain || data?.selected_pick?.value_chain);
+}
+
+function selectSectorSymbol(sym) {
+  const symbol = (sym || "").trim().toUpperCase();
+  if (!symbol || symbol === state.sectorSymbol) return;
+  const data = state.sectors;
+  const pick = (data?.picks || []).find((p) => p.symbol === symbol);
+  // Instant local switch when quote/series already loaded — no round-trip
+  if (data && pick) {
+    state.sectorSymbol = symbol;
+    data.selected_symbol = symbol;
+    data.selected_pick = pick;
+    data.selected_earnings = pick.earnings || null;
+    data.value_chain = pick.value_chain || data.value_chain;
+    renderSectorPicks(data);
+    setStatus(`已切换 ${pick.name || symbol} · ${pick.sector_label || ""}`);
+    return;
+  }
+  state.sectorSymbol = symbol;
+  loadSectorDesk();
 }
 
 function renderSectorDesk(data) {

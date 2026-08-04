@@ -435,6 +435,12 @@ VALUE_CHAIN: dict[str, dict[str, Any]] = {
 
 _CACHE: dict[str, Any] = {"fetched_at": 0.0, "payload": None}
 _CACHE_TTL = 90.0
+# Per-sector pick boards (quotes + earnings) — avoids refetch on every symbol click
+_PICKS_CACHE: dict[str, Any] = {}
+_PICKS_TTL = 90.0
+# Per-symbol Yahoo quote/earnings snippets shared across sectors
+_SYM_CACHE: dict[str, Any] = {}
+_SYM_TTL = 90.0
 
 
 def _etf_by_id(sector_id: str) -> dict[str, Any] | None:
@@ -483,16 +489,49 @@ def _match_sector_news(items: list[dict[str, Any]], topic_id: str) -> list[dict[
 
 
 async def _fetch_quote(
-    client: httpx.AsyncClient, symbol: str, label: str | None = None
+    client: httpx.AsyncClient,
+    symbol: str,
+    label: str | None = None,
+    *,
+    force: bool = False,
 ) -> tuple[dict[str, Any] | None, list[str]]:
-    return await fetch_symbol_bundle(
+    sym = (symbol or "").strip().upper()
+    cache_key = f"quote:{sym}"
+    cached = _SYM_CACHE.get(cache_key)
+    if (
+        not force
+        and cached
+        and time.time() - float(cached.get("fetched_at") or 0) < _SYM_TTL
+    ):
+        return cached.get("bundle"), []
+    bundle, errs = await fetch_symbol_bundle(
         client,
-        symbol=symbol,
-        label=label or symbol,
-        short=symbol,
+        symbol=sym,
+        label=label or sym,
+        short=sym,
         timeframes=SECTOR_TIMEFRAMES,
         include_yearly=False,
     )
+    if bundle:
+        _SYM_CACHE[cache_key] = {"bundle": bundle, "fetched_at": time.time()}
+    return bundle, errs
+
+
+async def _fetch_earnings_cached(
+    client: httpx.AsyncClient, symbol: str, *, force: bool = False
+) -> dict[str, Any] | None:
+    sym = (symbol or "").strip().upper()
+    cache_key = f"earn:{sym}"
+    cached = _SYM_CACHE.get(cache_key)
+    if (
+        not force
+        and cached
+        and time.time() - float(cached.get("fetched_at") or 0) < _SYM_TTL
+    ):
+        return cached.get("earnings")
+    earnings = await _fetch_earnings(client, sym)
+    _SYM_CACHE[cache_key] = {"earnings": earnings, "fetched_at": time.time()}
+    return earnings
 
 
 def _relative_strength(stock: dict[str, Any], etf: dict[str, Any] | None) -> float | None:
@@ -1081,14 +1120,39 @@ async def build_sector_desk(
     pick_rows: list[dict[str, Any]] = []
     pick_errors: list[str] = []
     earnings_by_symbol: dict[str, Any] = {}
-    if pick_symbols:
+    picks_key = f"{sector_id}:{'|'.join(pick_symbols)}"
+    picks_cached = _PICKS_CACHE.get(sector_id) or {}
+    picks_fresh = (
+        not force
+        and picks_cached.get("key") == picks_key
+        and time.time() - float(picks_cached.get("fetched_at") or 0) < _PICKS_TTL
+        and picks_cached.get("pick_rows")
+    )
+    if picks_fresh:
+        pick_rows = [dict(r) for r in picks_cached["pick_rows"]]
+        earnings_by_symbol = dict(picks_cached.get("earnings_by_symbol") or {})
+    elif pick_symbols:
         async with httpx.AsyncClient(
-            headers={"User-Agent": USER_AGENT, "Accept": "application/json"},
+            headers={
+                "User-Agent": USER_AGENT,
+                "Accept": "application/json",
+                "Accept-Language": "en-US,en;q=0.9",
+                "Origin": "https://finance.yahoo.com",
+                "Referer": "https://finance.yahoo.com/",
+            },
             follow_redirects=True,
+            trust_env=False,
         ) as client:
             pick_results, earnings_results = await asyncio.gather(
-                asyncio.gather(*[_fetch_quote(client, sym, sym) for sym in pick_symbols]),
-                asyncio.gather(*[_fetch_earnings(client, sym) for sym in pick_symbols]),
+                asyncio.gather(
+                    *[_fetch_quote(client, sym, sym, force=force) for sym in pick_symbols]
+                ),
+                asyncio.gather(
+                    *[
+                        _fetch_earnings_cached(client, sym, force=force)
+                        for sym in pick_symbols
+                    ]
+                ),
             )
         sector_by_sym: dict[str, dict[str, Any]] = {}
         for sec in SECTOR_ETFS:
@@ -1158,6 +1222,12 @@ async def build_sector_desk(
             ),
             reverse=True,
         )
+        _PICKS_CACHE[sector_id] = {
+            "key": picks_key,
+            "pick_rows": [dict(r) for r in pick_rows],
+            "earnings_by_symbol": dict(earnings_by_symbol),
+            "fetched_at": time.time(),
+        }
 
     selected = (selected_symbol or "").strip().upper()
     if not selected or not any(p.get("symbol") == selected for p in pick_rows):
