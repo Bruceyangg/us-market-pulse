@@ -460,19 +460,13 @@ async def _fetch_yahoo_series(
             "as_of": meta.get("regularMarketTime") or points[-1]["t"],
             "previous_close": round(float(prev), 6) if prev not in (None, 0) else None,
         }
-        if sessions:
-            out["sessions"] = sessions
-            present = {s["id"] for s in sessions}
-            out["session_labels"] = [
-                s["label"] for s in _SESSION_META if s["id"] in present
-            ]
-        elif use_session:
-            # Still advertise the four sessions even if Yahoo only returned one band
-            out["session_labels"] = [s["label"] for s in _SESSION_META]
+        if use_session:
             for p in points:
-                if "session" not in p:
+                if "session" not in p and p.get("t"):
                     p["session"] = _session_id_for_ts(int(p["t"]))
-            out["sessions"] = _session_segments(points)
+            out["sessions"] = sessions or _session_segments(points)
+            # Always advertise all four bands — empty bands still render on the desk.
+            out["session_labels"] = [s["label"] for s in _SESSION_META]
         return out, None
     except Exception as exc:  # noqa: BLE001
         return None, f"{spec['label']}/{tf['label']}: {exc}"
