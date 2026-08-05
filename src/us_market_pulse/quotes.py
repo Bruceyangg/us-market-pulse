@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import re
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from typing import Any
 from urllib.parse import quote
 from zoneinfo import ZoneInfo
@@ -274,8 +274,21 @@ async def fetch_nasdaq_intraday(
         raw = data.get("chart") or []
         if not isinstance(raw, list) or len(raw) < 2:
             return None
-        # Tape is for the current ET trading date (extended hours same calendar day)
-        day = datetime.now(tz=_ET).date()
+        # Stamp onto the active trading day (04:00 ET cycle), NOT calendar
+        # "today". After midnight ET the Nasdaq tape is still yesterday's
+        # 盘前…盘后; using date.today() pushes every point into tomorrow and
+        # the desk session filter then drops the entire series.
+        try:
+            from us_market_pulse.markets import trading_day_et
+
+            day = trading_day_et().date()
+        except Exception:  # noqa: BLE001
+            now_et = datetime.now(tz=_ET)
+            day = (
+                now_et.date()
+                if (now_et.hour * 60 + now_et.minute) >= 4 * 60
+                else (now_et.date() - timedelta(days=1))
+            )
         points: list[dict[str, Any]] = []
         for row in raw:
             if not isinstance(row, dict):
