@@ -1156,29 +1156,34 @@ async def _fetch_quote(
             start_ts=int(start_et.timestamp()),
             end_ts=int(end_et.timestamp()) + 120,
         )
-        # Session filter can wipe weekend/holiday tapes — keep raw Nasdaq then.
+        # Session filter can wipe weekend/holiday tapes — keep raw tagged tape.
         if len(pts) < 2 and len(raw_pts) >= 2:
-            pts = raw_pts
-        # Nasdaq AH ends ~20:00 ET — stretch into current 夜盘 so the desk
-        # does not look stuck in 盘中 after the close.
+            pts = [
+                {**p, "session": _session_id_for_ts(int(p["t"]))}
+                for p in raw_pts
+            ]
+        # After 20:00 ET, Nasdaq often stops — hold last print into 夜盘.
         if pts:
             now_ts = int(end_et.timestamp())
             last = pts[-1]
-            if now_ts - int(last["t"]) >= 180:
-                sid = _session_id_et(now_ts)
-                if sid in {"night", "post"} and last.get("session") != sid:
-                    pts.append(
-                        {
-                            "t": now_ts,
-                            "v": float(last["v"]),
-                            "session": sid,
-                        }
-                    )
+            sid_now = _session_id_for_ts(now_ts)
+            if (
+                sid_now == "night"
+                and now_ts - int(last["t"]) >= 180
+                and last.get("session") != "night"
+            ):
+                pts.append(
+                    {
+                        "t": now_ts,
+                        "v": float(last["v"]),
+                        "session": "night",
+                    }
+                )
         series["intraday"] = _annotate_intraday_sessions(
             {
                 "tf": "intraday",
                 "label": "分时",
-                "blurb": "夜盘·盘前·盘中·盘后一体分时（Nasdaq）",
+                "blurb": "盘前·盘中·盘后·夜盘一体分时（Nasdaq）",
                 "range": "1d",
                 "interval": "1m",
                 "chart": "line",

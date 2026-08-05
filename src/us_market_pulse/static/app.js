@@ -454,27 +454,31 @@ function renderChartSvg(points, { up = true, viewStart = 0, viewEnd = null } = {
 }
 
 const SESSION_BAND_COLORS = {
-  night: "rgba(88, 110, 140, 0.14)",
   pre: "rgba(196, 122, 22, 0.12)",
   regular: "rgba(15, 138, 106, 0.08)",
   post: "rgba(47, 111, 159, 0.12)",
+  night: "rgba(88, 110, 140, 0.14)",
 };
 
 const SESSION_LABELS = {
-  night: "夜盘",
   pre: "盘前",
   regular: "盘中",
   post: "盘后",
+  night: "夜盘",
 };
 
-/** Full ET cycle starting 20:00 → next 20:00 (minutes from cycle start). */
+/**
+ * Trading-day ET axis: 盘前 → 盘中 → 盘后 → 夜盘
+ * Cycle starts at 04:00 ET (minutes from that anchor).
+ */
 const SESSION_CYCLE = [
-  { id: "night", label: "夜盘", start: 0, end: 8 * 60 }, // 20:00–04:00
-  { id: "pre", label: "盘前", start: 8 * 60, end: 8 * 60 + 5 * 60 + 30 }, // 04:00–09:30
-  { id: "regular", label: "盘中", start: 8 * 60 + 5 * 60 + 30, end: 8 * 60 + 12 * 60 }, // 09:30–16:00
-  { id: "post", label: "盘后", start: 8 * 60 + 12 * 60, end: 24 * 60 }, // 16:00–20:00
+  { id: "pre", label: "盘前", start: 0, end: 5 * 60 + 30 }, // 04:00–09:30
+  { id: "regular", label: "盘中", start: 5 * 60 + 30, end: 12 * 60 }, // 09:30–16:00
+  { id: "post", label: "盘后", start: 12 * 60, end: 16 * 60 }, // 16:00–20:00
+  { id: "night", label: "夜盘", start: 16 * 60, end: 24 * 60 }, // 20:00–04:00
 ];
 const SESSION_CYCLE_MINS = 24 * 60;
+const SESSION_LABEL_ORDER = ["盘前", "盘中", "盘后", "夜盘"];
 
 function sessionIdFromTs(ts) {
   if (!ts) return "regular";
@@ -488,16 +492,16 @@ function sessionIdFromTs(ts) {
     const hour = Number(parts.find((p) => p.type === "hour")?.value || 0);
     const minute = Number(parts.find((p) => p.type === "minute")?.value || 0);
     const mins = hour * 60 + minute;
-    if (mins >= 20 * 60 || mins < 4 * 60) return "night";
-    if (mins < 9 * 60 + 30) return "pre";
-    if (mins < 16 * 60) return "regular";
-    return "post";
+    if (mins >= 4 * 60 && mins < 9 * 60 + 30) return "pre";
+    if (mins >= 9 * 60 + 30 && mins < 16 * 60) return "regular";
+    if (mins >= 16 * 60 && mins < 20 * 60) return "post";
+    return "night"; // 20:00–04:00
   } catch {
     return "regular";
   }
 }
 
-/** Minutes into the 20:00→20:00 ET session cycle. */
+/** Minutes into the 04:00→04:00 ET trading cycle (盘前…夜盘). */
 function etCycleMins(ts) {
   try {
     const parts = new Intl.DateTimeFormat("en-US", {
@@ -509,16 +513,16 @@ function etCycleMins(ts) {
     const hour = Number(parts.find((p) => p.type === "hour")?.value || 0);
     const minute = Number(parts.find((p) => p.type === "minute")?.value || 0);
     const mins = hour * 60 + minute;
-    return mins >= 20 * 60 ? mins - 20 * 60 : mins + 4 * 60;
+    // 04:00–23:59 → offset from 04:00; 00:00–03:59 → night tail after 20:00
+    return mins >= 4 * 60 ? mins - 4 * 60 : mins + 20 * 60;
   } catch {
-    return 12 * 60;
+    return 8 * 60;
   }
 }
 
 function ensurePointSessions(points) {
   return (points || []).map((p) => {
     if (!p) return p;
-    if (p.session) return p;
     return { ...p, session: sessionIdFromTs(p.t) };
   });
 }
@@ -548,7 +552,7 @@ function buildSessionSegmentsFromPoints(points) {
 
 /**
  * Composite 分时 on a fixed ET time axis:
- * always paint 夜盘 / 盘前 / 盘中 / 盘后 bands (even when a band has no ticks).
+ * always paint 盘前 / 盘中 / 盘后 / 夜盘 (left → right), even if a band is empty.
  */
 function renderSessionIntradaySvg(
   points,
@@ -567,13 +571,17 @@ function renderSessionIntradaySvg(
   const padBottom = 16;
   const plotW = width - padX * 2;
   const plotH = height - padTop - padBottom;
-  void sessions; // time-axis bands are authoritative; ignore index ranges
+  void sessions; // time-axis bands are authoritative
   const raw = ensurePointSessions(
     (points || []).filter((p) => p && Number.isFinite(Number(p.v ?? p.c)))
   );
   const end = viewEnd == null ? raw.length : Math.min(raw.length, viewEnd);
   const start = clamp(viewStart, 0, Math.max(0, end));
-  let view = raw.slice(start, end);
+  // Sort by trading-cycle position so 盘前…夜盘 never draws backwards.
+  const view = raw
+    .slice(start, end)
+    .map((p) => ({ ...p, _cm: p.t != null ? etCycleMins(p.t) : 0 }))
+    .sort((a, b) => a._cm - b._cm || Number(a.t) - Number(b.t));
   if (view.length < 2) {
     return `<svg viewBox="0 0 ${width} ${height}" role="img" aria-label="暂无走势"><text x="16" y="90" fill="${themeMutedFill()}" font-size="13">暂无分时数据</text></svg>`;
   }
@@ -582,22 +590,6 @@ function renderSessionIntradaySvg(
     previousClose != null && Number.isFinite(Number(previousClose))
       ? Number(previousClose)
       : null;
-  // Anchor missing leading 夜盘 with prior close / first print so the
-  // left band is not empty whitespace while 盘前 later starts.
-  const first = view[0];
-  const firstCycle = first?.t != null ? etCycleMins(first.t) : 0;
-  if (firstCycle > 30) {
-    const anchorV = prev != null ? prev : Number(first.v ?? first.c);
-    view = [
-      {
-        t: Number(first.t) - firstCycle * 60,
-        v: anchorV,
-        session: "night",
-        _pad: true,
-      },
-      ...view,
-    ];
-  }
 
   const vals = view.map((p) => Number(p.v ?? p.c));
   let min = Math.min(...vals);
@@ -611,10 +603,7 @@ function renderSessionIntradaySvg(
   const xOfCycle = (cycleMins) =>
     padX + (clamp(cycleMins, 0, SESSION_CYCLE_MINS) / SESSION_CYCLE_MINS) * plotW;
 
-  const coords = view.map((p) => {
-    const cm = p.t != null ? etCycleMins(p.t) : 12 * 60;
-    return [xOfCycle(cm), yOf(Number(p.v ?? p.c))];
-  });
+  const coords = view.map((p) => [xOfCycle(p._cm), yOf(Number(p.v ?? p.c))]);
 
   const bands = SESSION_CYCLE.map((s) => {
     const x0 = xOfCycle(s.start);
@@ -654,12 +643,52 @@ function renderSessionIntradaySvg(
         )}" stroke="rgba(148,163,184,0.55)" stroke-width="1" stroke-dasharray="4 3"></line>`
       : "";
 
-  const line = coords
-    .map(([x, y], i) => `${i === 0 ? "M" : "L"}${x.toFixed(2)},${y.toFixed(2)}`)
+  // Break the path on large time gaps so empty bands don't get a cliff line.
+  let line = "";
+  let areaRuns = [];
+  let run = [];
+  const flushRun = () => {
+    if (run.length < 2) {
+      run = [];
+      return;
+    }
+    const d = run
+      .map(([x, y], i) => `${i === 0 ? "M" : "L"}${x.toFixed(2)},${y.toFixed(2)}`)
+      .join(" ");
+    line += (line ? " " : "") + d;
+    areaRuns.push(run);
+    run = [];
+  };
+  for (let i = 0; i < view.length; i += 1) {
+    const pt = coords[i];
+    if (!run.length) {
+      run.push(pt);
+      continue;
+    }
+    const prevCm = view[i - 1]._cm;
+    const gap = view[i]._cm - prevCm;
+    // >45 min hole → new stroke (e.g. sparse 夜盘); avoid vertical cliffs
+    if (gap > 45) flushRun();
+    run.push(pt);
+  }
+  flushRun();
+  if (!line) {
+    line = coords
+      .map(([x, y], i) => `${i === 0 ? "M" : "L"}${x.toFixed(2)},${y.toFixed(2)}`)
+      .join(" ");
+    areaRuns = [coords];
+  }
+
+  const area = areaRuns
+    .map((r) => {
+      const d = r
+        .map(([x, y], i) => `${i === 0 ? "M" : "L"}${x.toFixed(2)},${y.toFixed(2)}`)
+        .join(" ");
+      return `${d} L${r[r.length - 1][0].toFixed(2)},${(padTop + plotH).toFixed(
+        2
+      )} L${r[0][0].toFixed(2)},${(padTop + plotH).toFixed(2)} Z`;
+    })
     .join(" ");
-  const area = `${line} L${coords[coords.length - 1][0].toFixed(2)},${(
-    padTop + plotH
-  ).toFixed(2)} L${coords[0][0].toFixed(2)},${(padTop + plotH).toFixed(2)} Z`;
   const stroke = up ? TAPE_UP : TAPE_DOWN;
   const fill = up ? TAPE_UP_SOFT : TAPE_DOWN_SOFT;
 
@@ -673,7 +702,7 @@ function renderSessionIntradaySvg(
   }).join("");
 
   return `
-    <svg class="session-intraday-svg" viewBox="0 0 ${width} ${height}" preserveAspectRatio="none" role="img" aria-label="夜盘盘前盘中盘后一体分时">
+    <svg class="session-intraday-svg" viewBox="0 0 ${width} ${height}" preserveAspectRatio="none" role="img" aria-label="盘前盘中盘后夜盘一体分时">
       ${bands}
       ${dividers}
       ${prevLine}
@@ -1451,7 +1480,7 @@ function renderPortfolioChart() {
   const stats = seriesStats(viewPoints.length ? viewPoints : points, kind);
   const maNote = MA_CHART_TFS.has(tf) ? " · 含均线" : "";
   const sessionNote =
-    tf === "intraday" ? " · 夜盘·盘前·盘中·盘后一体分时" : "";
+    tf === "intraday" ? " · 盘前·盘中·盘后·夜盘一体分时" : "";
 
   els.portfolioChart.classList.remove("is-empty");
   els.portfolioChart.classList.toggle("is-preview", Boolean(preview));
@@ -4627,7 +4656,7 @@ function resolveSectorChartSeries(pick, preferredTf) {
           ...(preferred || {}),
           chart: "line",
           points: preferred?.points || points,
-          session_labels: ["夜盘", "盘前", "盘中", "盘后"],
+          session_labels: SESSION_LABEL_ORDER,
           previous_close:
             preferred?.previous_close ?? pick?.previous_close ?? null,
         },
@@ -4734,7 +4763,7 @@ function renderSectorPickChart() {
     : "";
   const maNote = MA_CHART_TFS.has(tf) ? " · 含均线" : "";
   const sessionNote =
-    tf === "intraday" ? " · 夜盘·盘前·盘中·盘后一体分时" : "";
+    tf === "intraday" ? " · 盘前·盘中·盘后·夜盘一体分时" : "";
   els.sectorPickChart.innerHTML = `
     <div class="chart-head">
       <h3>${escapeHtml(pick.name || pick.label || "")} · ${escapeHtml(
