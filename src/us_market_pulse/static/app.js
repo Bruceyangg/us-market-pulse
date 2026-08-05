@@ -473,7 +473,8 @@ const SESSION_LABELS = {
 
 /**
  * Trading-day ET axis: 盘前 → 盘中 → 盘后 → 夜盘
- * Cycle starts at 04:00 ET (minutes from that anchor).
+ * Cycle starts at 04:00 ET. Bands are equal-width on the desk so 夜盘
+ * never collapses into a sliver / looks blank after 20:00.
  */
 const SESSION_CYCLE = [
   { id: "pre", label: "盘前", start: 0, end: 5 * 60 + 30 }, // 04:00–09:30
@@ -483,6 +484,24 @@ const SESSION_CYCLE = [
 ];
 const SESSION_CYCLE_MINS = 24 * 60;
 const SESSION_LABEL_ORDER = ["盘前", "盘中", "盘后", "夜盘"];
+
+function sessionBandIndex(cycleMins) {
+  const cm = clamp(cycleMins, 0, SESSION_CYCLE_MINS);
+  for (let i = 0; i < SESSION_CYCLE.length; i += 1) {
+    if (cm <= SESSION_CYCLE[i].end || i === SESSION_CYCLE.length - 1) return i;
+  }
+  return SESSION_CYCLE.length - 1;
+}
+
+/** Equal-width session bands: map cycle minutes → x inside 盘前/盘中/盘后/夜盘. */
+function xOfSessionCycle(cycleMins, padX, plotW) {
+  const bandW = plotW / SESSION_CYCLE.length;
+  const idx = sessionBandIndex(cycleMins);
+  const s = SESSION_CYCLE[idx];
+  const span = Math.max(1, s.end - s.start);
+  const t = clamp((cycleMins - s.start) / span, 0, 1);
+  return padX + idx * bandW + t * bandW;
+}
 
 function etParts(ts) {
   const parts = new Intl.DateTimeFormat("en-US", {
@@ -645,19 +664,17 @@ function renderSessionIntradaySvg(
   }
   const span = max - min || 1;
   const yOf = (v) => padTop + (1 - (v - min) / span) * plotH;
-  const xOfCycle = (cycleMins) =>
-    padX + (clamp(cycleMins, 0, SESSION_CYCLE_MINS) / SESSION_CYCLE_MINS) * plotW;
+  const xOfCycle = (cycleMins) => xOfSessionCycle(cycleMins, padX, plotW);
 
   const coords = view.map((p) => [xOfCycle(p._cm), yOf(Number(p.v ?? p.c))]);
+  const bandW = plotW / SESSION_CYCLE.length;
 
-  const bands = SESSION_CYCLE.map((s) => {
-    const x0 = xOfCycle(s.start);
-    const x1 = xOfCycle(s.end);
-    const w = Math.max(2, x1 - x0);
+  const bands = SESSION_CYCLE.map((s, i) => {
+    const x0 = padX + i * bandW;
     const fill = SESSION_BAND_COLORS[s.id] || "rgba(128,128,128,0.08)";
-    const midX = x0 + w / 2;
+    const midX = x0 + bandW / 2;
     return `
-      <rect x="${x0.toFixed(2)}" y="${padTop}" width="${w.toFixed(
+      <rect x="${x0.toFixed(2)}" y="${padTop}" width="${bandW.toFixed(
         2
       )}" height="${plotH}" fill="${fill}"></rect>
       <text x="${midX.toFixed(2)}" y="${(padTop - 5).toFixed(
@@ -669,8 +686,8 @@ function renderSessionIntradaySvg(
   }).join("");
 
   const dividers = SESSION_CYCLE.slice(1)
-    .map((s) => {
-      const x = xOfCycle(s.start);
+    .map((_, i) => {
+      const x = padX + (i + 1) * bandW;
       return `<line x1="${x.toFixed(2)}" y1="${padTop}" x2="${x.toFixed(
         2
       )}" y2="${(padTop + plotH).toFixed(
@@ -688,7 +705,7 @@ function renderSessionIntradaySvg(
         )}" stroke="rgba(148,163,184,0.55)" stroke-width="1" stroke-dasharray="4 3"></line>`
       : "";
 
-  // Single continuous path — do not gap-break into 夜盘 (that left the band empty).
+  // Single continuous path through 盘前…夜盘.
   const line = coords
     .map(([x, y], i) => `${i === 0 ? "M" : "L"}${x.toFixed(2)},${y.toFixed(2)}`)
     .join(" ");
@@ -698,36 +715,42 @@ function renderSessionIntradaySvg(
   const stroke = up ? TAPE_UP : TAPE_DOWN;
   const fill = up ? TAPE_UP_SOFT : TAPE_DOWN_SOFT;
 
-  // Explicit 夜盘 ray so a flat hold can never be dropped by path/zoom quirks.
+  // 夜盘: always paint a full-band hold from 20:00 → now (and light dash to 04:00).
   const nowCm = etCycleMins(Date.now() / 1000);
   const nightStartCm = 16 * 60;
+  const nightEndCm = SESSION_CYCLE_MINS;
   let nightRay = "";
   if (sessionIdFromTs(Date.now() / 1000) === "night") {
     const holdV = Number(view[view.length - 1].v ?? view[view.length - 1].c);
     const y = yOf(holdV);
-    let anchorCm = nightStartCm;
-    for (let i = view.length - 1; i >= 0; i -= 1) {
-      if (!view[i]._pad) {
-        anchorCm = Math.max(nightStartCm, view[i]._cm);
-        break;
-      }
+    const xNight0 = padX + 3 * bandW; // left edge of equal-width 夜盘
+    const xNow = xOfCycle(Math.max(nightStartCm, nowCm));
+    const xNight1 = padX + 4 * bandW;
+    if (Number.isFinite(y)) {
+      nightRay = `
+        <line x1="${xNight0.toFixed(2)}" y1="${y.toFixed(2)}" x2="${xNow.toFixed(
+          2
+        )}" y2="${y.toFixed(
+          2
+        )}" stroke="${stroke}" stroke-width="2.4" stroke-linecap="round"></line>
+        <line x1="${xNow.toFixed(2)}" y1="${y.toFixed(2)}" x2="${xNight1.toFixed(
+          2
+        )}" y2="${y.toFixed(
+          2
+        )}" stroke="${stroke}" stroke-width="1.6" stroke-dasharray="4 3" stroke-opacity="0.55"></line>
+        <circle cx="${xNow.toFixed(2)}" cy="${y.toFixed(
+          2
+        )}" r="2.8" fill="${stroke}"></circle>
+        <text x="${((xNight0 + xNow) / 2).toFixed(2)}" y="${(y - 6).toFixed(
+          1
+        )}" text-anchor="middle" fill="${themeMutedFill()}" font-size="7.5">夜盘持平</text>
+      `;
     }
-    const x0 = xOfCycle(anchorCm);
-    const x1 = xOfCycle(nowCm);
-    if (x1 > x0 + 0.5 && Number.isFinite(y)) {
-      nightRay = `<line x1="${x0.toFixed(2)}" y1="${y.toFixed(2)}" x2="${x1.toFixed(
-        2
-      )}" y2="${y.toFixed(
-        2
-      )}" stroke="${stroke}" stroke-width="2.1" stroke-linecap="round"></line>
-      <circle cx="${x1.toFixed(2)}" cy="${y.toFixed(
-        2
-      )}" r="2.4" fill="${stroke}"></circle>`;
-    }
+    void nightEndCm;
   }
 
-  const footLabels = SESSION_CYCLE.map((s) => {
-    const midX = (xOfCycle(s.start) + xOfCycle(s.end)) / 2;
+  const footLabels = SESSION_CYCLE.map((s, i) => {
+    const midX = padX + i * bandW + bandW / 2;
     return `<text x="${midX.toFixed(2)}" y="${(height - 4).toFixed(
       1
     )}" text-anchor="middle" fill="${themeMutedFill()}" font-size="7.5">${escapeHtml(
