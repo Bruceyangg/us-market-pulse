@@ -274,10 +274,10 @@ async def fetch_nasdaq_intraday(
         raw = data.get("chart") or []
         if not isinstance(raw, list) or len(raw) < 2:
             return None
-        # Stamp onto the active trading day (04:00 ET cycle), NOT calendar
-        # "today". After midnight ET the Nasdaq tape is still yesterday's
-        # 盘前…盘后; using date.today() pushes every point into tomorrow and
-        # the desk session filter then drops the entire series.
+        # Stamp onto the active trading day (盘前 open of the 20:00 cycle),
+        # NOT calendar "today". After midnight ET the Nasdaq tape is still
+        # the prior session day's 盘前…盘后; using date.today() pushes every
+        # point into tomorrow and the desk session filter drops the series.
         try:
             from us_market_pulse.markets import trading_day_et
 
