@@ -1619,7 +1619,13 @@ function applyPortfolioSelectionLocal(symbol) {
 }
 
 function mergePortfolioSelectResponse(symbol, res) {
-  const board = res?.selected_board || res?.board || res?.portfolio?.selected_board;
+  const rawBoard = res?.selected_board || res?.board || res?.portfolio?.selected_board;
+  const prevBoard =
+    state.portfolio?.selected_board?.symbol === symbol
+      ? state.portfolio.selected_board
+      : state.portfolioBoardCache?.[symbol] ||
+        (state.portfolio?.holdings || []).find((h) => h.symbol === symbol);
+  const board = mergePickPreserveIntraday(rawBoard, prevBoard);
   if (board) cachePortfolioBoard(board);
   if (res?.portfolio?.holdings) {
     for (const h of res.portfolio.holdings) cachePortfolioBoard(h);
@@ -1627,7 +1633,9 @@ function mergePortfolioSelectResponse(symbol, res) {
   if (state.portfolio?.selected !== symbol) return;
   if (board) {
     const holdings = (state.portfolio.holdings || []).map((h) =>
-      h.symbol === symbol ? { ...h, ...board, symbol } : h
+      h.symbol === symbol
+        ? mergePickPreserveIntraday({ ...h, ...board, symbol }, h)
+        : h
     );
     state.portfolio = {
       ...state.portfolio,
@@ -1746,6 +1754,24 @@ async function loadPortfolio({ refresh = false } = {}) {
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     let data = await res.json();
     data = await ensurePortfolioSelection(data);
+    // Preserve 分时 across quiet refreshes that return day/month without intraday.
+    if (state.portfolio?.holdings?.length && data?.holdings?.length) {
+      const prevBySym = Object.fromEntries(
+        state.portfolio.holdings.map((h) => [h.symbol, h])
+      );
+      data.holdings = data.holdings.map((h) =>
+        mergePickPreserveIntraday(h, prevBySym[h.symbol])
+      );
+      if (data.selected_board) {
+        data.selected_board = mergePickPreserveIntraday(
+          data.selected_board,
+          state.portfolio.selected_board?.symbol === data.selected
+            ? state.portfolio.selected_board
+            : prevBySym[data.selected]
+        );
+        data.board = data.selected_board;
+      }
+    }
     syncHoldingSymbolsFromPortfolio(data);
     for (const h of data.holdings || []) cachePortfolioBoard(h);
     if (data.selected_board) cachePortfolioBoard(data.selected_board);
@@ -4086,6 +4112,33 @@ function pickHasChart(pick) {
   return day.length >= 2 || month.length >= 2;
 }
 
+function pickHasIntraday(pick) {
+  return (pick?.series?.intraday?.points || []).length >= 2;
+}
+
+/** Keep a prior 分时 series when a refresh brings day/month but empty intraday. */
+function mergePickPreserveIntraday(next, prev) {
+  if (!next) return prev || next;
+  if (!prev || !pickHasIntraday(prev)) return next;
+  if (pickHasIntraday(next)) {
+    // Prefer the denser tape when both exist
+    const nLen = next.series.intraday.points.length;
+    const pLen = prev.series.intraday.points.length;
+    if (nLen >= pLen) return next;
+  }
+  return {
+    ...next,
+    series: {
+      ...(next.series || {}),
+      intraday: prev.series.intraday,
+    },
+    points:
+      (prev.series.intraday.points || []).length >= 2
+        ? prev.series.intraday.points.slice(-64)
+        : next.points,
+  };
+}
+
 function openSectorDesk(id, { scroll = true } = {}) {
   const sectorId = (id || "").trim().toLowerCase();
   if (!sectorId) return;
@@ -4959,29 +5012,40 @@ async function loadSectorDesk({ force = false } = {}) {
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     const data = await res.json();
     if (data?.active_sector_id) sectorCachePut(data.active_sector_id, data);
-    // Keep previously upgraded picks when the new payload is still lite.
+    // Keep previously upgraded picks / 分时 when the new payload is still lite
+    // or arrives with day/month candles but an empty intraday series.
     if (state.sectors?.picks?.length && data?.picks?.length) {
       const prevBySym = Object.fromEntries(
-        state.sectors.picks
-          .filter((p) => pickHasChart(p))
-          .map((p) => [p.symbol, p])
+        state.sectors.picks.map((p) => [p.symbol, p])
       );
+      const prevSelected = state.sectors.selected_pick;
       data.picks = data.picks.map((p) => {
         const prev = prevBySym[p.symbol];
-        if (prev && !pickHasChart(p)) {
-          return {
-            ...p,
-            series: { ...(p.series || {}), ...prev.series },
-            points: prev.points?.length ? prev.points : p.points,
-            lite: false,
-          };
+        if (!prev) return p;
+        if (!pickHasChart(p) && pickHasChart(prev)) {
+          return mergePickPreserveIntraday(
+            {
+              ...p,
+              series: { ...(p.series || {}), ...prev.series },
+              points: prev.points?.length ? prev.points : p.points,
+              lite: false,
+            },
+            prev
+          );
         }
-        return p;
+        return mergePickPreserveIntraday(p, prev);
       });
-      if (data.selected_symbol && prevBySym[data.selected_symbol] && !pickHasChart(data.selected_pick)) {
-        data.selected_pick =
-          data.picks.find((p) => p.symbol === data.selected_symbol) ||
-          data.selected_pick;
+      if (data.selected_symbol) {
+        const fromList = data.picks.find(
+          (p) => p.symbol === data.selected_symbol
+        );
+        const merged = mergePickPreserveIntraday(
+          fromList || data.selected_pick,
+          prevSelected?.symbol === data.selected_symbol
+            ? prevSelected
+            : prevBySym[data.selected_symbol]
+        );
+        if (merged) data.selected_pick = merged;
       }
     }
     renderSectorDesk(data);
