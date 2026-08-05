@@ -1,15 +1,8 @@
-/* Pulse Desk lightweight shell cache — keep API traffic network-first. */
-const CACHE = "pulse-desk-shell-v18";
+/* Pulse Desk lightweight shell cache — HTML/auth pages always network-first. */
+const CACHE = "pulse-desk-shell-v19";
 const SHELL = [
-  "/",
-  "/markets",
-  "/sectors",
-  "/earnings",
-  "/intel",
-  "/settings",
-  "/install",
-  "/static/styles.css?v=20260805ae",
-  "/static/app.js?v=20260805ae",
+  "/static/styles.css?v=20260805af",
+  "/static/app.js?v=20260805af",
   "/static/manifest.webmanifest",
   "/static/icons/apple-touch-icon.png",
   "/static/icons/icon-192.png",
@@ -31,6 +24,17 @@ self.addEventListener("activate", (event) => {
   self.clients.claim();
 });
 
+function isHtmlRequest(req, url) {
+  if (req.mode === "navigate") return true;
+  const accept = req.headers.get("accept") || "";
+  if (accept.includes("text/html")) return true;
+  // App routes (no file extension) are auth-sensitive documents
+  if (!url.pathname.startsWith("/static/") && !url.pathname.includes(".")) {
+    return true;
+  }
+  return false;
+}
+
 self.addEventListener("fetch", (event) => {
   const req = event.request;
   if (req.method !== "GET") return;
@@ -38,6 +42,20 @@ self.addEventListener("fetch", (event) => {
   if (url.origin !== self.location.origin) return;
   if (url.pathname.startsWith("/api/")) return;
 
+  // Never serve cached HTML for / /login /settings etc. — session state changes
+  if (isHtmlRequest(req, url)) {
+    event.respondWith(
+      fetch(req)
+        .then((res) => res)
+        .catch(async () => {
+          const cached = await caches.match(req);
+          return cached || Response.error();
+        }),
+    );
+    return;
+  }
+
+  // Static assets: prefer cache, refresh in background
   event.respondWith(
     caches.match(req).then((cached) => {
       const network = fetch(req)

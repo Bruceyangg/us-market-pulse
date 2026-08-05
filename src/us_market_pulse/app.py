@@ -117,13 +117,20 @@ app = FastAPI(
     version="0.4.0",
     lifespan=lifespan,
 )
+# Render/Cloudflare terminate TLS; mark cookie Secure in production so browsers
+# keep the session after login/register redirects.
+_https_only = (
+    __import__("os").getenv("RENDER", "").lower() in {"true", "1", "yes"}
+    or __import__("os").getenv("PULSE_HTTPS_ONLY", "").lower()
+    in {"true", "1", "yes"}
+)
 app.add_middleware(
     SessionMiddleware,
     secret_key=session_secret(),
     session_cookie="pulse_session",
     max_age=60 * 60 * 24 * 30,
     same_site="lax",
-    https_only=False,
+    https_only=_https_only,
 )
 app.mount("/static", StaticFiles(directory=BASE_DIR / "static"), name="static")
 templates = Jinja2Templates(directory=str(BASE_DIR / "templates"))
@@ -137,7 +144,11 @@ def _page(request: Request, template: str, page: str, **extra: Any) -> HTMLRespo
         "user": current_user(request),
         **extra,
     }
-    return templates.TemplateResponse(request, template, ctx)
+    response = templates.TemplateResponse(request, template, ctx)
+    # Prevent SW/browser from sticky-caching logged-out shells after login
+    response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate"
+    response.headers["Pragma"] = "no-cache"
+    return response
 
 
 @app.get("/", response_class=HTMLResponse)
