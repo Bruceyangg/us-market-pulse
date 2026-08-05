@@ -22,6 +22,7 @@ from us_market_pulse.markets import (
     _SESSION_META,
     _filter_session_window,
     _session_cycle_bounds,
+    _session_cycle_meta,
     _session_id_for_ts,
     _session_segments,
     fetch_symbol_bundle,
@@ -44,7 +45,7 @@ _INTRADAY_TF = next(
     {
         "id": "intraday",
         "label": "分时",
-        "blurb": "盘前·盘中·盘后·夜盘一体分时",
+        "blurb": "夜盘·盘前·盘中·盘后一体分时",
         "range": "5d",
         "interval": "5m",
         "max_points": 360,
@@ -587,10 +588,11 @@ def _series_intraday_ok(row: dict[str, Any] | None) -> bool:
 
 
 def _annotate_intraday_sessions(series_row: dict[str, Any] | None) -> dict[str, Any] | None:
-    """Tag points + attach 盘前/盘中/盘后/夜盘 metadata for the desk chart."""
+    """Tag points + attach 夜盘/盘前/盘中/盘后 metadata for the desk chart."""
     if not isinstance(series_row, dict):
         return series_row
     pts = finalize_desk_intraday_points(list(series_row.get("points") or []))
+    series_row.update(_session_cycle_meta())
     if len(pts) < 2:
         series_row["points"] = pts
         series_row["session_labels"] = [s["label"] for s in _SESSION_META]
@@ -1149,7 +1151,7 @@ async def _fetch_quote(
             {
                 "tf": "intraday",
                 "label": "分时",
-                "blurb": "盘前·盘中·盘后·夜盘一体分时（Nasdaq）",
+                "blurb": "夜盘·盘前·盘中·盘后一体分时（Nasdaq）",
                 "range": "1d",
                 "interval": "1m",
                 "chart": "line",
