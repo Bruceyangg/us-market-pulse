@@ -20,6 +20,29 @@ _NUM_RE = re.compile(r"[^0-9+\-.]")
 # Nasdaq intraday z.dateTime like "4:00 AM ET" / "7:59 PM ET"
 _NASDAQ_TIME_RE = re.compile(r"^\s*(\d{1,2}):(\d{2})\s*(AM|PM)\s*ET\s*$", re.I)
 
+# List quote fields for 收盘 / 实时 dual row (holdings + sectors)
+LIST_QUOTE_RT_KEYS = (
+    "rt_price",
+    "rt_change",
+    "rt_change_pct",
+    "session",
+    "session_label",
+)
+
+_CNBC_SESSION_MAP = {
+    "PRE_MKT": ("pre", "盘前"),
+    "PREMARKET": ("pre", "盘前"),
+    "PRE": ("pre", "盘前"),
+    "REG_MKT": ("regular", "盘中"),
+    "REGULAR": ("regular", "盘中"),
+    "OPEN": ("regular", "盘中"),
+    "POST_MKT": ("post", "盘后"),
+    "AFTER_HOURS": ("post", "盘后"),
+    "AFTERHOURS": ("post", "盘后"),
+    "POSTMARKET": ("post", "盘后"),
+    "POST": ("post", "盘后"),
+}
+
 
 def _parse_number(value: Any) -> float | None:
     if value is None:
@@ -41,6 +64,73 @@ def _parse_number(value: Any) -> float | None:
 
 def _parse_pct(value: Any) -> float | None:
     return _parse_number(value)
+
+
+def session_from_status(status: str | None = None) -> tuple[str, str]:
+    """Map vendor market status / ET clock → (session_id, 中文标签)."""
+    key = str(status or "").upper().strip().replace(" ", "_")
+    if key in _CNBC_SESSION_MAP:
+        return _CNBC_SESSION_MAP[key]
+    now = datetime.now(tz=_ET)
+    mins = now.hour * 60 + now.minute
+    # Weekend → treat as 夜盘/休市 band for the list badge
+    if now.weekday() >= 5:
+        return "night", "夜盘"
+    if mins >= 20 * 60 or mins < 4 * 60:
+        return "night", "夜盘"
+    if mins < 9 * 60 + 30:
+        return "pre", "盘前"
+    if mins < 16 * 60:
+        return "regular", "盘中"
+    return "post", "盘后"
+
+
+def apply_list_quote_fields(
+    row: dict[str, Any], quote: dict[str, Any] | None
+) -> dict[str, Any]:
+    """Copy 收盘 + 实时 list fields from a day quote onto a pick/holding card."""
+    if not isinstance(row, dict) or not isinstance(quote, dict):
+        return row
+    for key in ("price", "change", "change_pct", "as_of"):
+        if quote.get(key) is not None:
+            row[key] = quote[key]
+    for key in LIST_QUOTE_RT_KEYS:
+        if quote.get(key) is not None:
+            row[key] = quote[key]
+    return row
+
+
+def _with_session_and_realtime(
+    base: dict[str, Any],
+    *,
+    curmktstatus: str | None = None,
+    extended: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Attach session badge + realtime (pre/post) quote onto a day-quote row."""
+    status = curmktstatus
+    if isinstance(extended, dict) and extended.get("type"):
+        status = str(extended.get("type") or status or "")
+    sid, label = session_from_status(status)
+    base["session"] = sid
+    base["session_label"] = label
+
+    rt_price = _parse_number((extended or {}).get("last")) if extended else None
+    rt_change = _parse_number((extended or {}).get("change")) if extended else None
+    rt_pct = _parse_pct((extended or {}).get("change_pct")) if extended else None
+
+    if rt_price is None and sid == "regular":
+        # 盘中：实时与收盘行一致
+        rt_price = base.get("price")
+        rt_change = base.get("change")
+        rt_pct = base.get("change_pct")
+
+    if rt_price is not None:
+        base["rt_price"] = round(float(rt_price), 2)
+    if rt_change is not None:
+        base["rt_change"] = round(float(rt_change), 4)
+    if rt_pct is not None:
+        base["rt_change_pct"] = round(float(rt_pct), 3)
+    return base
 
 
 async def fetch_cnbc_quotes(
@@ -106,15 +196,26 @@ async def fetch_cnbc_quotes(
                     change_pct = (change / prev) * 100.0
                 if price is None and change_pct is None:
                     continue
-                out[sym] = {
+                quote_row = {
                     "symbol": sym,
                     "price": round(price, 2) if price is not None else None,
                     "change": round(change, 4) if change is not None else None,
                     "change_pct": round(change_pct, 3)
                     if change_pct is not None
                     else None,
+                    "previous_close": round(float(prev), 6)
+                    if prev not in (None, 0)
+                    else None,
                     "source": "cnbc",
                 }
+                ext = row.get("ExtendedMktQuote")
+                if not isinstance(ext, dict):
+                    ext = None
+                out[sym] = _with_session_and_realtime(
+                    quote_row,
+                    curmktstatus=str(row.get("curmktstatus") or "") or None,
+                    extended=ext,
+                )
         except Exception:  # noqa: BLE001
             continue
     return out
@@ -163,15 +264,20 @@ async def fetch_yahoo_light_quotes(
                     change_pct = (change / float(prev)) * 100.0
                 if price is None and change_pct is None:
                     return
-                out[sym] = {
+                quote_row = {
                     "symbol": sym,
                     "price": round(float(price), 2) if price is not None else None,
                     "change": round(float(change), 4) if change is not None else None,
                     "change_pct": round(float(change_pct), 3)
                     if change_pct is not None
                     else None,
+                    "previous_close": round(float(prev), 6)
+                    if prev not in (None, 0)
+                    else None,
                     "source": "yahoo",
                 }
+                # Yahoo light chart has no pre/post tape — still stamp session badge.
+                out[sym] = _with_session_and_realtime(quote_row)
             except Exception:  # noqa: BLE001
                 return
 
