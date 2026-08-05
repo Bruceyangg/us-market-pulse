@@ -555,7 +555,7 @@ _SYM_CACHE: dict[str, Any] = {}
 _SYM_TTL = 180.0
 # Shared holdings/sectors 分时 poll — short TTL so Yahoo-like tape stays fresh
 _INTRADAY_SNAP_CACHE: dict[str, Any] = {}
-_INTRADAY_SNAP_TTL = 8.0
+_INTRADAY_SNAP_TTL = 1.0
 
 
 def _pick_has_chart(row: dict[str, Any] | None) -> bool:
@@ -630,7 +630,11 @@ async def fetch_intraday_snapshot(
     *,
     force: bool = False,
 ) -> dict[str, Any] | None:
-    """Yahoo-first 1D 分时 for holdings + sectors auto-refresh (shared path)."""
+    """Fast 1D 分时 snapshot for holdings + sectors auto-refresh.
+
+    Nasdaq-first (sub-second) so 1s client polls stay responsive; Yahoo is only
+    a short fallback when Nasdaq is empty.
+    """
     sym = (symbol or "").strip().upper()
     if not sym:
         return None
@@ -662,80 +666,74 @@ async def fetch_intraday_snapshot(
         headers=yahoo_headers,
         follow_redirects=True,
         trust_env=False,
-        timeout=httpx.Timeout(6.0, connect=2.0),
+        timeout=httpx.Timeout(2.2, connect=1.0),
     ) as client:
-        nd_task = asyncio.create_task(
-            fetch_nasdaq_intraday(client, sym, max_points=480)
-        )
-
-        async def _yahoo_intra() -> dict[str, Any] | None:
-            bundle, _errs = await fetch_symbol_bundle(
-                client,
-                symbol=sym,
-                label=sym,
-                short=sym,
-                timeframes=[_INTRADAY_TF],
-                include_yearly=False,
-            )
-            return bundle
-
-        bundle: dict[str, Any] | None = None
+        # Fast path: Nasdaq only (typical 200–800ms).
+        nd = None
         try:
-            bundle = await asyncio.wait_for(_yahoo_intra(), timeout=4.0)
+            nd = await asyncio.wait_for(
+                fetch_nasdaq_intraday(client, sym, max_points=480),
+                timeout=2.0,
+            )
         except Exception:  # noqa: BLE001
-            bundle = None
-
-        if bundle and _series_intraday_ok(bundle):
-            nd_task.cancel()
-            try:
-                await nd_task
-            except Exception:  # noqa: BLE001
-                pass
-            _ensure_bundle_intraday_sessions(bundle)
-            intra = (bundle.get("series") or {}).get("intraday")
-            if isinstance(intra, dict):
-                series_row = dict(intra)
-            price = bundle.get("price")
-            change = bundle.get("change")
-            change_pct = bundle.get("change_pct")
-            source = "yahoo"
-        else:
             nd = None
+
+        if nd and len(nd.get("points") or []) >= 2:
+            raw_pts = [
+                {"t": int(p["t"]), "v": float(p["v"])}
+                for p in (nd.get("points") or [])
+                if p.get("t") and p.get("v") is not None
+            ]
+            series_row = _annotate_intraday_sessions(
+                {
+                    "tf": "intraday",
+                    "label": "分时",
+                    "blurb": "Yahoo 1D 分时 · 含盘前/盘后",
+                    "range": "1d",
+                    "interval": "1m",
+                    "chart": "line",
+                    "points": raw_pts,
+                    "change": nd.get("change"),
+                    "change_pct": nd.get("change_pct"),
+                    "previous_close": nd.get("previous_close"),
+                }
+            )
+            price = nd.get("price")
+            change = nd.get("change")
+            change_pct = nd.get("change_pct")
+            source = "nasdaq"
+        else:
+            # Short Yahoo fallback only when Nasdaq fails.
             try:
-                nd = await nd_task
-            except Exception:  # noqa: BLE001
-                nd = None
-            if nd and len(nd.get("points") or []) >= 2:
-                raw_pts = [
-                    {"t": int(p["t"]), "v": float(p["v"])}
-                    for p in (nd.get("points") or [])
-                    if p.get("t") and p.get("v") is not None
-                ]
-                series_row = _annotate_intraday_sessions(
-                    {
-                        "tf": "intraday",
-                        "label": "分时",
-                        "blurb": "Yahoo 1D 分时 · 含盘前/盘后（Nasdaq 回退）",
-                        "range": "1d",
-                        "interval": "1m",
-                        "chart": "line",
-                        "points": raw_pts,
-                        "change": nd.get("change"),
-                        "change_pct": nd.get("change_pct"),
-                        "previous_close": nd.get("previous_close"),
-                    }
+                bundle, _errs = await asyncio.wait_for(
+                    fetch_symbol_bundle(
+                        client,
+                        symbol=sym,
+                        label=sym,
+                        short=sym,
+                        timeframes=[_INTRADAY_TF],
+                        include_yearly=False,
+                    ),
+                    timeout=1.8,
                 )
-                price = nd.get("price")
-                change = nd.get("change")
-                change_pct = nd.get("change_pct")
-                source = "nasdaq"
+            except Exception:  # noqa: BLE001
+                bundle = None
+            if bundle and _series_intraday_ok(bundle):
+                _ensure_bundle_intraday_sessions(bundle)
+                intra = (bundle.get("series") or {}).get("intraday")
+                if isinstance(intra, dict):
+                    series_row = dict(intra)
+                price = bundle.get("price")
+                change = bundle.get("change")
+                change_pct = bundle.get("change_pct")
+                source = "yahoo"
 
     if not series_row or len(series_row.get("points") or []) < 2:
+        # Serve last good snapshot rather than blank the chart on a blip.
+        if isinstance(cached, dict) and isinstance(cached.get("data"), dict):
+            return dict(cached["data"])
         return None
 
-    if series_row.get("previous_close") is None and price is not None:
-        # keep prior close from series when available
-        pass
     # Prefer last tape point's session; fall back to ET clock.
     sid = "regular"
     last_pts = list(series_row.get("points") or [])
