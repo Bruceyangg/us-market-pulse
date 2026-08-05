@@ -209,6 +209,12 @@ def _session_cycle_bounds(
     return start, now_et
 
 
+def trading_day_et(now: datetime | None = None) -> datetime:
+    """Calendar date of the open 盘前 (04:00 ET anchor) for the active cycle."""
+    start, _ = _session_cycle_bounds(now)
+    return start
+
+
 def _filter_session_window(
     points: list[dict[str, Any]],
     *,
@@ -227,6 +233,64 @@ def _filter_session_window(
         row["session"] = _session_id_for_ts(t)
         out.append(row)
     return out
+
+
+def finalize_desk_intraday_points(
+    points: list[dict[str, Any]] | None,
+    *,
+    now: datetime | None = None,
+) -> list[dict[str, Any]]:
+    """
+    Clip to the active 盘前→…→夜盘 cycle and hold the last print into 夜盘.
+
+    After 20:00 ET (and especially after midnight) vendors often stop updating;
+    without a flat hold the 夜盘 band looks empty even though we are in it.
+    """
+    raw = [dict(p) for p in (points or []) if isinstance(p, dict) and p.get("t")]
+    if not raw:
+        return []
+    start_et, end_et = _session_cycle_bounds(now)
+    start_ts = int(start_et.timestamp())
+    end_ts = int(end_et.timestamp()) + 120
+    pts = _filter_session_window(raw, start_ts=start_ts, end_ts=end_ts)
+    if len(pts) < 2:
+        # Retag only — caller may have used the wrong calendar day on stamps.
+        tagged = []
+        for p in raw:
+            try:
+                t = int(p["t"])
+            except (TypeError, ValueError):
+                continue
+            if start_ts <= t <= end_ts:
+                row = dict(p)
+                row["session"] = _session_id_for_ts(t)
+                tagged.append(row)
+        pts = tagged
+    if not pts:
+        return []
+
+    pts.sort(key=lambda p: int(p["t"]))
+    now_ts = int(end_et.timestamp())
+    sid_now = _session_id_for_ts(now_ts)
+    last = pts[-1]
+    last_v = last.get("v")
+    if last_v is None:
+        last_v = last.get("c")
+    try:
+        last_v = float(last_v)
+    except (TypeError, ValueError):
+        return pts
+
+    # 夜盘 starts 16h after the 04:00 cycle anchor.
+    night_start = start_et + timedelta(hours=16)
+    night_ts = int(night_start.timestamp())
+    if sid_now == "night" and now_ts >= night_ts:
+        if int(last["t"]) < night_ts:
+            pts.append({"t": night_ts, "v": last_v, "session": "night"})
+            last = pts[-1]
+        if now_ts - int(last["t"]) >= 60:
+            pts.append({"t": now_ts, "v": float(last.get("v", last_v)), "session": "night"})
+    return pts
 
 
 def _session_segments(points: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -408,22 +472,20 @@ async def _fetch_yahoo_series(
         )
         sessions: list[dict[str, Any]] = []
         if use_session and points:
-            start_et, end_et = _session_cycle_bounds()
-            points = _filter_session_window(
-                points,
-                start_ts=int(start_et.timestamp()),
-                end_ts=int(end_et.timestamp()) + 300,
-            )
-            # Final density cap after window filter
+            points = finalize_desk_intraday_points(points)
+            # Final density cap after window filter (keep night anchors)
             max_pts = int(tf.get("max_points") or 360)
             if len(points) > max_pts:
-                step = max(1, len(points) // max_pts)
-                trimmed = points[::step]
-                if trimmed[-1] is not points[-1]:
-                    trimmed.append(points[-1])
+                head = points[:-2] if len(points) > 4 else points
+                step = max(1, len(head) // max(1, max_pts - 2))
+                trimmed = head[::step]
+                for tail in points[-2:]:
+                    if not trimmed or trimmed[-1] is not tail:
+                        trimmed.append(tail)
                 points = trimmed[:max_pts]
                 for p in points:
-                    p["session"] = _session_id_for_ts(int(p["t"]))
+                    if p.get("t"):
+                        p["session"] = _session_id_for_ts(int(p["t"]))
             sessions = _session_segments(points)
 
         if not points:

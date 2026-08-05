@@ -25,6 +25,7 @@ from us_market_pulse.markets import (
     _session_id_for_ts,
     _session_segments,
     fetch_symbol_bundle,
+    finalize_desk_intraday_points,
 )
 from us_market_pulse.portfolio_intel import match_portfolio_intel
 from us_market_pulse.quotes import (
@@ -586,21 +587,14 @@ def _series_intraday_ok(row: dict[str, Any] | None) -> bool:
 
 
 def _annotate_intraday_sessions(series_row: dict[str, Any] | None) -> dict[str, Any] | None:
-    """Tag points + attach 夜盘/盘前/盘中/盘后 metadata for the desk chart."""
+    """Tag points + attach 盘前/盘中/盘后/夜盘 metadata for the desk chart."""
     if not isinstance(series_row, dict):
         return series_row
-    pts = list(series_row.get("points") or [])
+    pts = finalize_desk_intraday_points(list(series_row.get("points") or []))
     if len(pts) < 2:
+        series_row["points"] = pts
         series_row["session_labels"] = [s["label"] for s in _SESSION_META]
         return series_row
-    for p in pts:
-        if not isinstance(p, dict):
-            continue
-        if p.get("t") and not p.get("session"):
-            try:
-                p["session"] = _session_id_for_ts(int(p["t"]))
-            except (TypeError, ValueError):
-                p["session"] = "regular"
     series_row["points"] = pts
     series_row["chart"] = "line"
     series_row["sessions"] = _session_segments(pts)
@@ -1150,35 +1144,7 @@ async def _fetch_quote(
             for p in (nd.get("points") or [])
             if p.get("t") and p.get("v") is not None
         ]
-        start_et, end_et = _session_cycle_bounds()
-        pts = _filter_session_window(
-            raw_pts,
-            start_ts=int(start_et.timestamp()),
-            end_ts=int(end_et.timestamp()) + 120,
-        )
-        # Session filter can wipe weekend/holiday tapes — keep raw tagged tape.
-        if len(pts) < 2 and len(raw_pts) >= 2:
-            pts = [
-                {**p, "session": _session_id_for_ts(int(p["t"]))}
-                for p in raw_pts
-            ]
-        # After 20:00 ET, Nasdaq often stops — hold last print into 夜盘.
-        if pts:
-            now_ts = int(end_et.timestamp())
-            last = pts[-1]
-            sid_now = _session_id_for_ts(now_ts)
-            if (
-                sid_now == "night"
-                and now_ts - int(last["t"]) >= 180
-                and last.get("session") != "night"
-            ):
-                pts.append(
-                    {
-                        "t": now_ts,
-                        "v": float(last["v"]),
-                        "session": "night",
-                    }
-                )
+        pts = finalize_desk_intraday_points(raw_pts)
         series["intraday"] = _annotate_intraday_sessions(
             {
                 "tf": "intraday",
