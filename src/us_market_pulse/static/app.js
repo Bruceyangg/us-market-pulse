@@ -358,10 +358,14 @@ function normalizeChartZoom(z, len) {
 }
 
 function ensureChartZoom(key, scope, len, tf = "day", kind = "candle") {
-  if (state.chartZoomScope[key] !== scope) {
+  const prevLen = state.chartZoomLen?.[key];
+  if (!state.chartZoomLen) state.chartZoomLen = {};
+  // Reset window when the series grows (e.g. 夜盘 tip appended) or scope changes.
+  if (state.chartZoomScope[key] !== scope || (prevLen != null && len > prevLen)) {
     state.chartZoomScope[key] = scope;
     state.chartZoom[key] = defaultChartZoom(len, tf, kind);
   }
+  state.chartZoomLen[key] = len;
   state.chartZoom[key] = normalizeChartZoom(state.chartZoom[key], len);
   return state.chartZoom[key];
 }
@@ -480,18 +484,23 @@ const SESSION_CYCLE = [
 const SESSION_CYCLE_MINS = 24 * 60;
 const SESSION_LABEL_ORDER = ["盘前", "盘中", "盘后", "夜盘"];
 
+function etParts(ts) {
+  const parts = new Intl.DateTimeFormat("en-US", {
+    timeZone: "America/New_York",
+    hour: "2-digit",
+    minute: "2-digit",
+    hourCycle: "h23",
+  }).formatToParts(new Date(Number(ts) * 1000));
+  let hour = Number(parts.find((p) => p.type === "hour")?.value || 0);
+  const minute = Number(parts.find((p) => p.type === "minute")?.value || 0);
+  if (hour === 24) hour = 0; // some engines emit 24:xx at midnight
+  return { hour, minute, mins: hour * 60 + minute };
+}
+
 function sessionIdFromTs(ts) {
   if (!ts) return "regular";
   try {
-    const parts = new Intl.DateTimeFormat("en-US", {
-      timeZone: "America/New_York",
-      hour: "numeric",
-      minute: "numeric",
-      hour12: false,
-    }).formatToParts(new Date(Number(ts) * 1000));
-    const hour = Number(parts.find((p) => p.type === "hour")?.value || 0);
-    const minute = Number(parts.find((p) => p.type === "minute")?.value || 0);
-    const mins = hour * 60 + minute;
+    const { mins } = etParts(ts);
     if (mins >= 4 * 60 && mins < 9 * 60 + 30) return "pre";
     if (mins >= 9 * 60 + 30 && mins < 16 * 60) return "regular";
     if (mins >= 16 * 60 && mins < 20 * 60) return "post";
@@ -504,20 +513,52 @@ function sessionIdFromTs(ts) {
 /** Minutes into the 04:00→04:00 ET trading cycle (盘前…夜盘). */
 function etCycleMins(ts) {
   try {
-    const parts = new Intl.DateTimeFormat("en-US", {
-      timeZone: "America/New_York",
-      hour: "numeric",
-      minute: "numeric",
-      hour12: false,
-    }).formatToParts(new Date(Number(ts) * 1000));
-    const hour = Number(parts.find((p) => p.type === "hour")?.value || 0);
-    const minute = Number(parts.find((p) => p.type === "minute")?.value || 0);
-    const mins = hour * 60 + minute;
+    const { mins } = etParts(ts);
     // 04:00–23:59 → offset from 04:00; 00:00–03:59 → night tail after 20:00
     return mins >= 4 * 60 ? mins - 4 * 60 : mins + 20 * 60;
   } catch {
     return 8 * 60;
   }
+}
+
+/** Guarantee a flat 夜盘 hold from 20:00 (or last print) → now. */
+function ensureNightHoldPoints(view) {
+  const rows = Array.isArray(view) ? view.slice() : [];
+  if (!rows.length) return rows;
+  const nowSec = Date.now() / 1000;
+  const nowCm = etCycleMins(nowSec);
+  if (sessionIdFromTs(nowSec) !== "night") return rows;
+  const last = rows[rows.length - 1];
+  const lastV = Number(last?.v ?? last?.c);
+  if (!Number.isFinite(lastV)) return rows;
+  const nightStartCm = 16 * 60;
+  // Drop prior synthetic night pads; keep vendor/real points.
+  const kept = rows.filter((p) => !p?._pad);
+  const base = kept.length ? kept : rows;
+  const out = base.map((p) => ({ ...p, _cm: p._cm ?? etCycleMins(p.t) }));
+  out.sort((a, b) => a._cm - b._cm || Number(a.t) - Number(b.t));
+  let tip = out[out.length - 1];
+  const tipV = Number(tip.v ?? tip.c);
+  if (tip._cm < nightStartCm) {
+    out.push({
+      t: nowSec - (nowCm - nightStartCm) * 60,
+      v: tipV,
+      session: "night",
+      _cm: nightStartCm,
+      _pad: true,
+    });
+    tip = out[out.length - 1];
+  }
+  if (nowCm - tip._cm > 0.5) {
+    out.push({
+      t: nowSec,
+      v: Number(tip.v ?? tip.c),
+      session: "night",
+      _cm: nowCm,
+      _pad: true,
+    });
+  }
+  return out;
 }
 
 function ensurePointSessions(points) {
@@ -577,43 +618,17 @@ function renderSessionIntradaySvg(
   );
   const end = viewEnd == null ? raw.length : Math.min(raw.length, viewEnd);
   const start = clamp(viewStart, 0, Math.max(0, end));
-  // Sort by trading-cycle position so 盘前…夜盘 never draws backwards.
+  // Full series for 分时 — index zoom must not clip the trailing 夜盘 tip.
   let view = raw
-    .slice(start, end)
     .map((p) => ({ ...p, _cm: p.t != null ? etCycleMins(p.t) : 0 }))
     .sort((a, b) => a._cm - b._cm || Number(a.t) - Number(b.t));
+  // Optional zoom window, but always re-apply 夜盘 hold afterward.
+  if (!(start === 0 && end >= raw.length)) {
+    view = view.slice(start, end);
+  }
+  view = ensureNightHoldPoints(view);
   if (view.length < 2) {
     return `<svg viewBox="0 0 ${width} ${height}" role="img" aria-label="暂无走势"><text x="16" y="90" fill="${themeMutedFill()}" font-size="13">暂无分时数据</text></svg>`;
-  }
-
-  // During 夜盘, vendors often stop at ~20:00 — hold last print to "now"
-  // so the right-hand 夜盘 band is not an empty cliff.
-  const nowSec = Date.now() / 1000;
-  const nowCm = etCycleMins(nowSec);
-  const nowSid = sessionIdFromTs(nowSec);
-  const lastPt = view[view.length - 1];
-  const lastV = Number(lastPt.v ?? lastPt.c);
-  const nightStartCm = 16 * 60;
-  if (nowSid === "night" && Number.isFinite(lastV)) {
-    if (lastPt._cm < nightStartCm) {
-      view.push({
-        t: nowSec - (nowCm - nightStartCm) * 60,
-        v: lastV,
-        session: "night",
-        _cm: nightStartCm,
-        _pad: true,
-      });
-    }
-    const tip = view[view.length - 1];
-    if (nowCm - tip._cm > 1) {
-      view.push({
-        t: nowSec,
-        v: lastV,
-        session: "night",
-        _cm: nowCm,
-        _pad: true,
-      });
-    }
   }
 
   const prev =
@@ -673,55 +688,43 @@ function renderSessionIntradaySvg(
         )}" stroke="rgba(148,163,184,0.55)" stroke-width="1" stroke-dasharray="4 3"></line>`
       : "";
 
-  // Break the path on large time gaps so empty bands don't get a cliff line.
-  let line = "";
-  let areaRuns = [];
-  let run = [];
-  const flushRun = () => {
-    if (run.length < 2) {
-      run = [];
-      return;
-    }
-    const d = run
-      .map(([x, y], i) => `${i === 0 ? "M" : "L"}${x.toFixed(2)},${y.toFixed(2)}`)
-      .join(" ");
-    line += (line ? " " : "") + d;
-    areaRuns.push(run);
-    run = [];
-  };
-  for (let i = 0; i < view.length; i += 1) {
-    const pt = coords[i];
-    if (!run.length) {
-      run.push(pt);
-      continue;
-    }
-    const prevCm = view[i - 1]._cm;
-    const gap = view[i]._cm - prevCm;
-    const padHold = view[i]?._pad || view[i - 1]?._pad;
-    // >45 min hole → new stroke, but keep flat 夜盘 holds continuous
-    if (gap > 45 && !padHold) flushRun();
-    run.push(pt);
-  }
-  flushRun();
-  if (!line) {
-    line = coords
-      .map(([x, y], i) => `${i === 0 ? "M" : "L"}${x.toFixed(2)},${y.toFixed(2)}`)
-      .join(" ");
-    areaRuns = [coords];
-  }
-
-  const area = areaRuns
-    .map((r) => {
-      const d = r
-        .map(([x, y], i) => `${i === 0 ? "M" : "L"}${x.toFixed(2)},${y.toFixed(2)}`)
-        .join(" ");
-      return `${d} L${r[r.length - 1][0].toFixed(2)},${(padTop + plotH).toFixed(
-        2
-      )} L${r[0][0].toFixed(2)},${(padTop + plotH).toFixed(2)} Z`;
-    })
+  // Single continuous path — do not gap-break into 夜盘 (that left the band empty).
+  const line = coords
+    .map(([x, y], i) => `${i === 0 ? "M" : "L"}${x.toFixed(2)},${y.toFixed(2)}`)
     .join(" ");
+  const area = `${line} L${coords[coords.length - 1][0].toFixed(2)},${(
+    padTop + plotH
+  ).toFixed(2)} L${coords[0][0].toFixed(2)},${(padTop + plotH).toFixed(2)} Z`;
   const stroke = up ? TAPE_UP : TAPE_DOWN;
   const fill = up ? TAPE_UP_SOFT : TAPE_DOWN_SOFT;
+
+  // Explicit 夜盘 ray so a flat hold can never be dropped by path/zoom quirks.
+  const nowCm = etCycleMins(Date.now() / 1000);
+  const nightStartCm = 16 * 60;
+  let nightRay = "";
+  if (sessionIdFromTs(Date.now() / 1000) === "night") {
+    const holdV = Number(view[view.length - 1].v ?? view[view.length - 1].c);
+    const y = yOf(holdV);
+    let anchorCm = nightStartCm;
+    for (let i = view.length - 1; i >= 0; i -= 1) {
+      if (!view[i]._pad) {
+        anchorCm = Math.max(nightStartCm, view[i]._cm);
+        break;
+      }
+    }
+    const x0 = xOfCycle(anchorCm);
+    const x1 = xOfCycle(nowCm);
+    if (x1 > x0 + 0.5 && Number.isFinite(y)) {
+      nightRay = `<line x1="${x0.toFixed(2)}" y1="${y.toFixed(2)}" x2="${x1.toFixed(
+        2
+      )}" y2="${y.toFixed(
+        2
+      )}" stroke="${stroke}" stroke-width="2.1" stroke-linecap="round"></line>
+      <circle cx="${x1.toFixed(2)}" cy="${y.toFixed(
+        2
+      )}" r="2.4" fill="${stroke}"></circle>`;
+    }
+  }
 
   const footLabels = SESSION_CYCLE.map((s) => {
     const midX = (xOfCycle(s.start) + xOfCycle(s.end)) / 2;
@@ -739,6 +742,7 @@ function renderSessionIntradaySvg(
       ${prevLine}
       <path d="${area}" fill="${fill}"></path>
       <path d="${line}" fill="none" stroke="${stroke}" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round"></path>
+      ${nightRay}
       ${footLabels}
     </svg>
   `;
@@ -900,12 +904,13 @@ function paintZoomableChart(key) {
   if (zoomRoot) zoomRoot.classList.toggle("is-zoomed", zoomed);
   root.querySelectorAll(":scope > .ma-legend").forEach((el) => el.remove());
   // 分时 always uses the session line renderer, even if a stale kind says candle.
+  // Never index-slice 分时 — that clipped the trailing 夜盘 hold off the canvas.
   if (tf === "intraday") {
     const linePts = toLineSparkPoints(points);
     stage.innerHTML = renderSessionIntradaySvg(linePts.length ? linePts : points, {
       up,
-      viewStart: z.start,
-      viewEnd: z.start + z.count,
+      viewStart: 0,
+      viewEnd: null,
       sessions: meta.sessions,
       previousClose: meta.previousClose,
     });
