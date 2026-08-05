@@ -573,6 +573,15 @@ def _bundle_has_full_chart(bundle: dict[str, Any] | None) -> bool:
     return _pick_has_chart(bundle)
 
 
+def _series_intraday_ok(row: dict[str, Any] | None) -> bool:
+    """True when series.intraday has a usable line (≥2 points)."""
+    if not row:
+        return False
+    series = row.get("series") or {}
+    intra = series.get("intraday") if isinstance(series.get("intraday"), dict) else {}
+    return len(intra.get("points") or []) >= 2
+
+
 def _spark_points_from_row(row: dict[str, Any] | None) -> list[dict[str, Any]]:
     """Prefer full-session intraday line points for list sparklines (same as desk 分时)."""
     if not row:
@@ -677,10 +686,11 @@ def _slim_sector_etf(row: dict[str, Any]) -> dict[str, Any]:
 
 def _hydrate_sparks_from_cache(pick_rows: list[dict[str, Any]]) -> None:
     for row in pick_rows:
-        if _pick_has_chart(row) or _spark_points_from_row(row):
+        # Even day/month-ready rows may lack 分时 — still restore from cache.
+        if _spark_points_from_row(row):
             continue
         sym = str(row.get("symbol") or "").upper()
-        cached = _SYM_CACHE.get(f"quote:{sym}") or {}
+        cached = _SYM_CACHE.get(f"spark:{sym}") or _SYM_CACHE.get(f"quote:{sym}") or {}
         bundle = cached.get("bundle")
         spark = _spark_points_from_row(bundle if isinstance(bundle, dict) else None)
         if spark:
@@ -777,14 +787,16 @@ async def _hydrate_list_intraday_sparks(
     force: bool = False,
     limit: int = 18,
 ) -> None:
-    """Fill same-day list sparklines via Nasdaq (Yahoo often 429)."""
+    """Fill same-day list sparklines via Nasdaq (Yahoo often 429).
+
+    Also fills selected rows that already have day/month candles but lost
+    their 分时 series — otherwise the desk chart goes blank after upgrade.
+    """
     _hydrate_sparks_from_cache(pick_rows)
     missing = [
         str(r.get("symbol") or "").upper()
         for r in pick_rows
-        if str(r.get("symbol") or "")
-        and not _spark_points_from_row(r)
-        and not _pick_has_chart(r)
+        if str(r.get("symbol") or "") and not _spark_points_from_row(r)
     ][: max(1, min(limit, _MAX_SECTOR_PICKS))]
     if not missing:
         return
@@ -821,23 +833,24 @@ async def _hydrate_list_intraday_sparks(
             "fetched_at": time.time(),
         }
         for row in pick_rows:
-            if str(row.get("symbol") or "").upper() == sym and not _pick_has_chart(row):
-                _apply_intraday_spark(
-                    row,
-                    pts,
-                    change_pct=row_nd.get("change_pct")
-                    if row_nd.get("change_pct") is not None
-                    else row.get("change_pct"),
-                )
+            if str(row.get("symbol") or "").upper() != sym:
+                continue
+            if _spark_points_from_row(row):
                 break
+            _apply_intraday_spark(
+                row,
+                pts,
+                change_pct=row_nd.get("change_pct")
+                if row_nd.get("change_pct") is not None
+                else row.get("change_pct"),
+            )
+            break
 
     # Optional Yahoo fill only for stragglers Nasdaq missed (keep short budget)
     still = [
         str(r.get("symbol") or "").upper()
         for r in pick_rows
-        if str(r.get("symbol") or "")
-        and not _spark_points_from_row(r)
-        and not _pick_has_chart(r)
+        if str(r.get("symbol") or "") and not _spark_points_from_row(r)
     ][:6]
     if not still:
         return
@@ -856,7 +869,7 @@ async def _hydrate_list_intraday_sparks(
     by_sym = {sym: pts for sym, pts in results if pts}
     for row in pick_rows:
         sym = str(row.get("symbol") or "").upper()
-        if sym in by_sym and not _pick_has_chart(row):
+        if sym in by_sym and not _spark_points_from_row(row):
             _apply_intraday_spark(row, by_sym[sym], change_pct=row.get("change_pct"))
 
 
@@ -1019,11 +1032,14 @@ async def _fetch_quote(
     sym = (symbol or "").strip().upper()
     cache_key = f"quote:{sym}"
     cached = _SYM_CACHE.get(cache_key)
+    # Require both multi-TF candles AND usable 分时 — otherwise a Yahoo-only
+    # cache hit would blank the intraday desk after a successful spark paint.
     if (
         not force
         and cached
         and time.time() - float(cached.get("fetched_at") or 0) < _SYM_TTL
         and _bundle_has_full_chart(cached.get("bundle"))
+        and _series_intraday_ok(cached.get("bundle"))
     ):
         return cached.get("bundle"), []
 
@@ -1052,17 +1068,24 @@ async def _fetch_quote(
     except Exception as exc:  # noqa: BLE001
         errs = [f"{sym}: Yahoo bundle failed ({exc.__class__.__name__})"]
 
-    if bundle and _bundle_has_full_chart(bundle):
+    series = dict((bundle or {}).get("series") or {})
+    need_intra = not _series_intraday_ok({"series": series})
+    need_day = len((series.get("day") or {}).get("points") or []) < 2
+    need_month = len((series.get("month") or {}).get("points") or []) < 2
+    need_quarter = len((series.get("quarter") or {}).get("points") or []) < 2
+
+    # Yahoo day/month alone is not enough — keep Nasdaq 分时 when intraday missing.
+    if bundle and _bundle_has_full_chart(bundle) and not need_intra:
         nd_intra_task.cancel()
         nd_ohlc_task.cancel()
         _SYM_CACHE[cache_key] = {"bundle": bundle, "fetched_at": time.time()}
         return bundle, errs
 
-    series = dict((bundle or {}).get("series") or {})
-    need_intra = len((series.get("intraday") or {}).get("points") or []) < 2
-    need_day = len((series.get("day") or {}).get("points") or []) < 2
-    need_month = len((series.get("month") or {}).get("points") or []) < 2
-    need_quarter = len((series.get("quarter") or {}).get("points") or []) < 2
+    if bundle and _bundle_has_full_chart(bundle):
+        # Candles are fine; only wait on Nasdaq intraday (cancel daily OHLC).
+        nd_ohlc_task.cancel()
+        need_day = need_month = need_quarter = False
+
     extra_errs = list(errs or [])
 
     nd = None
@@ -1071,12 +1094,15 @@ async def _fetch_quote(
         nd = await nd_intra_task
     except Exception as exc:  # noqa: BLE001
         extra_errs.append(f"{sym}: Nasdaq intra failed ({exc.__class__.__name__})")
-    try:
-        daily_res = await nd_ohlc_task
-        if isinstance(daily_res, list):
-            ohlc_series = build_nasdaq_ohlc_series(daily_res)
-    except Exception as exc:  # noqa: BLE001
-        extra_errs.append(f"{sym}: Nasdaq OHLC failed ({exc.__class__.__name__})")
+    if need_day or need_month or need_quarter:
+        try:
+            daily_res = await nd_ohlc_task
+            if isinstance(daily_res, list):
+                ohlc_series = build_nasdaq_ohlc_series(daily_res)
+        except Exception as exc:  # noqa: BLE001
+            extra_errs.append(f"{sym}: Nasdaq OHLC failed ({exc.__class__.__name__})")
+    else:
+        nd_ohlc_task.cancel()
 
     if nd and len(nd.get("points") or []) >= 2 and need_intra:
         raw_pts = [
@@ -1090,6 +1116,9 @@ async def _fetch_quote(
             start_ts=int(start_et.timestamp()),
             end_ts=int(end_et.timestamp()) + 120,
         )
+        # Session filter can wipe weekend/holiday tapes — keep raw Nasdaq then.
+        if len(pts) < 2 and len(raw_pts) >= 2:
+            pts = raw_pts
         # Nasdaq AH ends ~20:00 ET — stretch into current 夜盘 so the desk
         # does not look stuck in 盘中 after the close.
         if pts:
@@ -1177,10 +1206,21 @@ async def _fetch_quote(
         "url": (bundle or {}).get("url") or f"https://finance.yahoo.com/quote/{sym}",
         "source": "nasdaq" if (nd or ohlc_series) else (bundle or {}).get("source"),
     }
-    if _bundle_has_full_chart(fallback):
+    if _bundle_has_full_chart(fallback) and _series_intraday_ok(fallback):
         _SYM_CACHE[cache_key] = {"bundle": fallback, "fetched_at": time.time()}
-        note = f"{sym}: Yahoo chart incomplete; filled from Nasdaq"
-        return fallback, extra_errs + [note]
+        note = (
+            f"{sym}: Yahoo chart incomplete; filled from Nasdaq"
+            if need_intra or ohlc_series
+            else f"{sym}: chart ready"
+        )
+        return fallback, extra_errs + ([note] if note else [])
+    if _bundle_has_full_chart(fallback):
+        # Candles ok but 分时 still missing — short TTL so we retry Nasdaq soon
+        _SYM_CACHE[cache_key] = {
+            "bundle": fallback,
+            "fetched_at": time.time() - max(0, _SYM_TTL - 45),
+        }
+        return fallback, extra_errs + [f"{sym}: 日/月就绪，分时待补"]
     if _pick_has_intraday(fallback):
         # Intraday-only: short TTL so we retry OHLC soon
         _SYM_CACHE[cache_key] = {
