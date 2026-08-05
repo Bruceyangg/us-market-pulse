@@ -578,12 +578,42 @@ function renderSessionIntradaySvg(
   const end = viewEnd == null ? raw.length : Math.min(raw.length, viewEnd);
   const start = clamp(viewStart, 0, Math.max(0, end));
   // Sort by trading-cycle position so 盘前…夜盘 never draws backwards.
-  const view = raw
+  let view = raw
     .slice(start, end)
     .map((p) => ({ ...p, _cm: p.t != null ? etCycleMins(p.t) : 0 }))
     .sort((a, b) => a._cm - b._cm || Number(a.t) - Number(b.t));
   if (view.length < 2) {
     return `<svg viewBox="0 0 ${width} ${height}" role="img" aria-label="暂无走势"><text x="16" y="90" fill="${themeMutedFill()}" font-size="13">暂无分时数据</text></svg>`;
+  }
+
+  // During 夜盘, vendors often stop at ~20:00 — hold last print to "now"
+  // so the right-hand 夜盘 band is not an empty cliff.
+  const nowSec = Date.now() / 1000;
+  const nowCm = etCycleMins(nowSec);
+  const nowSid = sessionIdFromTs(nowSec);
+  const lastPt = view[view.length - 1];
+  const lastV = Number(lastPt.v ?? lastPt.c);
+  const nightStartCm = 16 * 60;
+  if (nowSid === "night" && Number.isFinite(lastV)) {
+    if (lastPt._cm < nightStartCm) {
+      view.push({
+        t: nowSec - (nowCm - nightStartCm) * 60,
+        v: lastV,
+        session: "night",
+        _cm: nightStartCm,
+        _pad: true,
+      });
+    }
+    const tip = view[view.length - 1];
+    if (nowCm - tip._cm > 1) {
+      view.push({
+        t: nowSec,
+        v: lastV,
+        session: "night",
+        _cm: nowCm,
+        _pad: true,
+      });
+    }
   }
 
   const prev =
@@ -667,8 +697,9 @@ function renderSessionIntradaySvg(
     }
     const prevCm = view[i - 1]._cm;
     const gap = view[i]._cm - prevCm;
-    // >45 min hole → new stroke (e.g. sparse 夜盘); avoid vertical cliffs
-    if (gap > 45) flushRun();
+    const padHold = view[i]?._pad || view[i - 1]?._pad;
+    // >45 min hole → new stroke, but keep flat 夜盘 holds continuous
+    if (gap > 45 && !padHold) flushRun();
     run.push(pt);
   }
   flushRun();
