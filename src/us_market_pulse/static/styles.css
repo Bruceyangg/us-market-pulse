@@ -5842,7 +5842,7 @@ html[data-theme="dark"] .earnings-row .session-pre-market {
 
   .earnings-row,
   .earnings-row.head {
-    grid-template-columns: 3.4rem minmax(0, 1fr) 3rem 3.8rem;
+    grid-template-columns: 0.85fr 1.6fr 0.65fr 1.2fr;
   }
 
   .earnings-row > :nth-child(4),
