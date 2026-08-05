@@ -6021,3 +6021,67 @@ html[data-theme="dark"] .earnings-row .session-pre-market {
     font-size: 0.68rem;
   }
 }
+
+/* ===== Android / native app shell (html.pulse-native-app) ===== */
+html.pulse-native-app .site-header,
+html.pulse-native-app .mobile-tabbar,
+html.pulse-native-app .site-footer {
+  display: none !important;
+}
+
+html.pulse-native-app body {
+  padding-bottom: 0.5rem !important;
+  padding-top: env(safe-area-inset-top, 0);
+  overscroll-behavior-y: contain;
+  -webkit-tap-highlight-color: transparent;
+}
+
+html.pulse-native-app .page-main {
+  padding-top: 0.55rem;
+  padding-bottom: 0.75rem;
+  min-height: 100dvh;
+}
+
+html.pulse-native-app .page-intro {
+  padding-top: 0.35rem;
+  margin-bottom: 0.55rem;
+}
+
+html.pulse-native-app .page-intro h1 {
+  font-size: 1.35rem;
+}
+
+html.pulse-native-app .holding-row,
+html.pulse-native-app .sector-pick-row {
+  min-height: 3.4rem;
+  padding-top: 0.55rem;
+  padding-bottom: 0.55rem;
+}
+
+html.pulse-native-app .filter,
+html.pulse-native-app .tf-filters .filter,
+html.pulse-native-app button.btn {
+  min-height: 2.5rem;
+  padding-left: 0.85rem;
+  padding-right: 0.85rem;
+}
+
+html.pulse-native-app .holding-toggle,
+html.pulse-native-app .sector-hold-toggle {
+  min-width: 2.75rem;
+  min-height: 2.75rem;
+  font-size: 1.15rem;
+}
+
+html.pulse-native-app .sectors-desk,
+html.pulse-native-app .portfolio-desk {
+  gap: 0.65rem;
+}
+
+html.pulse-native-app .chart-zoom-shell {
+  touch-action: pan-y pinch-zoom;
+}
+
+html.pulse-native-app .atmosphere {
+  opacity: 0.55;
+}
