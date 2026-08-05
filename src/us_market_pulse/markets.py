@@ -12,12 +12,12 @@ import httpx
 
 _ET = ZoneInfo("America/New_York")
 
-# Trading-day order (ET): 盘前 → 盘中 → 盘后 → 夜盘
+# Broker-style order (ET, 北京时间一体轴): 夜盘 → 盘前 → 盘中 → 盘后
 _SESSION_META: list[dict[str, str]] = [
+    {"id": "night", "label": "夜盘"},
     {"id": "pre", "label": "盘前"},
     {"id": "regular", "label": "盘中"},
     {"id": "post", "label": "盘后"},
-    {"id": "night", "label": "夜盘"},
 ]
 INDEX_SPECS: list[dict[str, str]] = [
     {
@@ -58,7 +58,7 @@ TIMEFRAMES: list[dict[str, Any]] = [
     {
         "id": "intraday",
         "label": "分时",
-        "blurb": "盘前·盘中·盘后·夜盘一体分时（约 5 分钟点，延迟报价）",
+        "blurb": "夜盘·盘前·盘中·盘后一体分时（约 5 分钟点，延迟报价）",
         "range": "5d",
         "interval": "5m",
         "max_points": 360,
@@ -116,7 +116,7 @@ PORTFOLIO_TIMEFRAMES: list[dict[str, Any]] = [
     {
         "id": "intraday",
         "label": "分时",
-        "blurb": "盘前·盘中·盘后·夜盘一体分时（约 5 分钟点，延迟报价）",
+        "blurb": "夜盘·盘前·盘中·盘后一体分时（约 5 分钟点，延迟报价）",
         "range": "5d",
         "interval": "5m",
         "max_points": 360,
@@ -194,25 +194,43 @@ def _session_id_for_ts(ts: int) -> str:
     return "post"
 
 
+def _session_cycle_meta(now: datetime | None = None) -> dict[str, int]:
+    start_et, end_et = _session_cycle_bounds(now)
+    return {
+        "cycle_start": int(start_et.timestamp()),
+        "cycle_end": int(end_et.timestamp()),
+    }
+
+
 def _session_cycle_bounds(
     now: datetime | None = None,
 ) -> tuple[datetime, datetime]:
     """
-    Current trading cycle: most recent 04:00 ET → now.
+    One broker-style US session day: previous 20:00 ET → next 20:00 ET.
 
-    Order on the desk is 盘前→盘中→盘后→夜盘. Before 04:00 ET we are still
-    in the previous day's 夜盘, so the window starts at yesterday 04:00.
+    Desk order is 夜盘→盘前→盘中→盘后 (matches 北京时间 08:00→08:00 轴).
+    After the cash close (20:00–04:00) keep showing the day that just finished
+    so 盘后 stays complete instead of collapsing to a sparse new 夜盘.
     """
     now_et = now.astimezone(_ET) if now else datetime.now(tz=_ET)
-    today_pre = now_et.replace(hour=4, minute=0, second=0, microsecond=0)
-    start = today_pre if now_et >= today_pre else today_pre - timedelta(days=1)
-    return start, now_et
+    today_20 = now_et.replace(hour=20, minute=0, second=0, microsecond=0)
+    mins = now_et.hour * 60 + now_et.minute
+    if mins < 4 * 60:
+        end = today_20 - timedelta(days=1)
+        start = end - timedelta(days=1)
+    elif now_et >= today_20:
+        end = today_20
+        start = today_20 - timedelta(days=1)
+    else:
+        start = today_20 - timedelta(days=1)
+        end = now_et
+    return start, end
 
 
 def trading_day_et(now: datetime | None = None) -> datetime:
-    """Calendar date of the open 盘前 (04:00 ET anchor) for the active cycle."""
+    """04:00 ET of the active session day (盘前 open)."""
     start, _ = _session_cycle_bounds(now)
-    return start
+    return start + timedelta(hours=8)
 
 
 def even_sample_points(
@@ -242,15 +260,15 @@ def even_sample_points(
 def sample_session_points(
     points: list[dict[str, Any]], max_points: int
 ) -> list[dict[str, Any]]:
-    """Downsample 分时 while keeping 盘前/盘中/盘后/夜盘 each represented."""
+    """Downsample 分时 while keeping 夜盘/盘前/盘中/盘后 each represented."""
     rows = sorted(
         (dict(p) for p in (points or []) if isinstance(p, dict) and p.get("t")),
         key=lambda p: int(p["t"]),
     )
     if len(rows) <= max_points:
         return rows
-    order = ("pre", "regular", "post", "night")
-    weights = {"pre": 22, "regular": 46, "post": 24, "night": 8}
+    order = ("night", "pre", "regular", "post")
+    weights = {"night": 12, "pre": 22, "regular": 44, "post": 22}
     buckets: dict[str, list[dict[str, Any]]] = {k: [] for k in order}
     for p in rows:
         sid = p.get("session") or _session_id_for_ts(int(p["t"]))
@@ -306,10 +324,11 @@ def finalize_desk_intraday_points(
     now: datetime | None = None,
 ) -> list[dict[str, Any]]:
     """
-    Clip to the active 盘前→…→夜盘 cycle and hold the last print into 夜盘.
+    Clip to the active 夜盘→盘前→盘中→盘后 cycle (20:00 ET → 20:00 ET).
 
-    After 20:00 ET (and especially after midnight) vendors often stop updating;
-    without a flat hold the 夜盘 band looks empty even though we are in it.
+    After cash close we keep the finished day so 盘后 stays populated. Pad a
+    leading 夜盘 anchor when the first print starts late so the left band
+    does not collapse to empty.
     """
     raw = [dict(p) for p in (points or []) if isinstance(p, dict) and p.get("t")]
     if not raw:
@@ -335,26 +354,21 @@ def finalize_desk_intraday_points(
         return []
 
     pts.sort(key=lambda p: int(p["t"]))
-    now_ts = int(end_et.timestamp())
-    sid_now = _session_id_for_ts(now_ts)
-    last = pts[-1]
-    last_v = last.get("v")
-    if last_v is None:
-        last_v = last.get("c")
+    first = pts[0]
+    first_v = first.get("v")
+    if first_v is None:
+        first_v = first.get("c")
     try:
-        last_v = float(last_v)
+        first_v = float(first_v)
     except (TypeError, ValueError):
         return pts
 
-    # 夜盘 starts 16h after the 04:00 cycle anchor.
-    night_start = start_et + timedelta(hours=16)
-    night_ts = int(night_start.timestamp())
-    if sid_now == "night" and now_ts >= night_ts:
-        if int(last["t"]) < night_ts:
-            pts.append({"t": night_ts, "v": last_v, "session": "night"})
-            last = pts[-1]
-        if now_ts - int(last["t"]) >= 60:
-            pts.append({"t": now_ts, "v": float(last.get("v", last_v)), "session": "night"})
+    # Leading 夜盘 pad when prints begin well after 20:00 ET.
+    if int(first["t"]) > start_ts + 900:
+        pts.insert(
+            0,
+            {"t": start_ts, "v": first_v, "session": "night"},
+        )
     return pts
 
 
@@ -578,6 +592,7 @@ async def _fetch_yahoo_series(
             out["sessions"] = sessions or _session_segments(points)
             # Always advertise all four bands — empty bands still render on the desk.
             out["session_labels"] = [s["label"] for s in _SESSION_META]
+            out.update(_session_cycle_meta())
         return out, None
     except Exception as exc:  # noqa: BLE001
         return None, f"{spec['label']}/{tf['label']}: {exc}"
@@ -661,6 +676,10 @@ async def fetch_symbol_bundle(
             series_row["sessions"] = row["sessions"]
         if row.get("session_labels"):
             series_row["session_labels"] = row["session_labels"]
+        if row.get("cycle_start") is not None:
+            series_row["cycle_start"] = row["cycle_start"]
+        if row.get("cycle_end") is not None:
+            series_row["cycle_end"] = row["cycle_end"]
         if row.get("previous_close") is not None:
             series_row["previous_close"] = row["previous_close"]
         series[tf["id"]] = series_row
