@@ -5859,7 +5859,7 @@ function bootPage() {
         soft: true,
       });
     }, 90 * 1000);
-    trackPageInterval(() => refreshActiveIntraday(), 30 * 1000);
+    trackPageInterval(() => refreshActiveIntraday(), 10 * 1000);
   } else if (PAGE === "markets") {
     const painted = paintFromPageDataCache("markets");
     if (painted) restoreScrollPosition();
@@ -5883,7 +5883,7 @@ function bootPage() {
       })
     );
     trackPageInterval(() => loadSectorDesk(), 90 * 1000);
-    trackPageInterval(() => refreshActiveIntraday(), 30 * 1000);
+    trackPageInterval(() => refreshActiveIntraday(), 10 * 1000);
   } else if (PAGE === "earnings") {
     bindEarningsDesk();
     loadEarningsDesk();
