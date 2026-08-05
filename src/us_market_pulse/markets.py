@@ -215,6 +215,71 @@ def trading_day_et(now: datetime | None = None) -> datetime:
     return start
 
 
+def even_sample_points(
+    points: list[dict[str, Any]], max_points: int
+) -> list[dict[str, Any]]:
+    """Evenly sample across the whole series — always keep first & last.
+
+    Do NOT use `points[::step][:max]` — that truncates the tail and wipes 盘后.
+    """
+    rows = list(points or [])
+    n = len(rows)
+    if n <= max_points or max_points < 2:
+        return rows[:max_points] if max_points > 0 else rows
+    out: list[dict[str, Any]] = []
+    prev = -1
+    for i in range(max_points):
+        idx = int(round(i * (n - 1) / (max_points - 1)))
+        if idx == prev:
+            continue
+        out.append(rows[idx])
+        prev = idx
+    if out[-1] is not rows[-1]:
+        out.append(rows[-1])
+    return out
+
+
+def sample_session_points(
+    points: list[dict[str, Any]], max_points: int
+) -> list[dict[str, Any]]:
+    """Downsample 分时 while keeping 盘前/盘中/盘后/夜盘 each represented."""
+    rows = sorted(
+        (dict(p) for p in (points or []) if isinstance(p, dict) and p.get("t")),
+        key=lambda p: int(p["t"]),
+    )
+    if len(rows) <= max_points:
+        return rows
+    order = ("pre", "regular", "post", "night")
+    weights = {"pre": 22, "regular": 46, "post": 24, "night": 8}
+    buckets: dict[str, list[dict[str, Any]]] = {k: [] for k in order}
+    for p in rows:
+        sid = p.get("session") or _session_id_for_ts(int(p["t"]))
+        if sid not in buckets:
+            sid = "regular"
+        p["session"] = sid
+        buckets[sid].append(p)
+    present = [k for k in order if buckets[k]]
+    if not present:
+        return even_sample_points(rows, max_points)
+    total_w = sum(weights[k] for k in present)
+    remaining = max_points
+    budget: dict[str, int] = {}
+    for i, k in enumerate(present):
+        if i == len(present) - 1:
+            budget[k] = max(1, remaining)
+            break
+        slots_left = len(present) - i - 1
+        b = max(1, round(max_points * weights[k] / total_w))
+        b = min(len(buckets[k]), b, remaining - slots_left)
+        budget[k] = max(1, b)
+        remaining -= budget[k]
+    out: list[dict[str, Any]] = []
+    for k in present:
+        out.extend(even_sample_points(buckets[k], budget[k]))
+    out.sort(key=lambda p: int(p["t"]))
+    return out
+
+
 def _filter_session_window(
     points: list[dict[str, Any]],
     *,
@@ -382,13 +447,7 @@ def _compact_bars(
         else:
             bars.append(bar)
 
-    if len(bars) <= max_points:
-        return bars
-    step = max(1, len(bars) // max_points)
-    trimmed = bars[::step]
-    if trimmed[-1] is not bars[-1]:
-        trimmed.append(bars[-1])
-    return trimmed[:max_points]
+    return even_sample_points(bars, max_points)
 
 
 def _series_change(points: list[dict[str, Any]], chart: str) -> tuple[float | None, float | None]:
@@ -473,19 +532,9 @@ async def _fetch_yahoo_series(
         sessions: list[dict[str, Any]] = []
         if use_session and points:
             points = finalize_desk_intraday_points(points)
-            # Final density cap after window filter (keep night anchors)
             max_pts = int(tf.get("max_points") or 360)
             if len(points) > max_pts:
-                head = points[:-2] if len(points) > 4 else points
-                step = max(1, len(head) // max(1, max_pts - 2))
-                trimmed = head[::step]
-                for tail in points[-2:]:
-                    if not trimmed or trimmed[-1] is not tail:
-                        trimmed.append(tail)
-                points = trimmed[:max_pts]
-                for p in points:
-                    if p.get("t"):
-                        p["session"] = _session_id_for_ts(int(p["t"]))
+                points = sample_session_points(points, max_pts)
             sessions = _session_segments(points)
 
         if not points:
