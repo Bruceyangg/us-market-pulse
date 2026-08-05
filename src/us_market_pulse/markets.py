@@ -58,13 +58,13 @@ TIMEFRAMES: list[dict[str, Any]] = [
     {
         "id": "intraday",
         "label": "分时",
-        "blurb": "夜盘·盘前·盘中·盘后一体分时（约 5 分钟点，延迟报价）",
-        "range": "5d",
-        "interval": "5m",
-        "max_points": 360,
+        "blurb": "Yahoo 1D 分时 · 含盘前/盘后（约 1 分钟点，延迟报价）",
+        "range": "1d",
+        "interval": "1m",
+        "max_points": 480,
         "chart": "line",
         "prepost": True,
-        "session_window": True,
+        "session_window": False,
     },
     {
         "id": "day",
@@ -116,13 +116,13 @@ PORTFOLIO_TIMEFRAMES: list[dict[str, Any]] = [
     {
         "id": "intraday",
         "label": "分时",
-        "blurb": "夜盘·盘前·盘中·盘后一体分时（约 5 分钟点，延迟报价）",
-        "range": "5d",
-        "interval": "5m",
-        "max_points": 360,
+        "blurb": "Yahoo 1D 分时 · 含盘前/盘后（约 1 分钟点，延迟报价）",
+        "range": "1d",
+        "interval": "1m",
+        "max_points": 480,
         "chart": "line",
         "prepost": True,
-        "session_window": True,
+        "session_window": False,
     },
     {
         "id": "day",
@@ -505,7 +505,23 @@ async def _fetch_yahoo_series(
 
     try:
         resp = await client.get(url, timeout=25.0, headers=headers)
-        # Soft-fallback: session window prefers 5d, but Yahoo often 429s — retry 1d once.
+        # Soft-fallback: Yahoo often 429s on 1m — retry coarser 5m / alternate host.
+        if resp.status_code == 429 and str(tf.get("chart") or "line") == "line":
+            for interval in ("5m", "2m"):
+                if str(tf.get("interval")) == interval:
+                    continue
+                resp = await client.get(
+                    _yahoo_chart_url(
+                        spec["symbol"],
+                        range_=str(tf.get("range") or "1d"),
+                        interval=interval,
+                        prepost=bool(tf.get("prepost")),
+                    ),
+                    timeout=25.0,
+                    headers=headers,
+                )
+                if resp.status_code < 400:
+                    break
         if resp.status_code == 429 and use_session and str(tf.get("range")) != "1d":
             resp = await client.get(
                 _yahoo_chart_url(
