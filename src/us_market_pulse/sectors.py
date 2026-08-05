@@ -599,7 +599,11 @@ def _annotate_intraday_sessions(series_row: dict[str, Any] | None) -> dict[str, 
     pts.sort(key=lambda p: int(p["t"]))
     series_row["points"] = pts
     series_row["chart"] = "line"
+    series_row["blurb"] = series_row.get("blurb") or "Yahoo 1D 分时 · 含盘前/盘后"
     series_row["session_labels"] = ["盘前", "盘中", "盘后"]
+    # Preserve previous_close for Yahoo-style 昨收 guide (holdings + sectors).
+    if series_row.get("previous_close") is None and series_row.get("prev_close") is not None:
+        series_row["previous_close"] = series_row.get("prev_close")
     if len(pts) >= 2:
         series_row["sessions"] = _session_segments(pts)
     return series_row
@@ -659,16 +663,17 @@ def _apply_intraday_spark(
         return
     row["points"] = spark[-48:]
     series = dict(row.get("series") or {})
+    base = dict(existing) if isinstance(existing, dict) else {}
+    pct = change_pct
+    if pct is None and isinstance(existing, dict):
+        pct = existing.get("change_pct")
+    if pct is None:
+        pct = row.get("change_pct")
     series["intraday"] = {
+        **base,
         "chart": "line",
         "points": spark,
-        "change_pct": change_pct
-        if change_pct is not None
-        else (
-            existing.get("change_pct")
-            if isinstance(existing, dict) and existing.get("change_pct") is not None
-            else row.get("change_pct")
-        ),
+        "change_pct": pct,
     }
     row["series"] = series
 
