@@ -2594,6 +2594,8 @@ body {
 }
 
 .sectors-board {
+  /* Shared track so map / chips / L-M-R desk share the same horizontal rhythm */
+  --sectors-desk-cols: minmax(21.5rem, 1.25fr) minmax(0, 1.28fr) minmax(15.5rem, 0.9fr);
   max-width: var(--workspace);
   margin: 0 auto;
   padding: 0 1.25rem 1.5rem;
@@ -2963,7 +2965,7 @@ body {
 
 .sectors-desk {
   display: grid;
-  grid-template-columns: minmax(15rem, 0.92fr) minmax(0, 1.45fr) minmax(16.5rem, 0.98fr);
+  grid-template-columns: var(--sectors-desk-cols);
   gap: 0.75rem;
   /* Center column defines row height; L/R match via --sectors-center-h */
   align-items: start;
@@ -3062,10 +3064,15 @@ body {
   text-align: left;
   cursor: pointer;
   display: grid;
-  grid-template-columns: minmax(0, 1.25fr) minmax(2.6rem, 0.7fr) minmax(2.4rem, 0.55fr) minmax(2.6rem, 0.65fr);
-  gap: 0.25rem 0.35rem;
+  /* meta | spark | price | % — give price/% hard floors so they never collide */
+  grid-template-columns:
+    minmax(0, 1.2fr)
+    minmax(2.8rem, 0.55fr)
+    minmax(3.8rem, max-content)
+    minmax(4.8rem, max-content);
+  gap: 0.28rem 0.5rem;
   align-items: center;
-  padding: 0.38rem 0.3rem 0.38rem 0.65rem;
+  padding: 0.38rem 0.35rem 0.38rem 0.55rem;
   min-width: 0;
   min-height: 0;
   width: 100%;
@@ -3126,10 +3133,29 @@ body {
   color: #6b1d1d;
 }
 
-.sector-pick-list .holding-row .meta .sym,
-.sector-pick-list .holding-row .price,
+.sector-pick-list .holding-row .meta .sym {
+  font-size: 0.7rem;
+}
+
+.sector-pick-list .holding-row .price {
+  font-size: 0.78rem;
+  white-space: nowrap;
+  justify-self: end;
+  min-width: 3.6rem;
+  letter-spacing: -0.01em;
+}
+
 .sector-pick-list .holding-row .chg {
-  font-size: 0.74rem;
+  font-size: 0.7rem;
+  white-space: nowrap;
+  justify-self: end;
+  min-width: 4.6rem;
+  padding: 0.2rem 0.3rem;
+}
+
+.sector-pick-list .holding-row .spark-wrap {
+  min-width: 0;
+  overflow: hidden;
 }
 
 html[data-theme="dark"] .sector-pick-list .hold-tag {
@@ -3792,8 +3818,12 @@ html[data-theme="dark"] .sector-pick-list .sector-hold-btn.is-held:hover {
     grid-template-columns: repeat(3, minmax(0, 1fr));
   }
 
+  .sectors-board {
+    --sectors-desk-cols: minmax(18.5rem, 1.1fr) minmax(0, 1.35fr);
+  }
+
   .sectors-desk {
-    grid-template-columns: minmax(14rem, 0.95fr) minmax(0, 1.35fr);
+    grid-template-columns: var(--sectors-desk-cols);
     height: auto;
     min-height: 0;
     align-items: start;
@@ -3854,12 +3884,17 @@ html[data-theme="dark"] .sector-pick-list .sector-hold-btn.is-held:hover {
     grid-template-columns: 1fr;
   }
 
+  .sectors-board {
+    --sectors-desk-cols: 1fr;
+  }
+
   .sectors-desk,
   .sectors-intel-sticky {
     grid-template-columns: 1fr;
   }
 
   .sectors-desk {
+    grid-template-columns: var(--sectors-desk-cols);
     height: auto;
     min-height: 0;
   }
