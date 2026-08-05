@@ -29,6 +29,7 @@ const state = {
   portfolioSort: { key: "change_pct", dir: "desc" },
   portfolioPreview: null,
   portfolioSelectBusy: false,
+  holdingToggleBusy: false,
   holdingSymbols: null,
   holdingsOnly: false,
   holdingFilter: "",
@@ -59,7 +60,10 @@ const CHART_DEFAULT_VISIBLE = {
 };
 const chartZoomData = new Map();
 
-const PORTFOLIO_TF_KEYS = ["intraday", "day", "month", "quarter", "year"];
+const PORTFOLIO_TF_KEYS = ["intraday", "day", "month", "quarter"];
+if (!PORTFOLIO_TF_KEYS.includes(state.portfolioTf)) {
+  state.portfolioTf = "intraday";
+}
 const PAGE = document.body?.dataset?.page || "desk";
 const AUTHED = Boolean(document.getElementById("user-chip") || document.getElementById("btn-logout"));
 
@@ -1482,6 +1486,17 @@ async function ensurePortfolioSelection(data) {
   const valid = selected && holdings.some((h) => h.symbol === selected);
   if (valid && hasBoard) return data;
   const target = (valid && selected) || holdings[0].symbol;
+  // Already have a valid selection — fill a local board stub so add/remove
+  // never hangs on a second /select round-trip while quotes are still loading.
+  if (valid && !hasBoard) {
+    return {
+      ...data,
+      selected: target,
+      selected_board: boardFromHolding(
+        holdings.find((h) => h.symbol === target) || holdings[0]
+      ),
+    };
+  }
   try {
     const res = await portfolioPost("/api/portfolio/select", { symbol: target });
     return res.portfolio || data;
@@ -1544,11 +1559,22 @@ async function portfolioPost(path, body) {
     body: JSON.stringify(body),
   });
   const data = await res.json().catch(() => ({}));
+  const detailMsg = (() => {
+    const detail = data?.detail;
+    if (typeof detail === "string") return detail;
+    if (Array.isArray(detail)) {
+      return detail
+        .map((d) => (typeof d === "string" ? d : d?.msg || ""))
+        .filter(Boolean)
+        .join("；");
+    }
+    return "";
+  })();
   if (res.status === 401) {
     window.location.href = "/login";
-    throw new Error(data.detail || "请先登录");
+    throw new Error(detailMsg || "请先登录");
   }
-  if (!res.ok) throw new Error(data.detail || `HTTP ${res.status}`);
+  if (!res.ok) throw new Error(detailMsg || `HTTP ${res.status}`);
   return data;
 }
 
@@ -1600,6 +1626,8 @@ async function toggleSectorHolding(symbol, name = "") {
     )}`;
     return;
   }
+  if (state.holdingToggleBusy) return;
+  state.holdingToggleBusy = true;
   const held = isInHoldings(sym);
   try {
     const data = held
@@ -1612,6 +1640,7 @@ async function toggleSectorHolding(symbol, name = "") {
     if (PAGE === "desk") {
       const portfolio = await ensurePortfolioSelection(data.portfolio);
       renderPortfolio(portfolio);
+      loadPortfolio({ refresh: false });
     } else if (PAGE === "sectors") {
       renderSectorPicks(state.sectors || {});
     }
@@ -1622,6 +1651,8 @@ async function toggleSectorHolding(symbol, name = "") {
     );
   } catch (err) {
     setStatus(`${held ? "移除" : "加入"}失败：${err.message || err}`);
+  } finally {
+    state.holdingToggleBusy = false;
   }
 }
 
@@ -2847,7 +2878,13 @@ els.portfolioAddForm?.addEventListener("submit", async (event) => {
   event.preventDefault();
   const symbol = (els.portfolioSymbol?.value || "").trim();
   const name = (els.portfolioName?.value || "").trim();
-  if (!symbol) return;
+  if (!symbol) {
+    setStatus("请先输入美股代码或中文名");
+    return;
+  }
+  const submitBtn = els.portfolioAddForm.querySelector('button[type="submit"]');
+  if (submitBtn) submitBtn.disabled = true;
+  setStatus(`正在添加 ${symbol}…`);
   try {
     const data = await portfolioPost("/api/portfolio/add", { symbol, name });
     if (els.portfolioSymbol) els.portfolioSymbol.value = "";
@@ -2862,13 +2899,22 @@ els.portfolioAddForm?.addEventListener("submit", async (event) => {
     syncHoldingSymbolsFromPortfolio(portfolio);
     renderPortfolio(portfolio);
     const resolved = data.resolved || {};
-    if (els.portfolioBlurb && resolved.symbol) {
-      els.portfolioBlurb.textContent = `已添加 ${resolved.name || resolved.symbol}（${resolved.symbol}）`;
+    const label = resolved.symbol
+      ? `${resolved.name || resolved.symbol}（${resolved.symbol}）`
+      : symbol;
+    if (els.portfolioBlurb) {
+      els.portfolioBlurb.textContent = `已添加 ${label}`;
     }
+    setStatus(`已加入持仓 ${label}`);
+    // Upgrade stub quotes in the background without blocking the add UX.
+    loadPortfolio({ refresh: false });
   } catch (err) {
     if (els.portfolioBlurb) {
       els.portfolioBlurb.textContent = `添加失败：${err.message || err}`;
     }
+    setStatus(`添加失败：${err.message || err}`);
+  } finally {
+    if (submitBtn) submitBtn.disabled = false;
   }
 });
 

@@ -83,7 +83,7 @@
               导入备份
               <input id="portfolio-import" type="file" accept="application/json,.json" hidden />
             </label>
-            <p class="portfolio-manage-hint">↑↓ 切换持仓 · 1–5 切周期 · 云端同步跨设备</p>
+            <p class="portfolio-manage-hint">↑↓ 切换持仓 · 1–4 切周期 · 云端同步跨设备</p>
           </div>
         </div>
 
@@ -106,13 +106,12 @@
           </div>
           <div class="portfolio-chart-pane">
             <div class="portfolio-chart-sticky">
-              <div class="portfolio-chart-toolbar">
+              <div class="sectors-chart-toolbar portfolio-chart-toolbar">
                 <div class="tf-filters" id="portfolio-tf-filters" role="tablist" aria-label="持仓走势周期">
                   <button type="button" class="filter is-active" data-ptf="intraday" aria-selected="true">分时</button>
                   <button type="button" class="filter" data-ptf="day" aria-selected="false">日图</button>
                   <button type="button" class="filter" data-ptf="month" aria-selected="false">月图</button>
                   <button type="button" class="filter" data-ptf="quarter" aria-selected="false">季图</button>
-                  <button type="button" class="filter" data-ptf="year" aria-selected="false">年图</button>
                 </div>
               </div>
               <div class="portfolio-chart" id="portfolio-chart">
