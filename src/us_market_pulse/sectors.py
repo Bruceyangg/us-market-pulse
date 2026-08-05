@@ -19,14 +19,9 @@ from us_market_pulse.earnings_calendar import (
 from us_market_pulse.market_map import symbols_for_desk
 from us_market_pulse.markets import (
     PORTFOLIO_TIMEFRAMES,
-    _SESSION_META,
-    _filter_session_window,
-    _session_cycle_bounds,
-    _session_cycle_meta,
     _session_id_for_ts,
     _session_segments,
     fetch_symbol_bundle,
-    finalize_desk_intraday_points,
 )
 from us_market_pulse.portfolio_intel import match_portfolio_intel
 from us_market_pulse.quotes import (
@@ -45,13 +40,13 @@ _INTRADAY_TF = next(
     {
         "id": "intraday",
         "label": "分时",
-        "blurb": "夜盘·盘前·盘中·盘后一体分时",
-        "range": "5d",
-        "interval": "5m",
-        "max_points": 360,
+        "blurb": "Yahoo 1D 分时 · 含盘前/盘后",
+        "range": "1d",
+        "interval": "1m",
+        "max_points": 480,
         "chart": "line",
         "prepost": True,
-        "session_window": True,
+        "session_window": False,
     },
 )
 # Left-list sparklines: classic same-day 分时 only (not the desk session window).
@@ -588,19 +583,25 @@ def _series_intraday_ok(row: dict[str, Any] | None) -> bool:
 
 
 def _annotate_intraday_sessions(series_row: dict[str, Any] | None) -> dict[str, Any] | None:
-    """Tag points + attach 夜盘/盘前/盘中/盘后 metadata for the desk chart."""
+    """Keep Yahoo/Nasdaq 1D tape as-is; only tag session ids for metadata."""
     if not isinstance(series_row, dict):
         return series_row
-    pts = finalize_desk_intraday_points(list(series_row.get("points") or []))
-    series_row.update(_session_cycle_meta())
-    if len(pts) < 2:
-        series_row["points"] = pts
-        series_row["session_labels"] = [s["label"] for s in _SESSION_META]
-        return series_row
+    pts: list[dict[str, Any]] = []
+    for p in list(series_row.get("points") or []):
+        if not isinstance(p, dict) or not p.get("t"):
+            continue
+        row = dict(p)
+        try:
+            row["session"] = _session_id_for_ts(int(row["t"]))
+        except (TypeError, ValueError):
+            row["session"] = "regular"
+        pts.append(row)
+    pts.sort(key=lambda p: int(p["t"]))
     series_row["points"] = pts
     series_row["chart"] = "line"
-    series_row["sessions"] = _session_segments(pts)
-    series_row["session_labels"] = [s["label"] for s in _SESSION_META]
+    series_row["session_labels"] = ["盘前", "盘中", "盘后"]
+    if len(pts) >= 2:
+        series_row["sessions"] = _session_segments(pts)
     return series_row
 
 
@@ -1146,16 +1147,15 @@ async def _fetch_quote(
             for p in (nd.get("points") or [])
             if p.get("t") and p.get("v") is not None
         ]
-        pts = finalize_desk_intraday_points(raw_pts)
         series["intraday"] = _annotate_intraday_sessions(
             {
                 "tf": "intraday",
                 "label": "分时",
-                "blurb": "夜盘·盘前·盘中·盘后一体分时（Nasdaq）",
+                "blurb": "当日分时 · 含盘前/盘后（Nasdaq）",
                 "range": "1d",
                 "interval": "1m",
                 "chart": "line",
-                "points": pts,
+                "points": raw_pts,
                 "change": nd.get("change"),
                 "change_pct": nd.get("change_pct"),
                 "previous_close": nd.get("previous_close"),
