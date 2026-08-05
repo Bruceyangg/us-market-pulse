@@ -3395,11 +3395,15 @@ function bindAuthPage() {
         }
         throw new Error(msg || `请求失败（${res.status}）`);
       }
-      const next = new URLSearchParams(window.location.search).get("next") || "/";
-      window.location.href = next.startsWith("/") ? next : "/";
+      let next = new URLSearchParams(window.location.search).get("next") || "/";
+      if (!next.startsWith("/")) next = "/";
+      // Bust any stale document cache from older service workers
+      const join = next.includes("?") ? "&" : "?";
+      window.location.href = `${next}${join}_auth=${Date.now()}`;
     } catch (err) {
       if (errorEl) {
         errorEl.hidden = false;
+        errorEl.style.display = "";
         errorEl.textContent = err.message || String(err);
       }
       setStatus(`登录失败：${err.message || err}`);
