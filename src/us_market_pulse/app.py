@@ -581,14 +581,9 @@ async def api_portfolio_add(request: Request, body: HoldingIn) -> dict[str, Any]
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
-    # Save first, then try a short quote enrich. Never block "add" on Yahoo/Nasdaq.
-    try:
-        view = await asyncio.wait_for(
-            build_portfolio_view(username, force_refresh=False),
-            timeout=8.0,
-        )
-    except Exception:  # noqa: BLE001
-        view = _portfolio_stub_view(username, selected=symbol)
+    # Instant ack — never wait on Yahoo/Nasdaq for +/− from the sectors desk.
+    # Holdings page refreshes quotes via /api/portfolio separately.
+    view = _portfolio_stub_view(username, selected=symbol)
     view["user"] = current_user(request)
     return {
         "ok": True,
@@ -604,13 +599,7 @@ async def api_portfolio_remove(request: Request, body: HoldingIn) -> dict[str, A
         remove_holding(username, body.symbol)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
-    try:
-        view = await asyncio.wait_for(
-            build_portfolio_view(username, force_refresh=False),
-            timeout=8.0,
-        )
-    except Exception:  # noqa: BLE001
-        view = _portfolio_stub_view(username)
+    view = _portfolio_stub_view(username)
     view["user"] = current_user(request)
     return {"ok": True, "portfolio": view}
 
