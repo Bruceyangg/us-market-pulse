@@ -3311,34 +3311,51 @@ function readIntelQueryFlags() {
   syncHoldingsFilterUi();
 }
 
+function setAuthMode(mode) {
+  const next = mode === "register" ? "register" : "login";
+  const modeInput = document.getElementById("auth-mode");
+  const submitBtn = document.getElementById("auth-submit");
+  const errorEl = document.getElementById("auth-error");
+  const displayWrap = document.getElementById("auth-display-wrap");
+  const passwordInput = document.getElementById("auth-password");
+  document.querySelectorAll("[data-auth-tab]").forEach((el) => {
+    const on = (el.getAttribute("data-auth-tab") || "") === next;
+    el.classList.toggle("is-active", on);
+    el.setAttribute("aria-selected", on ? "true" : "false");
+  });
+  if (modeInput) modeInput.value = next;
+  if (displayWrap) {
+    displayWrap.hidden = next !== "register";
+    displayWrap.style.display = next === "register" ? "" : "none";
+  }
+  if (passwordInput) {
+    passwordInput.autocomplete =
+      next === "register" ? "new-password" : "current-password";
+  }
+  if (submitBtn) submitBtn.textContent = next === "register" ? "注册并登录" : "登录";
+  if (errorEl) {
+    errorEl.hidden = true;
+    errorEl.textContent = "";
+  }
+}
+
 function bindAuthPage() {
   const form = document.getElementById("auth-form");
   if (!form) return;
   const modeInput = document.getElementById("auth-mode");
   const submitBtn = document.getElementById("auth-submit");
   const errorEl = document.getElementById("auth-error");
-  const displayWrap = document.getElementById("auth-display-wrap");
-  const passwordInput = document.getElementById("auth-password");
+
+  // Honor /login?mode=register and keep display-name field truly hidden on login
+  const initialMode =
+    new URLSearchParams(window.location.search).get("mode") === "register"
+      ? "register"
+      : modeInput?.value || "login";
+  setAuthMode(initialMode);
 
   document.querySelectorAll("[data-auth-tab]").forEach((btn) => {
     btn.addEventListener("click", () => {
-      const mode = btn.getAttribute("data-auth-tab") || "login";
-      document.querySelectorAll("[data-auth-tab]").forEach((el) => {
-        const on = el === btn;
-        el.classList.toggle("is-active", on);
-        el.setAttribute("aria-selected", on ? "true" : "false");
-      });
-      if (modeInput) modeInput.value = mode;
-      if (displayWrap) displayWrap.hidden = mode !== "register";
-      if (passwordInput) {
-        passwordInput.autocomplete =
-          mode === "register" ? "new-password" : "current-password";
-      }
-      if (submitBtn) submitBtn.textContent = mode === "register" ? "注册并登录" : "登录";
-      if (errorEl) {
-        errorEl.hidden = true;
-        errorEl.textContent = "";
-      }
+      setAuthMode(btn.getAttribute("data-auth-tab") || "login");
     });
   });
 
@@ -3364,7 +3381,20 @@ function bindAuthPage() {
         }
       );
       const data = await res.json().catch(() => ({}));
-      if (!res.ok) throw new Error(data.detail || `HTTP ${res.status}`);
+      if (!res.ok) {
+        const detail = data?.detail;
+        let msg = `HTTP ${res.status}`;
+        if (typeof detail === "string") msg = detail;
+        else if (Array.isArray(detail)) {
+          msg = detail
+            .map((d) => (typeof d === "string" ? d : d?.msg || JSON.stringify(d)))
+            .filter(Boolean)
+            .join("；");
+        } else if (detail && typeof detail === "object" && detail.msg) {
+          msg = String(detail.msg);
+        }
+        throw new Error(msg || `请求失败（${res.status}）`);
+      }
       const next = new URLSearchParams(window.location.search).get("next") || "/";
       window.location.href = next.startsWith("/") ? next : "/";
     } catch (err) {
@@ -3372,6 +3402,7 @@ function bindAuthPage() {
         errorEl.hidden = false;
         errorEl.textContent = err.message || String(err);
       }
+      setStatus(`登录失败：${err.message || err}`);
     } finally {
       if (submitBtn) submitBtn.disabled = false;
     }

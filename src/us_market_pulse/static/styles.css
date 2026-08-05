@@ -562,6 +562,8 @@ html[data-theme="dark"] .holding-intel-sticky {
   max-width: 32rem;
   margin: 0 auto;
   padding: 1.5rem 1.25rem 3rem;
+  position: relative;
+  z-index: 2;
 }
 
 .auth-card,
@@ -572,6 +574,7 @@ html[data-theme="dark"] .holding-intel-sticky {
   background:
     linear-gradient(165deg, rgba(255, 255, 255, 0.94), rgba(243, 248, 250, 0.9));
   box-shadow: var(--shadow);
+  color: var(--ink);
 }
 
 .auth-card h1,
@@ -595,6 +598,12 @@ html[data-theme="dark"] .holding-intel-sticky {
 .auth-form label {
   display: grid;
   gap: 0.3rem;
+}
+
+/* display:grid above would otherwise override the HTML hidden attribute */
+.auth-form label[hidden],
+.auth-error[hidden] {
+  display: none !important;
 }
 
 .auth-form label span {
@@ -5227,6 +5236,34 @@ html[data-theme="dark"] .search input {
   background: var(--input-bg);
   color: var(--ink);
   caret-color: var(--ink);
+}
+
+/* Auth desk: keep card/controls readable in night mode (avoid washed-out / invisible UI) */
+html[data-theme="dark"] .auth-card,
+html[data-theme="dark"] .auth-gate-card {
+  background: color-mix(in srgb, var(--elevated) 92%, #0b1220);
+  border-color: color-mix(in srgb, var(--line) 80%, #6aa8d4);
+  box-shadow: 0 18px 48px rgba(0, 0, 0, 0.45);
+  color: var(--ink);
+}
+
+html[data-theme="dark"] .auth-card .page-kicker,
+html[data-theme="dark"] .auth-card .lede,
+html[data-theme="dark"] .auth-note {
+  color: var(--ink-soft);
+}
+
+html[data-theme="dark"] .auth-form input {
+  background: rgba(255, 255, 255, 0.08);
+  border-color: color-mix(in srgb, var(--line) 70%, #6aa8d4);
+  color: var(--ink);
+}
+
+html[data-theme="dark"] .auth-card .btn.primary,
+html[data-theme="dark"] .auth-gate-card .btn.primary {
+  background: linear-gradient(135deg, #1f6b55, #2f6f9f);
+  color: #f4faf7;
+  border: 1px solid transparent;
 }
 
 html[data-theme="dark"] .settings-form input::placeholder,

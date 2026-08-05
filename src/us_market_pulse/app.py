@@ -152,6 +152,14 @@ async def login_page(request: Request) -> HTMLResponse:
     return _page(request, "login.html", "login")
 
 
+@app.get("/register", response_class=HTMLResponse)
+async def register_page(request: Request) -> HTMLResponse:
+    """Alias so /register does not 404 — same desk as /login."""
+    if current_username(request):
+        return RedirectResponse("/", status_code=303)
+    return RedirectResponse("/login?mode=register", status_code=303)
+
+
 @app.get("/markets", response_class=HTMLResponse)
 async def markets_page(request: Request) -> HTMLResponse:
     return _page(request, "markets.html", "markets")
