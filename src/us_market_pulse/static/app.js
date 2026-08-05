@@ -29,8 +29,10 @@ const state = {
   portfolioSort: { key: "change_pct", dir: "desc" },
   portfolioPreview: null,
   portfolioSelectBusy: false,
+  portfolioSelectPending: null,
   portfolioBoardCache: {},
   holdingToggleBusy: false,
+  intradayPollBusy: false,
   holdingSymbols: null,
   holdingsOnly: false,
   holdingFilter: "",
@@ -884,6 +886,11 @@ function bindZoomableChart(
   if (!canvasEl) return;
   const list = points || [];
   const len = list.length;
+  const prev = chartZoomData.get(key);
+  const sameShell =
+    prev?.root === canvasEl &&
+    prev?.scope === scope &&
+    Boolean(canvasEl.querySelector(".chart-zoom-stage"));
   chartZoomData.set(key, {
     root: canvasEl,
     points: list,
@@ -897,6 +904,10 @@ function bindZoomableChart(
     cycleStart,
   });
   ensureChartZoom(key, scope, len, tf, kind);
+  if (sameShell) {
+    paintZoomableChart(key);
+    return;
+  }
   const z = state.chartZoom[key];
   const full = defaultChartZoom(len, tf, kind);
   const zoomed = z.count < len || z.start !== full.start;
@@ -1690,7 +1701,13 @@ function mergePortfolioSelectResponse(symbol, res) {
       selected_earnings: res.selected_earnings || board.earnings || null,
       value_chain: res.value_chain || board.value_chain || null,
     };
-    renderPortfolio(state.portfolio);
+    // Chart + focus only — avoid rebuilding the whole holdings list on every /select.
+    if (els.holdingRail?.querySelector(`[data-holding="${symbol}"]`)) {
+      paintPortfolioSelection();
+      refreshActiveRowQuote(els.holdingRail, board, "data-holding");
+    } else {
+      renderPortfolio(state.portfolio);
+    }
     persistPageDataCache();
     return;
   }
@@ -1705,27 +1722,41 @@ function mergePortfolioSelectResponse(symbol, res) {
 async function selectPortfolioSymbol(symbol, { quiet = false } = {}) {
   const sym = String(symbol || "").trim().toUpperCase();
   if (!sym) return;
-  if (sym === state.portfolio?.selected && pickHasChart(state.portfolio?.selected_board)) {
+  if (
+    sym === state.portfolio?.selected &&
+    deskChartReady(state.portfolio?.selected_board)
+  ) {
     state.portfolioPreview = null;
-    renderPortfolio(state.portfolio);
+    paintPortfolioSelection();
     if (PAGE === "desk") loadHoldingIntel({ symbol: sym, soft: true });
     return;
   }
   // Paint instantly from local list / board cache — never block the UI on /select.
   const painted = applyPortfolioSelectionLocal(sym);
   if (painted) {
-    renderPortfolio(painted);
+    paintPortfolioSelection();
     setStatus(`已切换 ${painted.selected_board?.name || sym}`);
     if (PAGE === "desk") loadHoldingIntel({ symbol: sym, soft: true });
   }
+  // Coalesce rapid clicks — only the latest symbol hits the network.
+  state.portfolioSelectPending = sym;
   if (state.portfolioSelectBusy) return;
   state.portfolioSelectBusy = true;
   try {
-    const data = await portfolioPost("/api/portfolio/select", { symbol: sym });
-    mergePortfolioSelectResponse(sym, data);
-  } catch (err) {
-    if (!quiet && els.portfolioBlurb) {
-      els.portfolioBlurb.textContent = `详情刷新失败：${err.message || err}`;
+    while (state.portfolioSelectPending) {
+      const target = state.portfolioSelectPending;
+      state.portfolioSelectPending = null;
+      try {
+        const data = await portfolioPost("/api/portfolio/select", {
+          symbol: target,
+        });
+        if (state.portfolioSelectPending) continue;
+        mergePortfolioSelectResponse(target, data);
+      } catch (err) {
+        if (!quiet && !state.portfolioSelectPending && els.portfolioBlurb) {
+          els.portfolioBlurb.textContent = `详情刷新失败：${err.message || err}`;
+        }
+      }
     }
   } finally {
     state.portfolioSelectBusy = false;
@@ -3059,9 +3090,13 @@ els.tfFilters?.addEventListener("click", (event) => {
 els.portfolioTfFilters?.addEventListener("click", (event) => {
   const btn = event.target.closest("[data-ptf]");
   if (!btn) return;
-  state.portfolioTf = btn.dataset.ptf;
-  if (state.portfolio) renderPortfolio(state.portfolio);
-  else renderPortfolioChart();
+  const tf = btn.dataset.ptf;
+  if (!tf || tf === state.portfolioTf) return;
+  state.portfolioTf = tf;
+  // TF switch is chart-only — list sparks stay on day tape.
+  renderPortfolioChart();
+  persistPageDataCache();
+  if (tf === "intraday") refreshActiveIntraday({ force: false });
 });
 
 els.portfolioManageBtn?.addEventListener("click", () => {
@@ -3142,7 +3177,8 @@ document.addEventListener("keydown", (event) => {
     if (!tf) return;
     event.preventDefault();
     state.portfolioTf = tf;
-    renderPortfolio(state.portfolio);
+    renderPortfolioChart();
+    persistPageDataCache();
     return;
   }
 
@@ -4159,6 +4195,220 @@ function pickHasIntraday(pick) {
   return (pick?.series?.intraday?.points || []).length >= 2;
 }
 
+function deskChartReady(pick) {
+  return pickHasChart(pick) || pickHasIntraday(pick);
+}
+
+function markActiveListRow(listEl, symbol, attr = "data-symbol") {
+  if (!listEl) return;
+  const sym = String(symbol || "").toUpperCase();
+  listEl.querySelectorAll(".holding-row, .sector-pick-row").forEach((row) => {
+    const rowSym = (
+      row.getAttribute(attr) ||
+      row.getAttribute("data-holding") ||
+      row.getAttribute("data-symbol") ||
+      ""
+    ).toUpperCase();
+    const on = Boolean(sym && rowSym === sym);
+    row.classList.toggle("is-active", on);
+    row.setAttribute("aria-selected", on ? "true" : "false");
+  });
+}
+
+function refreshActiveRowQuote(listEl, pick, attr = "data-symbol") {
+  if (!listEl || !pick?.symbol) return;
+  const row = listEl.querySelector(
+    `[${attr}="${String(pick.symbol).toUpperCase()}"]`
+  );
+  if (!row) return;
+  const spark = row.querySelector(".spark-wrap");
+  if (spark && pickHasIntraday(pick)) {
+    spark.innerHTML = holdingSparkSvg(pick, "intraday");
+  }
+  const pct = pick.change_pct;
+  const priceEl = row.querySelector(".quote .price");
+  const chgEl = row.querySelector(".quote .chg");
+  if (priceEl && pick.price != null) {
+    priceEl.className = `price ${pctClass(pct)}`;
+    priceEl.textContent = formatNumber(pick.price, "");
+  }
+  if (chgEl && pct != null) {
+    chgEl.className = `chg ${pctClass(pct)}`;
+    chgEl.textContent = pctText(pct);
+  }
+  row.classList.toggle("up", pctClass(pct) === "up");
+  row.classList.toggle("down", pctClass(pct) === "down");
+}
+
+function paintPortfolioSelection() {
+  markActiveListRow(els.holdingRail, state.portfolio?.selected, "data-holding");
+  syncHoldingPreviewClasses();
+  renderPortfolioChart();
+  renderPortfolioFocus(state.portfolio);
+}
+
+function paintSectorSelection() {
+  const data = state.sectors || {};
+  markActiveListRow(
+    els.sectorPickList,
+    data.selected_symbol || state.sectorSymbol,
+    "data-symbol"
+  );
+  renderSectorPickChart();
+  renderSectorNewsFeed(data);
+  renderSymbolNewsFeed(data);
+  renderEarningsCalendar(data);
+  renderValueChain(data?.value_chain || data?.selected_pick?.value_chain);
+  scheduleSectorsDeskHeightSync();
+}
+
+function updateDeskChartQuote(root, { pct, price } = {}) {
+  if (!root) return;
+  const range = root.querySelector(".chart-head .range");
+  if (range && pct != null) {
+    range.className = `range chg ${pctClass(pct)}`;
+    range.textContent = pctText(pct);
+  }
+  const priceV = root.querySelector(".portfolio-stats > span .v");
+  if (priceV && price != null) {
+    priceV.className = `v ${pctClass(pct)}`;
+    priceV.textContent = formatNumber(price, "");
+  }
+}
+
+function patchZoomableIntraday(key, series, pick) {
+  const points = series?.points || [];
+  if (points.length < 2) return false;
+  const meta = chartZoomData.get(key);
+  if (!meta?.root?.querySelector(".chart-zoom-stage") || meta.tf !== "intraday") {
+    return false;
+  }
+  const pct =
+    series?.change_pct != null ? series.change_pct : pick?.change_pct;
+  const up = !(typeof pct === "number" && pct < 0);
+  meta.points = points;
+  meta.len = points.length;
+  meta.up = up;
+  meta.sessions = series?.sessions || null;
+  meta.previousClose = series?.previous_close ?? null;
+  meta.cycleStart = series?.cycle_start ?? null;
+  paintZoomableChart(key);
+  return true;
+}
+
+function applyIntradaySnapshot(sym, snap) {
+  const symbol = String(sym || "").toUpperCase();
+  const intra = snap?.series?.intraday;
+  if (!symbol || !intra?.points?.length) return;
+  const patch = {
+    price: snap.price,
+    change: snap.change,
+    change_pct: snap.change_pct,
+    series: { intraday: intra },
+  };
+
+  if (PAGE === "desk" && state.portfolio) {
+    const board = state.portfolio.selected_board;
+    if (board?.symbol === symbol) {
+      const nextBoard = mergePickPreserveIntraday(
+        {
+          ...board,
+          ...patch,
+          series: { ...(board.series || {}), intraday: intra },
+          symbol,
+        },
+        board
+      );
+      state.portfolio.selected_board = nextBoard;
+      state.portfolio.board = nextBoard;
+      state.portfolio.holdings = (state.portfolio.holdings || []).map((h) =>
+        h.symbol === symbol
+          ? mergePickPreserveIntraday({ ...h, ...nextBoard, symbol }, h)
+          : h
+      );
+      cachePortfolioBoard(nextBoard);
+      refreshActiveRowQuote(els.holdingRail, nextBoard, "data-holding");
+      if (
+        state.portfolioTf === "intraday" &&
+        !state.portfolioPreview &&
+        state.portfolio.selected === symbol
+      ) {
+        if (!patchZoomableIntraday("portfolio", intra, nextBoard)) {
+          renderPortfolioChart();
+        } else {
+          updateDeskChartQuote(els.portfolioChart, {
+            pct: snap.change_pct ?? nextBoard.change_pct,
+            price: snap.price ?? nextBoard.price,
+          });
+        }
+      }
+    }
+  }
+
+  if (PAGE === "sectors" && state.sectors) {
+    const pick = state.sectors.selected_pick;
+    if (pick?.symbol === symbol) {
+      const nextPick = mergePickPreserveIntraday(
+        {
+          ...pick,
+          ...patch,
+          series: { ...(pick.series || {}), intraday: intra },
+          symbol,
+        },
+        pick
+      );
+      state.sectors.selected_pick = nextPick;
+      state.sectors.picks = (state.sectors.picks || []).map((p) =>
+        p.symbol === symbol
+          ? mergePickPreserveIntraday({ ...p, ...nextPick, symbol }, p)
+          : p
+      );
+      refreshActiveRowQuote(els.sectorPickList, nextPick, "data-symbol");
+      if (state.sectorTf === "intraday" && state.sectorSymbol === symbol) {
+        if (!patchZoomableIntraday("sector", intra, nextPick)) {
+          renderSectorPickChart();
+        } else {
+          updateDeskChartQuote(els.sectorPickChart, {
+            pct: snap.change_pct ?? nextPick.change_pct,
+            price: snap.price ?? nextPick.price,
+          });
+        }
+      }
+    }
+  }
+}
+
+async function refreshActiveIntraday({ force = false } = {}) {
+  if (PAGE !== "desk" && PAGE !== "sectors") return;
+  const tf = PAGE === "desk" ? state.portfolioTf : state.sectorTf;
+  if (tf !== "intraday") return;
+  const sym =
+    PAGE === "desk"
+      ? state.portfolioPreview || state.portfolio?.selected || ""
+      : state.sectorSymbol || state.sectors?.selected_symbol || "";
+  if (!sym || state.intradayPollBusy) return;
+  state.intradayPollBusy = true;
+  try {
+    const url = `/api/quote/intraday?symbol=${encodeURIComponent(sym)}${
+      force ? "&refresh=true" : ""
+    }`;
+    const res = await fetch(url, { credentials: "same-origin" });
+    if (!res.ok) return;
+    const snap = await res.json();
+    // Drop stale replies if the user already switched symbols.
+    const current =
+      PAGE === "desk"
+        ? state.portfolioPreview || state.portfolio?.selected || ""
+        : state.sectorSymbol || "";
+    if (String(current).toUpperCase() !== String(sym).toUpperCase()) return;
+    applyIntradaySnapshot(sym, snap);
+  } catch {
+    /* quiet poll */
+  } finally {
+    state.intradayPollBusy = false;
+  }
+}
+
 /** Keep a prior 分时 series when a refresh brings day/month but empty intraday. */
 function mergePickPreserveIntraday(next, prev) {
   if (!next) return prev || next;
@@ -4205,7 +4455,7 @@ function openSectorDesk(id, { scroll = true } = {}) {
   }
 
   const load =
-    same && state.sectors && pickHasChart(state.sectors.selected_pick)
+    same && state.sectors && deskChartReady(state.sectors.selected_pick)
       ? Promise.resolve(state.sectors)
       : loadSectorDesk();
   Promise.resolve(load).finally(() => {
@@ -5017,8 +5267,8 @@ function selectSectorSymbol(sym) {
     return;
   }
   const already =
-    symbol === state.sectorSymbol && pickHasChart(data.selected_pick);
-  // Always paint locally first (lite spark or full chart) — never wait on network.
+    symbol === state.sectorSymbol && deskChartReady(data.selected_pick);
+  // Always paint locally first — never wait on network / rebuild the whole list.
   state.sectorSymbol = symbol;
   data.selected_symbol = symbol;
   data.selected_pick = pick;
@@ -5026,10 +5276,14 @@ function selectSectorSymbol(sym) {
   data.value_chain = pick.value_chain || data.value_chain;
   data.symbol_news = pick.symbol_news || [];
   syncSectorQuery();
-  renderSectorPicks(data);
+  paintSectorSelection();
+  refreshActiveRowQuote(els.sectorPickList, pick, "data-symbol");
   setStatus(`已切换 ${pick.name || symbol} · ${pick.sector_label || ""}`);
   persistPageDataCache();
-  if (already || pickHasChart(pick)) return;
+  if (already || deskChartReady(pick)) {
+    if (state.sectorTf === "intraday") refreshActiveIntraday({ force: false });
+    return;
+  }
   // Background upgrade for day/month/quarter series
   loadSectorDesk();
 }
@@ -5122,7 +5376,10 @@ function bindSectorDesk() {
       const tf = btn.getAttribute("data-stf");
       if (!tf || tf === state.sectorTf) return;
       state.sectorTf = tf;
-      renderSectorPicks(state.sectors || {});
+      // Same as holdings: TF switch paints the middle chart only.
+      renderSectorPickChart();
+      persistPageDataCache();
+      if (tf === "intraday") refreshActiveIntraday({ force: false });
     });
   });
   const desk = els.sectorsDesk;
@@ -5534,14 +5791,17 @@ function bootPage() {
       const selected = state.portfolio?.selected || "";
       loadHoldingIntel({ symbol: selected || "", soft: painted });
       persistPageDataCache();
+      if (state.portfolioTf === "intraday") refreshActiveIntraday();
     });
+    // Soft list refresh — force=true was making buttons feel stuck every 90s.
     trackPageInterval(() => {
-      loadPortfolio({ refresh: true });
+      loadPortfolio({ refresh: false });
       loadHoldingIntel({
         symbol: state.holdingFilter || state.portfolio?.selected || "",
         soft: true,
       });
     }, 90 * 1000);
+    trackPageInterval(() => refreshActiveIntraday(), 30 * 1000);
   } else if (PAGE === "markets") {
     const painted = paintFromPageDataCache("markets");
     if (painted) restoreScrollPosition();
@@ -5559,8 +5819,13 @@ function bootPage() {
       setStatus("已恢复板块缓存 · 后台刷新中…");
     }
     bindSectorDesk();
-    refreshHoldingSymbols().finally(() => loadSectorDesk());
+    refreshHoldingSymbols().finally(() =>
+      loadSectorDesk().then(() => {
+        if (state.sectorTf === "intraday") refreshActiveIntraday();
+      })
+    );
     trackPageInterval(() => loadSectorDesk(), 90 * 1000);
+    trackPageInterval(() => refreshActiveIntraday(), 30 * 1000);
   } else if (PAGE === "earnings") {
     bindEarningsDesk();
     loadEarningsDesk();
