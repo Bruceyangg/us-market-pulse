@@ -319,42 +319,14 @@ async def upgrade_selected_board(
         and (now - float(_CACHE.get("quotes_at") or 0) < _QUOTE_TTL)
         and (_pick_has_chart(cached) or _pick_has_intraday(cached))
     )
-
-    yahoo_headers = {
-        "User-Agent": USER_AGENT,
-        "Accept": "application/json",
-        "Accept-Language": "en-US,en;q=0.9",
-        "Origin": "https://finance.yahoo.com",
-        "Referer": "https://finance.yahoo.com/",
-    }
-
-    bundle: dict[str, Any] | None = cached if cache_fresh else None
-    if not bundle:
-        try:
-            async with httpx.AsyncClient(
-                headers=yahoo_headers,
-                follow_redirects=True,
-                trust_env=False,
-                timeout=httpx.Timeout(14.0, connect=3.0),
-            ) as http:
-                bundle, errs = await asyncio.wait_for(
-                    _fetch_quote_limited(http, sym, sym, force=force),
-                    timeout=14.0,
-                )
-            errors.extend(errs or [])
-        except (asyncio.TimeoutError, httpx.HTTPError) as exc:
-            bundle = None
-            errors.append(f"{sym}: chart timeout ({exc.__class__.__name__})")
-
-    day_quotes: dict[str, Any] = {}
-    try:
-        day_quotes = await asyncio.wait_for(fetch_day_quotes([sym]), timeout=6.0)
-    except Exception as exc:  # noqa: BLE001
-        errors.append(f"day quote: {exc}")
-    quote = day_quotes.get(sym)
-
     vc = _value_chain_for(sym)
-    if bundle and (_bundle_has_full_chart(bundle) or _pick_has_intraday(bundle)):
+
+    def _rich_from_bundle(
+        bundle: dict[str, Any],
+        quote: dict[str, Any] | None = None,
+        *,
+        earn: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
         wave = _momentum_fields(bundle)
         day_pct = bundle.get("change_pct")
         if day_pct is None and quote:
@@ -385,66 +357,127 @@ async def upgrade_selected_board(
             rich["price"] = quote.get("price")
             rich["change"] = quote.get("change")
             rich["change_pct"] = quote.get("change_pct")
-        boards[sym] = bundle
-        _CACHE["boards"] = boards
-        _CACHE["quotes_at"] = now
-    else:
-        rich = _lite_holding_card(holding_meta, quote)
-        rich["chart_attempted"] = True
-        rich["value_chain"] = vc
+        if earn:
+            rich["earnings"] = earn
+        elif isinstance(bundle.get("earnings"), dict):
+            rich["earnings"] = bundle["earnings"]
+        try:
+            rich["move_analysis"] = _move_analysis(
+                day_pct=rich.get("change_pct"),
+                month_pct=wave["month_change_pct"]
+                if _pick_has_chart(rich)
+                else rich.get("month_change_pct"),
+                quarter_pct=wave["quarter_change_pct"],
+                vs_sector_pct=None,
+                is_wave=bool(rich.get("is_wave")),
+                sector_label=str(rich.get("sector_label") or ""),
+                etf_day_pct=None,
+                earnings=rich.get("earnings")
+                if isinstance(rich.get("earnings"), dict)
+                else None,
+                value_chain=vc,
+                news=None,
+            )
+        except Exception:  # noqa: BLE001
+            rich["move_analysis"] = {
+                "bias": "neutral",
+                "bias_zh": "中性",
+                "summary": "行情数据不足，暂无法判断涨跌驱动。",
+                "factors": ["等待报价刷新后再解读"],
+            }
+        return rich
 
-    earn = None
-    try:
-        upcoming_map = await asyncio.wait_for(
-            get_upcoming_earnings_map(force=False),
-            timeout=6.0,
-        )
-    except Exception:  # noqa: BLE001
-        upcoming_map = {}
+    # Warm cache: return immediately — skip day-quote / earnings network waits.
+    if cache_fresh and cached:
+        rich = _rich_from_bundle(cached)
+        return {
+            "selected": sym,
+            "selected_symbol": sym,
+            "selected_board": rich,
+            "board": rich,
+            "selected_earnings": rich.get("earnings"),
+            "value_chain": rich.get("value_chain"),
+            "errors": errors,
+            "cache": "hit",
+        }
+
+    yahoo_headers = {
+        "User-Agent": USER_AGENT,
+        "Accept": "application/json",
+        "Accept-Language": "en-US,en;q=0.9",
+        "Origin": "https://finance.yahoo.com",
+        "Referer": "https://finance.yahoo.com/",
+    }
+
+    bundle: dict[str, Any] | None = None
     try:
         async with httpx.AsyncClient(
             headers=yahoo_headers,
             follow_redirects=True,
             trust_env=False,
-            timeout=httpx.Timeout(6.0, connect=2.0),
-        ) as earn_client:
-            earn = await asyncio.wait_for(
-                _fetch_earnings_cached(
-                    earn_client,
-                    sym,
-                    force=force,
-                    upcoming_map=upcoming_map,
-                ),
-                timeout=6.0,
+            timeout=httpx.Timeout(14.0, connect=3.0),
+        ) as http:
+            bundle, errs = await asyncio.wait_for(
+                _fetch_quote_limited(http, sym, sym, force=force),
+                timeout=14.0,
             )
-    except Exception as exc:  # noqa: BLE001
-        errors.append(f"{sym}: earnings {exc}")
-    if earn:
-        rich["earnings"] = earn
+        errors.extend(errs or [])
+    except (asyncio.TimeoutError, httpx.HTTPError) as exc:
+        bundle = None
+        errors.append(f"{sym}: chart timeout ({exc.__class__.__name__})")
 
-    wave = _momentum_fields(rich)
+    day_quotes: dict[str, Any] = {}
     try:
-        rich["move_analysis"] = _move_analysis(
-            day_pct=rich.get("change_pct"),
-            month_pct=wave["month_change_pct"]
-            if _pick_has_chart(rich)
-            else rich.get("month_change_pct"),
-            quarter_pct=wave["quarter_change_pct"],
-            vs_sector_pct=None,
-            is_wave=bool(rich.get("is_wave")),
-            sector_label=str(rich.get("sector_label") or ""),
-            etf_day_pct=None,
-            earnings=earn if isinstance(earn, dict) else None,
-            value_chain=vc,
-            news=None,
-        )
-    except Exception:  # noqa: BLE001
-        rich["move_analysis"] = {
-            "bias": "neutral",
-            "bias_zh": "中性",
-            "summary": "行情数据不足，暂无法判断涨跌驱动。",
-            "factors": ["等待报价刷新后再解读"],
-        }
+        day_quotes = await asyncio.wait_for(fetch_day_quotes([sym]), timeout=4.0)
+    except Exception as exc:  # noqa: BLE001
+        errors.append(f"day quote: {exc}")
+    quote = day_quotes.get(sym)
+
+    if bundle and (_bundle_has_full_chart(bundle) or _pick_has_intraday(bundle)):
+        boards[sym] = bundle
+        _CACHE["boards"] = boards
+        _CACHE["quotes_at"] = now
+        rich = _rich_from_bundle(bundle, quote)
+    else:
+        rich = _lite_holding_card(holding_meta, quote)
+        rich["chart_attempted"] = True
+        rich["value_chain"] = vc
+
+    earn = rich.get("earnings") if isinstance(rich.get("earnings"), dict) else None
+    if not earn:
+        try:
+            upcoming_map = await asyncio.wait_for(
+                get_upcoming_earnings_map(force=False),
+                timeout=4.0,
+            )
+        except Exception:  # noqa: BLE001
+            upcoming_map = {}
+        try:
+            async with httpx.AsyncClient(
+                headers=yahoo_headers,
+                follow_redirects=True,
+                trust_env=False,
+                timeout=httpx.Timeout(5.0, connect=2.0),
+            ) as earn_client:
+                earn = await asyncio.wait_for(
+                    _fetch_earnings_cached(
+                        earn_client,
+                        sym,
+                        force=force,
+                        upcoming_map=upcoming_map,
+                    ),
+                    timeout=5.0,
+                )
+        except Exception as exc:  # noqa: BLE001
+            errors.append(f"{sym}: earnings {exc}")
+        if earn:
+            rich["earnings"] = earn
+            # Rebuild move_analysis with earnings context
+            rich = _rich_from_bundle(
+                {**(bundle or {}), **rich, "earnings": earn},
+                quote,
+                earn=earn,
+            )
 
     return {
         "selected": sym,
