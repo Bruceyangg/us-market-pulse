@@ -1078,7 +1078,7 @@ async def _fetch_quote(
 
     # Start Nasdaq immediately — Yahoo 429s often burn the desk budget alone.
     nd_intra_task = asyncio.create_task(
-        fetch_nasdaq_intraday(client, sym, max_points=240)
+        fetch_nasdaq_intraday(client, sym, max_points=480)
     )
     nd_ohlc_task = asyncio.create_task(fetch_nasdaq_daily_bars(client, sym))
 
