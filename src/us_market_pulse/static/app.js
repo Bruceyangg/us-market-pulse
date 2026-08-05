@@ -1592,14 +1592,7 @@ function renderPortfolio(data) {
                   sparkSrc,
                   "intraday"
                 )}</span>
-                <span class="quote">
-                  <span class="price ${pctClass(pct)}">${escapeHtml(
-                    h.price == null ? "—" : formatNumber(h.price, "")
-                  )}</span>
-                  <span class="chg ${pctClass(pct)}">${escapeHtml(
-                    pctText(pct)
-                  )}</span>
-                </span>
+                ${listQuoteHtml(h)}
               </button>
               <button
                 type="button"
@@ -1679,7 +1672,10 @@ function mergePortfolioSelectResponse(symbol, res) {
       ? state.portfolio.selected_board
       : state.portfolioBoardCache?.[symbol] ||
         (state.portfolio?.holdings || []).find((h) => h.symbol === symbol);
-  const board = mergePickPreserveIntraday(rawBoard, prevBoard);
+  const board = mergeListQuoteFields(
+    mergePickPreserveIntraday(rawBoard, prevBoard),
+    prevBoard
+  );
   if (board) cachePortfolioBoard(board);
   if (res?.portfolio?.holdings) {
     for (const h of res.portfolio.holdings) cachePortfolioBoard(h);
@@ -1834,14 +1830,19 @@ async function loadPortfolio({ refresh = false } = {}) {
         state.portfolio.holdings.map((h) => [h.symbol, h])
       );
       data.holdings = data.holdings.map((h) =>
-        mergePickPreserveIntraday(h, prevBySym[h.symbol])
+        mergeListQuoteFields(
+          mergePickPreserveIntraday(h, prevBySym[h.symbol]),
+          prevBySym[h.symbol]
+        )
       );
       if (data.selected_board) {
-        data.selected_board = mergePickPreserveIntraday(
-          data.selected_board,
+        const prevBoard =
           state.portfolio.selected_board?.symbol === data.selected
             ? state.portfolio.selected_board
-            : prevBySym[data.selected]
+            : prevBySym[data.selected];
+        data.selected_board = mergeListQuoteFields(
+          mergePickPreserveIntraday(data.selected_board, prevBoard),
+          prevBoard
         );
         data.board = data.selected_board;
       }
@@ -3809,6 +3810,66 @@ function pctText(pct) {
   return `${pct >= 0 ? "+" : ""}${pct.toFixed(2)}%`;
 }
 
+/** Shared holdings/sectors list quote: 收盘涨跌幅 + 实时涨跌幅 + 时段. */
+function listQuoteHtml(pick) {
+  const closePct = pick?.change_pct;
+  const rtPct =
+    pick?.rt_change_pct != null ? pick.rt_change_pct : null;
+  const sessionLabel = String(pick?.session_label || "").trim();
+  const price =
+    pick?.price == null ? "—" : formatNumber(pick.price, "");
+  const rtPrice =
+    pick?.rt_price == null ? "" : formatNumber(pick.rt_price, "");
+  const showRt =
+    rtPct != null || pick?.rt_price != null || Boolean(sessionLabel);
+  return `
+    <span class="quote">
+      <span class="quote-main">
+        <span class="price ${pctClass(closePct)}">${escapeHtml(price)}</span>
+        <span class="chg chg-close ${pctClass(closePct)}" title="收盘涨跌幅">${escapeHtml(
+          pctText(closePct)
+        )}</span>
+      </span>
+      ${
+        showRt
+          ? `<span class="quote-rt" title="实时涨跌幅">
+        <span class="rt-price ${pctClass(rtPct)}">${escapeHtml(
+          rtPrice || "—"
+        )}</span>
+        <span class="rt-chg ${pctClass(rtPct)}">${escapeHtml(
+          pctText(rtPct)
+        )}</span>
+        ${
+          sessionLabel
+            ? `<span class="session-tag">${escapeHtml(sessionLabel)}</span>`
+            : ""
+        }
+      </span>`
+          : ""
+      }
+    </span>
+  `;
+}
+
+function mergeListQuoteFields(next, prev) {
+  if (!next) return prev || next;
+  if (!prev) return next;
+  const out = { ...next };
+  for (const key of [
+    "price",
+    "change",
+    "change_pct",
+    "rt_price",
+    "rt_change",
+    "rt_change_pct",
+    "session",
+    "session_label",
+  ]) {
+    if (out[key] == null && prev[key] != null) out[key] = prev[key];
+  }
+  return out;
+}
+
 function renderAiDesk(aiDesk) {
   const data = aiDesk || {};
   const analysis = data.analysis || {};
@@ -4225,17 +4286,9 @@ function refreshActiveRowQuote(listEl, pick, attr = "data-symbol") {
   if (spark && pickHasIntraday(pick)) {
     spark.innerHTML = holdingSparkSvg(pick, "intraday");
   }
+  const quote = row.querySelector(".quote");
+  if (quote) quote.outerHTML = listQuoteHtml(pick);
   const pct = pick.change_pct;
-  const priceEl = row.querySelector(".quote .price");
-  const chgEl = row.querySelector(".quote .chg");
-  if (priceEl && pick.price != null) {
-    priceEl.className = `price ${pctClass(pct)}`;
-    priceEl.textContent = formatNumber(pick.price, "");
-  }
-  if (chgEl && pct != null) {
-    chgEl.className = `chg ${pctClass(pct)}`;
-    chgEl.textContent = pctText(pct);
-  }
   row.classList.toggle("up", pctClass(pct) === "up");
   row.classList.toggle("down", pctClass(pct) === "down");
 }
@@ -4300,12 +4353,17 @@ function applyIntradaySnapshot(sym, snap) {
   const symbol = String(sym || "").toUpperCase();
   const intra = snap?.series?.intraday;
   if (!symbol || !intra?.points?.length) return;
-  const patch = {
-    price: snap.price,
-    change: snap.change,
-    change_pct: snap.change_pct,
+  // Poll updates 实时价/涨跌; keep 收盘涨跌幅 (change_pct) from the day quote.
+  const rtPatch = {
+    rt_price: snap.price,
+    rt_change: snap.change,
+    rt_change_pct: snap.change_pct,
     series: { intraday: intra },
   };
+  if (snap.session_label) {
+    rtPatch.session = snap.session;
+    rtPatch.session_label = snap.session_label;
+  }
 
   if (PAGE === "desk" && state.portfolio) {
     const board = state.portfolio.selected_board;
@@ -4313,7 +4371,7 @@ function applyIntradaySnapshot(sym, snap) {
       const nextBoard = mergePickPreserveIntraday(
         {
           ...board,
-          ...patch,
+          ...rtPatch,
           series: { ...(board.series || {}), intraday: intra },
           symbol,
         },
@@ -4351,7 +4409,7 @@ function applyIntradaySnapshot(sym, snap) {
       const nextPick = mergePickPreserveIntraday(
         {
           ...pick,
-          ...patch,
+          ...rtPatch,
           series: { ...(pick.series || {}), intraday: intra },
           symbol,
         },
@@ -5138,12 +5196,7 @@ function renderSectorPicks(data) {
                   )} · 月 ${escapeHtml(pctText(pick.month_change_pct))}</span>
                 </span>
                 <span class="spark-wrap">${holdingSparkSvg(sparkSrc, "intraday")}</span>
-                <span class="quote">
-                  <span class="price ${pctClass(pct)}">${escapeHtml(
-                    pick.price == null ? "—" : formatNumber(pick.price, "")
-                  )}</span>
-                  <span class="chg ${pctClass(pct)}">${escapeHtml(pctText(pct))}</span>
-                </span>
+                ${listQuoteHtml(pick)}
               </button>
               <button
                 type="button"
@@ -5322,27 +5375,32 @@ async function loadSectorDesk({ force = false } = {}) {
         const prev = prevBySym[p.symbol];
         if (!prev) return p;
         if (!pickHasChart(p) && pickHasChart(prev)) {
-          return mergePickPreserveIntraday(
-            {
-              ...p,
-              series: { ...(p.series || {}), ...prev.series },
-              points: prev.points?.length ? prev.points : p.points,
-              lite: false,
-            },
+          return mergeListQuoteFields(
+            mergePickPreserveIntraday(
+              {
+                ...p,
+                series: { ...(p.series || {}), ...prev.series },
+                points: prev.points?.length ? prev.points : p.points,
+                lite: false,
+              },
+              prev
+            ),
             prev
           );
         }
-        return mergePickPreserveIntraday(p, prev);
+        return mergeListQuoteFields(mergePickPreserveIntraday(p, prev), prev);
       });
       if (data.selected_symbol) {
         const fromList = data.picks.find(
           (p) => p.symbol === data.selected_symbol
         );
-        const merged = mergePickPreserveIntraday(
-          fromList || data.selected_pick,
+        const prevSel =
           prevSelected?.symbol === data.selected_symbol
             ? prevSelected
-            : prevBySym[data.selected_symbol]
+            : prevBySym[data.selected_symbol];
+        const merged = mergeListQuoteFields(
+          mergePickPreserveIntraday(fromList || data.selected_pick, prevSel),
+          prevSel
         );
         if (merged) data.selected_pick = merged;
       }
