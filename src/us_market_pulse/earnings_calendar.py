@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import re
 import time
 from datetime import date, datetime, timedelta, timezone
 from typing import Any
@@ -30,6 +31,26 @@ _TIME_LABELS = {
     "time-after-hours": "盘后",
     "time-not-supplied": "时段未定",
 }
+
+_ISO_DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
+_MDY_DATE_RE = re.compile(r"^(\d{1,2})/(\d{1,2})/(\d{4})$")
+
+
+def _normalize_date_label(raw: Any) -> str:
+    """Unify earnings date labels to YYYY-MM-DD when parseable."""
+    text = str(raw or "").strip()
+    if not text or text in {"—", "-", "N/A", "n/a"}:
+        return ""
+    if _ISO_DATE_RE.match(text):
+        return text
+    m = _MDY_DATE_RE.match(text)
+    if m:
+        month, day, year = int(m.group(1)), int(m.group(2)), int(m.group(3))
+        try:
+            return date(year, month, day).isoformat()
+        except ValueError:
+            return text
+    return text
 
 # Always elevate these names when they report in-window
 _FOCUS_SYMBOLS = {
@@ -134,11 +155,12 @@ def _normalize_row(row: dict[str, Any], report_date: str) -> dict[str, Any]:
         n_ests = int(str(row.get("noOfEsts") or "0").replace(",", "") or "0")
     except ValueError:
         n_ests = 0
-    last_year_date = str(row.get("lastYearRptDt") or "").strip()
+    last_year_date = _normalize_date_label(row.get("lastYearRptDt"))
+    next_date = _normalize_date_label(report_date) or str(report_date or "").strip()
     return {
         "symbol": symbol,
         "name": str(row.get("name") or symbol).strip(),
-        "date": report_date,
+        "date": next_date,
         "time": time_key,
         "time_zh": _TIME_LABELS.get(time_key, "时段未定"),
         "market_cap": market_cap,
@@ -150,7 +172,7 @@ def _normalize_row(row: dict[str, Any], report_date: str) -> dict[str, Any]:
         "yoy_pct": yoy_pct,
         "last_year_report_date": last_year_date,
         "prev_earnings_label": last_year_date or "",
-        "next_earnings_label": report_date,
+        "next_earnings_label": next_date,
         "fiscal_quarter_ending": str(row.get("fiscalQuarterEnding") or ""),
         "estimate_count": n_ests,
         "url": f"https://finance.yahoo.com/quote/{symbol}/" if symbol else "",
