@@ -1951,33 +1951,108 @@ body {
     grid-area: chg;
   }
 
-  .sector-pick-list .sector-pick-row {
-    grid-template-columns: minmax(0, 1fr) 2rem;
+  /* Holdings + sectors share this row: [main…][+] — never overlap quote pills */
+  .sector-pick-list .sector-pick-row,
+  .portfolio-body .sector-pick-row {
+    grid-template-columns: minmax(0, 1fr) 2.55rem;
     grid-template-areas: none;
+    overflow: hidden;
   }
 
-  .sector-pick-list .sector-pick-main {
-    grid-template-columns: 1fr auto;
+  .sector-pick-list .sector-pick-main,
+  .portfolio-body .sector-pick-main {
+    grid-template-columns: minmax(0, 1fr) 5.9rem;
     grid-template-areas:
       "meta quote"
       "spark quote";
-    padding: 0.35rem 0.3rem 0.35rem 0.55rem;
+    padding: 0.35rem 0.35rem 0.35rem 0.55rem;
+    min-width: 0;
+    overflow: hidden;
   }
 
-  .sector-pick-list .sector-pick-main .meta {
+  .sector-pick-list .sector-pick-main .meta,
+  .portfolio-body .sector-pick-main .meta {
     grid-area: meta;
+    min-width: 0;
   }
 
-  .sector-pick-list .sector-pick-main .spark-wrap {
+  .sector-pick-list .sector-pick-main .spark-wrap,
+  .portfolio-body .sector-pick-main .spark-wrap {
     grid-area: spark;
+    min-width: 0;
   }
 
-  .sector-pick-list .sector-pick-main .quote {
+  .sector-pick-list .sector-pick-main .quote,
+  .portfolio-body .sector-pick-main .quote {
     grid-area: quote;
     flex-direction: column;
+    align-items: stretch;
+    justify-content: center;
+    gap: 0.14rem;
+    min-width: 0;
+    width: 5.9rem;
+    max-width: 5.9rem;
+    white-space: normal;
+  }
+
+  .sector-pick-list .quote-main,
+  .portfolio-body .quote-main {
+    flex-direction: column;
     align-items: flex-end;
-    gap: 0.2rem;
-    min-width: 4.8rem;
+    gap: 0.12rem;
+    width: 100%;
+  }
+
+  .sector-pick-list .holding-row .price,
+  .portfolio-body .holding-row .price {
+    font-size: 0.84rem;
+    min-width: 0;
+    width: 100%;
+    text-align: right;
+  }
+
+  .sector-pick-list .holding-row .chg.chg-close,
+  .portfolio-body .holding-row .chg.chg-close {
+    min-width: 0;
+    width: 100%;
+    max-width: none;
+    box-sizing: border-box;
+    font-size: 0.7rem;
+    padding: 0.16rem 0.28rem;
+    text-align: center;
+  }
+
+  .sector-pick-list .quote-rt,
+  .portfolio-body .quote-rt {
+    width: 100%;
+    justify-content: flex-end;
+    flex-wrap: nowrap;
+    gap: 0.16rem;
+    overflow: hidden;
+  }
+
+  .sector-pick-list .rt-price,
+  .sector-pick-list .rt-chg,
+  .portfolio-body .rt-price,
+  .portfolio-body .rt-chg {
+    font-size: 0.58rem;
+  }
+
+  .sector-pick-list .session-tag,
+  .portfolio-body .session-tag {
+    flex: 0 0 auto;
+    font-size: 0.52rem;
+    min-width: 0;
+    padding: 0.04rem 0.18rem;
+  }
+
+  .sector-pick-list .sector-hold-btn,
+  .portfolio-body .sector-hold-btn {
+    width: 2.55rem;
+    min-width: 2.55rem;
+    position: relative;
+    z-index: 2;
+    align-self: stretch;
   }
 }
 
@@ -3137,8 +3212,9 @@ body {
   grid-auto-rows: max-content;
 }
 
-.sector-pick-list .holding-row {
-  grid-template-columns: minmax(0, 1fr) auto;
+.sector-pick-list .holding-row,
+.portfolio-body .holding-row.sector-pick-row {
+  grid-template-columns: minmax(0, 1fr) 2.35rem;
   padding: 0;
   border-radius: 11px;
   gap: 0;
@@ -3147,9 +3223,10 @@ body {
   height: auto;
 }
 
-.sector-pick-list .sector-pick-row {
+.sector-pick-list .sector-pick-row,
+.portfolio-body .sector-pick-row {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 2rem;
+  grid-template-columns: minmax(0, 1fr) 2.35rem;
   overflow: hidden;
   min-height: 0;
   height: auto;
@@ -3184,7 +3261,7 @@ body {
   justify-content: center;
   gap: 0.1rem;
   flex: 0 0 auto;
-  min-width: 7.6rem;
+  min-width: 6.8rem;
   white-space: nowrap;
 }
 
@@ -6242,29 +6319,17 @@ html.pulse-native-app .atmosphere {
     min-height: 0;
   }
 
-  .holding-row .price,
-  .sector-pick-row .price {
+  .holding-row:not(.sector-pick-row) .price {
     font-size: 0.92rem;
     max-width: 100%;
     overflow: hidden;
     text-overflow: ellipsis;
   }
 
-  .holding-row .chg,
-  .sector-pick-row .chg {
-    min-width: 0;
-    max-width: 4.6rem;
-    font-size: 0.68rem;
+  .holding-row:not(.sector-pick-row) .chg {
+    min-width: 4.2rem;
+    font-size: 0.72rem;
     padding-inline: 0.35rem;
-  }
-
-  .quote-rt,
-  .session-tag {
-    font-size: 0.62rem;
-    max-width: 100%;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
   }
 }
 
@@ -6298,4 +6363,76 @@ html.pulse-native-app .filter,
 html.pulse-native-app .tf-filters .filter,
 html.pulse-native-app button.btn {
   min-height: 2.35rem;
+}
+
+/* App shell: keep +/- column clear of quote pills (same as mobile) */
+html.pulse-native-app .sector-pick-list .sector-pick-row,
+html.pulse-native-app .portfolio-body .sector-pick-row {
+  grid-template-columns: minmax(0, 1fr) 2.55rem;
+  overflow: hidden;
+}
+
+html.pulse-native-app .sector-pick-list .sector-pick-main,
+html.pulse-native-app .portfolio-body .sector-pick-main {
+  grid-template-columns: minmax(0, 1fr) 5.9rem;
+  grid-template-areas:
+    "meta quote"
+    "spark quote";
+  min-width: 0;
+  overflow: hidden;
+  padding-right: 0.35rem;
+}
+
+html.pulse-native-app .sector-pick-list .sector-pick-main .meta,
+html.pulse-native-app .portfolio-body .sector-pick-main .meta {
+  grid-area: meta;
+  min-width: 0;
+}
+
+html.pulse-native-app .sector-pick-list .sector-pick-main .spark-wrap,
+html.pulse-native-app .portfolio-body .sector-pick-main .spark-wrap {
+  grid-area: spark;
+  min-width: 0;
+}
+
+html.pulse-native-app .sector-pick-list .sector-pick-main .quote,
+html.pulse-native-app .portfolio-body .sector-pick-main .quote {
+  grid-area: quote;
+  align-items: stretch;
+  min-width: 0;
+  width: 5.9rem;
+  max-width: 5.9rem;
+  white-space: normal;
+}
+
+html.pulse-native-app .sector-pick-list .quote-main,
+html.pulse-native-app .portfolio-body .quote-main {
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 0.12rem;
+  width: 100%;
+}
+
+html.pulse-native-app .sector-pick-list .holding-row .price,
+html.pulse-native-app .portfolio-body .holding-row .price {
+  width: 100%;
+  font-size: 0.84rem;
+  text-align: right;
+}
+
+html.pulse-native-app .sector-pick-list .holding-row .chg.chg-close,
+html.pulse-native-app .portfolio-body .holding-row .chg.chg-close {
+  width: 100%;
+  min-width: 0;
+  max-width: none;
+  box-sizing: border-box;
+  font-size: 0.7rem;
+  text-align: center;
+}
+
+html.pulse-native-app .sector-pick-list .sector-hold-btn,
+html.pulse-native-app .portfolio-body .sector-hold-btn {
+  width: 2.55rem;
+  min-width: 2.55rem;
+  z-index: 2;
 }
