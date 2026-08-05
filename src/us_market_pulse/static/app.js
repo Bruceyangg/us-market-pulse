@@ -4687,6 +4687,20 @@ function bindSectorDesk() {
   scheduleSectorsDeskHeightSync();
 }
 
+/** Unify earnings date labels to YYYY-MM-DD (handles M/D/YYYY from Nasdaq). */
+function formatEarningsDateIso(raw) {
+  const text = String(raw || "").trim();
+  if (!text || text === "—" || text === "-") return "—";
+  if (/^\d{4}-\d{2}-\d{2}$/.test(text)) return text;
+  const mdy = text.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
+  if (mdy) {
+    const mm = String(Number(mdy[1])).padStart(2, "0");
+    const dd = String(Number(mdy[2])).padStart(2, "0");
+    return `${mdy[3]}-${mm}-${dd}`;
+  }
+  return text;
+}
+
 function formatCapShort(text) {
   if (!text || text === "—" || text === "N/A") return "—";
   const raw = String(text).replace(/[$,]/g, "");
@@ -4847,11 +4861,17 @@ function renderEarningsDesk(data) {
     } else {
       els.earningsTable.innerHTML = `
         <div class="earnings-row head" aria-hidden="true">
-          <span>代码</span><span>公司</span><span>时段</span><span>下一发布</span><span>上年发布</span><span>市场预期</span><span>上年EPS</span><span>同比</span><span>市值</span>
+          <span>代码</span><span>公司</span><span>时段</span><span>下一发布日</span><span>上年发布日</span><span>市场预期</span><span>上年EPS</span><span>同比</span><span>市值</span>
         </div>
         ${items
           .map((row) => {
             const focus = Boolean(row.is_focus);
+            const nextDate = formatEarningsDateIso(
+              row.next_earnings_label || row.date || "—"
+            );
+            const prevDate = formatEarningsDateIso(
+              row.prev_earnings_label || row.last_year_report_date || "—"
+            );
             return `
           <a class="earnings-row ${focus ? "is-focus" : ""}" href="${escapeHtml(
             row.url || `https://finance.yahoo.com/quote/${row.symbol}/`
@@ -4863,10 +4883,8 @@ function renderEarningsDesk(data) {
             <span class="session session-${escapeHtml(
               (row.time || "").replace("time-", "")
             )}">${escapeHtml(row.time_zh || "—")}</span>
-            <span class="date">${escapeHtml(row.next_earnings_label || row.date || "—")}</span>
-            <span class="date muted">${escapeHtml(
-              row.prev_earnings_label || row.last_year_report_date || "—"
-            )}</span>
+            <span class="date">${escapeHtml(nextDate)}</span>
+            <span class="date muted">${escapeHtml(prevDate)}</span>
             <span class="eps">${escapeHtml(row.eps_forecast_text || "—")}</span>
             <span class="eps muted">${escapeHtml(row.last_year_eps_text || "—")}</span>
             <span class="yoy ${pctClass(row.yoy_pct)}">${escapeHtml(
