@@ -25,11 +25,13 @@ from us_market_pulse.markets import (
 )
 from us_market_pulse.portfolio_intel import match_portfolio_intel
 from us_market_pulse.quotes import (
+    apply_list_quote_fields,
     build_nasdaq_ohlc_series,
     fetch_day_quotes,
     fetch_nasdaq_daily_bars,
     fetch_nasdaq_intraday,
     fetch_nasdaq_intraday_many,
+    session_from_status,
 )
 from us_market_pulse.topics import TOPICS, filter_topic_items, topic_bearish_analysis
 
@@ -734,6 +736,21 @@ async def fetch_intraday_snapshot(
     if series_row.get("previous_close") is None and price is not None:
         # keep prior close from series when available
         pass
+    # Prefer last tape point's session; fall back to ET clock.
+    sid = "regular"
+    last_pts = list(series_row.get("points") or [])
+    if last_pts:
+        sid = str(last_pts[-1].get("session") or "") or sid
+    if sid not in {"pre", "regular", "post", "night"}:
+        sid, _label = session_from_status(None)
+    else:
+        _label = {"pre": "盘前", "regular": "盘中", "post": "盘后", "night": "夜盘"}.get(
+            sid, "盘中"
+        )
+        # If tape still says regular but clock is pre/post, prefer clock for badge.
+        clock_sid, clock_label = session_from_status(None)
+        if clock_sid in {"pre", "post", "night"}:
+            sid, _label = clock_sid, clock_label
     data = {
         "symbol": sym,
         "price": price,
@@ -742,6 +759,8 @@ async def fetch_intraday_snapshot(
         "previous_close": series_row.get("previous_close"),
         "series": {"intraday": series_row},
         "source": source,
+        "session": sid,
+        "session_label": _label,
         "fetched_at": time.time(),
     }
     _INTRADAY_SNAP_CACHE[cache_key] = {"at": time.time(), "data": data}
@@ -1076,7 +1095,7 @@ def _lite_pick_from_quote(
         and etf_day is not None
         and float(day_pct) > float(etf_day)
     )
-    return {
+    row = {
         "symbol": sym,
         "name": vc.get("name") or sym,
         "label": vc.get("name") or sym,
@@ -1099,6 +1118,8 @@ def _lite_pick_from_quote(
         "move_analysis": None,
         "url": f"https://finance.yahoo.com/quote/{sym}",
     }
+    apply_list_quote_fields(row, quote)
+    return row
 
 
 def _etf_by_id(sector_id: str) -> dict[str, Any] | None:
@@ -2359,6 +2380,8 @@ async def build_sector_desk(
                 "lite": False,
                 "chart_attempted": True,
             }
+            # Keep 收盘涨跌幅 / 实时涨跌幅 / 时段 from day quote (list UI).
+            apply_list_quote_fields(rich, selected_pick)
             replaced = False
             for idx, row in enumerate(pick_rows):
                 if row.get("symbol") == selected:
