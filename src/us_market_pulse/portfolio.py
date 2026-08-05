@@ -315,11 +315,13 @@ async def upgrade_selected_board(
     errors: list[str] = []
     boards: dict[str, Any] = dict(_CACHE.get("boards") or {})
     cached = boards.get(sym) if isinstance(boards.get(sym), dict) else None
+    # Only treat multi-TF candles as "fresh". Intraday-only boards must still
+    # upgrade so 日/月/季 tabs work without a full page reload.
     cache_fresh = (
         not force
         and cached
         and (now - float(_CACHE.get("quotes_at") or 0) < _QUOTE_TTL)
-        and (_pick_has_chart(cached) or _pick_has_intraday(cached))
+        and _pick_has_chart(cached)
     )
     vc = _value_chain_for(sym)
 
@@ -540,7 +542,7 @@ async def build_portfolio_view(
         not force
         and cached
         and (now - float(_CACHE.get("quotes_at") or 0) < _QUOTE_TTL)
-        and (_pick_has_chart(cached) or _pick_has_intraday(cached))
+        and _pick_has_chart(cached)
     )
     need_chart = bool(selected) and not cache_fresh and not _pick_has_chart(selected_card)
 

@@ -1719,9 +1719,11 @@ function mergePortfolioSelectResponse(symbol, res) {
 async function selectPortfolioSymbol(symbol, { quiet = false } = {}) {
   const sym = String(symbol || "").trim().toUpperCase();
   if (!sym) return;
+  // Only skip network when day/month candles already exist.
+  // Intraday-only boards still need /select to unlock 日/月/季.
   if (
     sym === state.portfolio?.selected &&
-    deskChartReady(state.portfolio?.selected_board)
+    pickHasChart(state.portfolio?.selected_board)
   ) {
     state.portfolioPreview = null;
     paintPortfolioSelection();
@@ -3139,7 +3141,11 @@ els.portfolioTfFilters?.addEventListener("click", (event) => {
   // TF switch is chart-only — list sparks stay on day tape.
   renderPortfolioChart();
   persistPageDataCache();
-  if (tf === "intraday") refreshActiveIntraday({ force: false });
+  if (tf === "intraday") {
+    refreshActiveIntraday({ force: false });
+  } else if (!pickHasTfSeries(state.portfolio?.selected_board, tf)) {
+    ensureMultiTfChartUpgrade();
+  }
 });
 
 els.portfolioManageBtn?.addEventListener("click", () => {
@@ -3222,6 +3228,10 @@ document.addEventListener("keydown", (event) => {
     state.portfolioTf = tf;
     renderPortfolioChart();
     persistPageDataCache();
+    if (tf === "intraday") refreshActiveIntraday({ force: false });
+    else if (!pickHasTfSeries(state.portfolio?.selected_board, tf)) {
+      ensureMultiTfChartUpgrade();
+    }
     return;
   }
 
@@ -4302,6 +4312,29 @@ function deskChartReady(pick) {
   return pickHasChart(pick) || pickHasIntraday(pick);
 }
 
+function pickHasTfSeries(pick, tf) {
+  const want = tf || "intraday";
+  if (want === "intraday") return pickHasIntraday(pick);
+  return (pick?.series?.[want]?.points || []).length >= 2;
+}
+
+/** Background-fetch day/month/quarter when the board only has 分时. */
+function ensureMultiTfChartUpgrade({ force = false } = {}) {
+  if (PAGE === "desk") {
+    const board = state.portfolio?.selected_board;
+    const sym = state.portfolio?.selected || board?.symbol || "";
+    if (!sym || (pickHasChart(board) && !force)) return;
+    // Coalesce through the same /select path as symbol clicks.
+    selectPortfolioSymbol(sym, { quiet: true });
+    return;
+  }
+  if (PAGE === "sectors") {
+    const pick = state.sectors?.selected_pick;
+    if (pickHasChart(pick) && !force) return;
+    loadSectorDesk({ force });
+  }
+}
+
 function markActiveListRow(listEl, symbol, attr = "data-symbol") {
   if (!listEl) return;
   const sym = String(symbol || "").toUpperCase();
@@ -4555,7 +4588,7 @@ function openSectorDesk(id, { scroll = true } = {}) {
   }
 
   const load =
-    same && state.sectors && deskChartReady(state.sectors.selected_pick)
+    same && state.sectors && pickHasChart(state.sectors.selected_pick)
       ? Promise.resolve(state.sectors)
       : loadSectorDesk();
   Promise.resolve(load).finally(() => {
@@ -5362,7 +5395,7 @@ function selectSectorSymbol(sym) {
     return;
   }
   const already =
-    symbol === state.sectorSymbol && deskChartReady(data.selected_pick);
+    symbol === state.sectorSymbol && pickHasChart(data.selected_pick);
   // Always paint locally first — never wait on network / rebuild the whole list.
   state.sectorSymbol = symbol;
   data.selected_symbol = symbol;
@@ -5375,11 +5408,12 @@ function selectSectorSymbol(sym) {
   refreshActiveRowQuote(els.sectorPickList, pick, "data-symbol");
   setStatus(`已切换 ${pick.name || symbol} · ${pick.sector_label || ""}`);
   persistPageDataCache();
-  if (already || deskChartReady(pick)) {
+  if (already || pickHasChart(pick)) {
     if (state.sectorTf === "intraday") refreshActiveIntraday({ force: false });
     return;
   }
-  // Background upgrade for day/month/quarter series
+  // Has 分时 but missing 日/月/季 — still upgrade in background.
+  if (state.sectorTf === "intraday") refreshActiveIntraday({ force: false });
   loadSectorDesk();
 }
 
@@ -5479,7 +5513,11 @@ function bindSectorDesk() {
       // Same as holdings: TF switch paints the middle chart only.
       renderSectorPickChart();
       persistPageDataCache();
-      if (tf === "intraday") refreshActiveIntraday({ force: false });
+      if (tf === "intraday") {
+        refreshActiveIntraday({ force: false });
+      } else if (!pickHasTfSeries(state.sectors?.selected_pick, tf)) {
+        ensureMultiTfChartUpgrade();
+      }
     });
   });
   const desk = els.sectorsDesk;
@@ -5892,6 +5930,10 @@ function bootPage() {
       loadHoldingIntel({ symbol: selected || "", soft: painted });
       persistPageDataCache();
       if (state.portfolioTf === "intraday") refreshActiveIntraday();
+      // Prefetch 日/月/季 so TF tabs work without a hard refresh.
+      if (!pickHasChart(state.portfolio?.selected_board)) {
+        ensureMultiTfChartUpgrade();
+      }
     });
     // Soft list refresh — force=true was making buttons feel stuck every 90s.
     trackPageInterval(() => {
@@ -5922,6 +5964,9 @@ function bootPage() {
     refreshHoldingSymbols().finally(() =>
       loadSectorDesk().then(() => {
         if (state.sectorTf === "intraday") refreshActiveIntraday();
+        if (!pickHasChart(state.sectors?.selected_pick)) {
+          ensureMultiTfChartUpgrade();
+        }
       })
     );
     trackPageInterval(() => loadSectorDesk(), 90 * 1000);
