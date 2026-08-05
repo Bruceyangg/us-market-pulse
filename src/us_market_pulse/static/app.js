@@ -457,50 +457,19 @@ function renderChartSvg(points, { up = true, viewStart = 0, viewEnd = null } = {
   `;
 }
 
-const SESSION_BAND_COLORS = {
-  pre: "rgba(196, 122, 22, 0.12)",
-  regular: "rgba(15, 138, 106, 0.08)",
-  post: "rgba(47, 111, 159, 0.12)",
-  night: "rgba(88, 110, 140, 0.14)",
-};
-
 const SESSION_LABELS = {
   pre: "盘前",
   regular: "盘中",
   post: "盘后",
   night: "夜盘",
 };
+const SESSION_LABEL_ORDER = ["盘前", "盘中", "盘后"];
 
-/**
- * Broker-style ET axis: 夜盘 → 盘前 → 盘中 → 盘后
- * Cycle starts at 20:00 ET (≈北京时间 08:00→次日 08:00). Equal-width bands.
- */
-const SESSION_CYCLE = [
-  { id: "night", label: "夜盘", start: 0, end: 8 * 60 }, // 20:00–04:00
-  { id: "pre", label: "盘前", start: 8 * 60, end: 13 * 60 + 30 }, // 04:00–09:30
-  { id: "regular", label: "盘中", start: 13 * 60 + 30, end: 20 * 60 }, // 09:30–16:00
-  { id: "post", label: "盘后", start: 20 * 60, end: 24 * 60 }, // 16:00–20:00
-];
-const SESSION_CYCLE_MINS = 24 * 60;
-const SESSION_LABEL_ORDER = ["夜盘", "盘前", "盘中", "盘后"];
-
-function sessionBandIndex(cycleMins) {
-  const cm = clamp(cycleMins, 0, SESSION_CYCLE_MINS);
-  for (let i = 0; i < SESSION_CYCLE.length; i += 1) {
-    if (cm <= SESSION_CYCLE[i].end || i === SESSION_CYCLE.length - 1) return i;
-  }
-  return SESSION_CYCLE.length - 1;
-}
-
-/** Equal-width session bands: map cycle minutes → x inside 夜盘/盘前/盘中/盘后. */
-function xOfSessionCycle(cycleMins, padX, plotW) {
-  const bandW = plotW / SESSION_CYCLE.length;
-  const idx = sessionBandIndex(cycleMins);
-  const s = SESSION_CYCLE[idx];
-  const span = Math.max(1, s.end - s.start);
-  const t = clamp((cycleMins - s.start) / span, 0, 1);
-  return padX + idx * bandW + t * bandW;
-}
+/** Yahoo 1D tape window (ET): 04:00 → 20:00. */
+const YAHOO_DAY_START_MINS = 4 * 60;
+const YAHOO_DAY_END_MINS = 20 * 60;
+const YAHOO_DAY_SPAN_MINS = YAHOO_DAY_END_MINS - YAHOO_DAY_START_MINS;
+const YAHOO_TIME_TICKS = [5, 7, 9, 11, 13, 15, 17, 19].map((h) => h * 60);
 
 function etParts(ts) {
   const parts = new Intl.DateTimeFormat("en-US", {
@@ -511,7 +480,7 @@ function etParts(ts) {
   }).formatToParts(new Date(Number(ts) * 1000));
   let hour = Number(parts.find((p) => p.type === "hour")?.value || 0);
   const minute = Number(parts.find((p) => p.type === "minute")?.value || 0);
-  if (hour === 24) hour = 0; // some engines emit 24:xx at midnight
+  if (hour === 24) hour = 0;
   return { hour, minute, mins: hour * 60 + minute };
 }
 
@@ -522,96 +491,32 @@ function sessionIdFromTs(ts) {
     if (mins >= 4 * 60 && mins < 9 * 60 + 30) return "pre";
     if (mins >= 9 * 60 + 30 && mins < 16 * 60) return "regular";
     if (mins >= 16 * 60 && mins < 20 * 60) return "post";
-    return "night"; // 20:00–03:59
+    return "night";
   } catch {
     return "regular";
   }
 }
 
-/**
- * Minutes into the 20:00→20:00 ET cycle (夜盘…盘后).
- * Prefer absolute cycle_start from the API so 20:00 start/end don't collide.
- */
-function etCycleMins(ts, cycleStartTs = null) {
-  const t = Number(ts);
-  const origin = Number(cycleStartTs);
-  if (Number.isFinite(t) && Number.isFinite(origin) && origin > 0) {
-    return clamp((t - origin) / 60, 0, SESSION_CYCLE_MINS);
-  }
-  try {
-    const { mins } = etParts(ts);
-    return mins >= 20 * 60 ? mins - 20 * 60 : mins + 4 * 60;
-  } catch {
-    return 8 * 60;
-  }
+function formatEtClockLabel(mins) {
+  const h24 = Math.floor(mins / 60) % 24;
+  const m = mins % 60;
+  const am = h24 < 12;
+  const h12 = h24 % 12 || 12;
+  const mm = m === 0 ? "" : `:${String(m).padStart(2, "0")}`;
+  return `${h12}${mm} ${am ? "AM" : "PM"}`;
 }
 
-/** Pad a leading 夜盘 anchor when the first print starts late. */
-function ensureSessionAnchors(view, previousClose = null, cycleStartTs = null) {
-  const rows = Array.isArray(view) ? view.slice() : [];
-  if (!rows.length) return rows;
-  const kept = rows.filter((p) => !p?._pad);
-  const base = kept.length ? kept : rows;
-  const out = base.map((p) => ({
-    ...p,
-    _cm: p._cm ?? etCycleMins(p.t, cycleStartTs),
-  }));
-  out.sort((a, b) => a._cm - b._cm || Number(a.t) - Number(b.t));
-  const first = out[0];
-  const padV = Number(
-    previousClose != null && Number.isFinite(Number(previousClose))
-      ? previousClose
-      : first?.v ?? first?.c
-  );
-  if (Number.isFinite(padV) && first._cm > 15) {
-    const padT = Number.isFinite(Number(cycleStartTs))
-      ? Number(cycleStartTs)
-      : Number(first.t) - first._cm * 60;
-    out.unshift({
-      t: padT,
-      v: padV,
-      session: "night",
-      _cm: 0,
-      _pad: true,
-    });
-  }
-  return out;
-}
-
-function ensurePointSessions(points) {
-  return (points || []).map((p) => {
-    if (!p) return p;
-    return { ...p, session: sessionIdFromTs(p.t) };
-  });
-}
-
-function buildSessionSegmentsFromPoints(points) {
-  const rows = ensurePointSessions(points);
-  if (!rows.length) return [];
-  const segs = [];
-  let cur = rows[0]?.session || "regular";
-  let start = 0;
-  for (let i = 0; i < rows.length; i += 1) {
-    const sid = rows[i]?.session || "regular";
-    if (sid !== cur) {
-      segs.push({ id: cur, label: SESSION_LABELS[cur] || cur, i0: start, i1: i - 1 });
-      cur = sid;
-      start = i;
-    }
-  }
-  segs.push({
-    id: cur,
-    label: SESSION_LABELS[cur] || cur,
-    i0: start,
-    i1: rows.length - 1,
-  });
-  return segs;
+function formatPriceTick(v) {
+  const n = Number(v);
+  if (!Number.isFinite(n)) return "";
+  if (Math.abs(n) >= 1000) return n.toFixed(1);
+  if (Math.abs(n) >= 100) return n.toFixed(2);
+  return n.toFixed(2);
 }
 
 /**
- * Composite 分时 on a fixed ET time axis:
- * always paint 夜盘 / 盘前 / 盘中 / 盘后 (left → right), even if a band is empty.
- * Holdings and sectors share this renderer.
+ * Yahoo 1D-style 分时 (盘前→盘中→盘后), shared by holdings + sectors.
+ * Fixed ET 04:00–20:00 axis with clock labels and previous-close guide.
  */
 function renderSessionIntradaySvg(
   points,
@@ -624,42 +529,37 @@ function renderSessionIntradaySvg(
     cycleStart = null,
   } = {}
 ) {
-  const width = 320;
-  const height = 168;
-  const padX = 8;
-  const padTop = 18;
-  const padBottom = 16;
-  const plotW = width - padX * 2;
+  void sessions;
+  void cycleStart;
+  const width = 360;
+  const height = 188;
+  const padL = 8;
+  const padR = 44;
+  const padTop = 10;
+  const padBottom = 22;
+  const plotW = width - padL - padR;
   const plotH = height - padTop - padBottom;
-  void sessions; // time-axis bands are authoritative
-  const cycleStartTs =
-    cycleStart != null && Number.isFinite(Number(cycleStart))
-      ? Number(cycleStart)
-      : null;
-  const raw = ensurePointSessions(
-    (points || []).filter((p) => p && Number.isFinite(Number(p.v ?? p.c)))
-  );
-  const end = viewEnd == null ? raw.length : Math.min(raw.length, viewEnd);
+
+  let view = (points || [])
+    .filter((p) => p && Number.isFinite(Number(p.v ?? p.c)) && p.t != null)
+    .map((p) => ({ ...p, _mins: etParts(p.t).mins }))
+    .filter(
+      (p) => p._mins >= YAHOO_DAY_START_MINS && p._mins <= YAHOO_DAY_END_MINS
+    )
+    .sort((a, b) => a._mins - b._mins || Number(a.t) - Number(b.t));
+  const end = viewEnd == null ? view.length : Math.min(view.length, viewEnd);
   const start = clamp(viewStart, 0, Math.max(0, end));
-  let view = raw
-    .map((p) => ({
-      ...p,
-      _cm: p.t != null ? etCycleMins(p.t, cycleStartTs) : 0,
-    }))
-    .sort((a, b) => a._cm - b._cm || Number(a.t) - Number(b.t));
-  if (!(start === 0 && end >= raw.length)) {
+  if (!(start === 0 && end >= view.length)) {
     view = view.slice(start, end);
   }
-  view = ensureSessionAnchors(view, previousClose, cycleStartTs);
   if (view.length < 2) {
-    return `<svg viewBox="0 0 ${width} ${height}" role="img" aria-label="暂无走势"><text x="16" y="90" fill="${themeMutedFill()}" font-size="13">暂无分时数据</text></svg>`;
+    return `<svg viewBox="0 0 ${width} ${height}" role="img" aria-label="暂无走势"><text x="16" y="96" fill="${themeMutedFill()}" font-size="13">暂无分时数据</text></svg>`;
   }
 
   const prev =
     previousClose != null && Number.isFinite(Number(previousClose))
       ? Number(previousClose)
       : null;
-
   const vals = view.map((p) => Number(p.v ?? p.c));
   let min = Math.min(...vals);
   let max = Math.max(...vals);
@@ -667,76 +567,112 @@ function renderSessionIntradaySvg(
     min = Math.min(min, prev);
     max = Math.max(max, prev);
   }
+  const pad = (max - min) * 0.06 || Math.abs(max) * 0.002 || 0.01;
+  min -= pad;
+  max += pad;
   const span = max - min || 1;
   const yOf = (v) => padTop + (1 - (v - min) / span) * plotH;
-  const xOfCycle = (cycleMins) => xOfSessionCycle(cycleMins, padX, plotW);
+  const xOfMins = (mins) =>
+    padL +
+    (clamp(mins, YAHOO_DAY_START_MINS, YAHOO_DAY_END_MINS) -
+      YAHOO_DAY_START_MINS) /
+      YAHOO_DAY_SPAN_MINS *
+      plotW;
 
-  const coords = view.map((p) => [xOfCycle(p._cm), yOf(Number(p.v ?? p.c))]);
-  const bandW = plotW / SESSION_CYCLE.length;
+  const coords = view.map((p) => [xOfMins(p._mins), yOf(Number(p.v ?? p.c))]);
+  const stroke = up ? TAPE_UP : TAPE_DOWN;
+  const fill = up ? TAPE_UP_SOFT : TAPE_DOWN_SOFT;
+  const muted = themeMutedFill();
+  const grid = "rgba(148,163,184,0.28)";
 
-  const bands = SESSION_CYCLE.map((s, i) => {
-    const x0 = padX + i * bandW;
-    const fill = SESSION_BAND_COLORS[s.id] || "rgba(128,128,128,0.08)";
-    const midX = x0 + bandW / 2;
-    return `
-      <rect x="${x0.toFixed(2)}" y="${padTop}" width="${bandW.toFixed(
-        2
-      )}" height="${plotH}" fill="${fill}"></rect>
-      <text x="${midX.toFixed(2)}" y="${(padTop - 5).toFixed(
+  const hGrid = [0.2, 0.4, 0.6, 0.8]
+    .map((t) => {
+      const y = padTop + t * plotH;
+      return `<line x1="${padL}" y1="${y.toFixed(1)}" x2="${(
+        padL + plotW
+      ).toFixed(1)}" y2="${y.toFixed(
         1
-      )}" text-anchor="middle" fill="${themeMutedFill()}" font-size="8.5" font-weight="600">${escapeHtml(
-        s.label
-      )}</text>
-    `;
-  }).join("");
-
-  const dividers = SESSION_CYCLE.slice(1)
-    .map((_, i) => {
-      const x = padX + (i + 1) * bandW;
-      return `<line x1="${x.toFixed(2)}" y1="${padTop}" x2="${x.toFixed(
-        2
-      )}" y2="${(padTop + plotH).toFixed(
-        2
-      )}" stroke="rgba(148,163,184,0.35)" stroke-width="1" stroke-dasharray="3 3"></line>`;
+      )}" stroke="${grid}" stroke-width="1" stroke-dasharray="2 3"></line>`;
     })
     .join("");
 
+  const vGrid = YAHOO_TIME_TICKS.map((mins) => {
+    const x = xOfMins(mins);
+    return `<line x1="${x.toFixed(1)}" y1="${padTop}" x2="${x.toFixed(
+      1
+    )}" y2="${(padTop + plotH).toFixed(
+      1
+    )}" stroke="${grid}" stroke-width="1" stroke-dasharray="2 3"></line>`;
+  }).join("");
+
+  // Regular-session open / close guides (09:30 / 16:00 ET).
+  const sessionGuides = [9 * 60 + 30, 16 * 60]
+    .map((mins) => {
+      const x = xOfMins(mins);
+      return `<line x1="${x.toFixed(1)}" y1="${padTop}" x2="${x.toFixed(
+        1
+      )}" y2="${(padTop + plotH).toFixed(
+        1
+      )}" stroke="rgba(148,163,184,0.45)" stroke-width="1"></line>`;
+    })
+    .join("");
+
+  const timeLabels = YAHOO_TIME_TICKS.map((mins) => {
+    const x = xOfMins(mins);
+    return `<text x="${x.toFixed(1)}" y="${(height - 6).toFixed(
+      1
+    )}" text-anchor="middle" fill="${muted}" font-size="8">${escapeHtml(
+      formatEtClockLabel(mins)
+    )}</text>`;
+  }).join("");
+
+  const priceTicks = [max, (max + min) / 2, min].map((v, i) => {
+    const y = yOf(v);
+    const anchor = i === 0 ? "hanging" : i === 2 ? "auto" : "middle";
+    return `<text x="${(width - 6).toFixed(1)}" y="${y.toFixed(
+      1
+    )}" text-anchor="end" dominant-baseline="${anchor}" fill="${muted}" font-size="8.5">${escapeHtml(
+      formatPriceTick(v)
+    )}</text>`;
+  }).join("");
+
   const prevLine =
     prev != null
-      ? `<line x1="${padX}" y1="${yOf(prev).toFixed(2)}" x2="${
-          width - padX
-        }" y2="${yOf(prev).toFixed(
+      ? `<line x1="${padL}" y1="${yOf(prev).toFixed(2)}" x2="${(
+          padL + plotW
+        ).toFixed(2)}" y2="${yOf(prev).toFixed(
           2
-        )}" stroke="rgba(148,163,184,0.55)" stroke-width="1" stroke-dasharray="4 3"></line>`
+        )}" stroke="rgba(148,163,184,0.75)" stroke-width="1" stroke-dasharray="4 3"></line>
+        <text x="${(padL + 4).toFixed(1)}" y="${(yOf(prev) - 3).toFixed(
+          1
+        )}" fill="${muted}" font-size="7.5">昨收 ${escapeHtml(
+          formatPriceTick(prev)
+        )}</text>`
       : "";
 
-  // Single continuous path through 夜盘…盘后.
   const line = coords
     .map(([x, y], i) => `${i === 0 ? "M" : "L"}${x.toFixed(2)},${y.toFixed(2)}`)
     .join(" ");
   const area = `${line} L${coords[coords.length - 1][0].toFixed(2)},${(
     padTop + plotH
   ).toFixed(2)} L${coords[0][0].toFixed(2)},${(padTop + plotH).toFixed(2)} Z`;
-  const stroke = up ? TAPE_UP : TAPE_DOWN;
-  const fill = up ? TAPE_UP_SOFT : TAPE_DOWN_SOFT;
 
-  const footLabels = SESSION_CYCLE.map((s, i) => {
-    const midX = padX + i * bandW + bandW / 2;
-    return `<text x="${midX.toFixed(2)}" y="${(height - 4).toFixed(
-      1
-    )}" text-anchor="middle" fill="${themeMutedFill()}" font-size="7.5">${escapeHtml(
-      s.label
-    )}</text>`;
-  }).join("");
+  const last = coords[coords.length - 1];
+  const tip = `<circle cx="${last[0].toFixed(2)}" cy="${last[1].toFixed(
+    2
+  )}" r="2.6" fill="${stroke}"></circle>`;
 
   return `
-    <svg class="session-intraday-svg" viewBox="0 0 ${width} ${height}" preserveAspectRatio="none" role="img" aria-label="夜盘盘前盘中盘后一体分时">
-      ${bands}
-      ${dividers}
+    <svg class="session-intraday-svg yahoo-intraday-svg" viewBox="0 0 ${width} ${height}" preserveAspectRatio="none" role="img" aria-label="Yahoo 1D 分时">
+      ${hGrid}
+      ${vGrid}
+      ${sessionGuides}
       ${prevLine}
       <path d="${area}" fill="${fill}"></path>
-      <path d="${line}" fill="none" stroke="${stroke}" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round"></path>
-      ${footLabels}
+      <path d="${line}" fill="none" stroke="${stroke}" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"></path>
+      ${tip}
+      ${timeLabels}
+      ${priceTicks}
     </svg>
   `;
 }
@@ -1521,7 +1457,7 @@ function renderPortfolioChart() {
   const stats = seriesStats(viewPoints.length ? viewPoints : points, kind);
   const maNote = MA_CHART_TFS.has(tf) ? " · 含均线" : "";
   const sessionNote =
-    tf === "intraday" ? " · 夜盘·盘前·盘中·盘后一体分时" : "";
+    tf === "intraday" ? " · Yahoo 1D 分时（美东时间）" : "";
 
   els.portfolioChart.classList.remove("is-empty");
   els.portfolioChart.classList.toggle("is-preview", Boolean(preview));
@@ -4805,7 +4741,7 @@ function renderSectorPickChart() {
     : "";
   const maNote = MA_CHART_TFS.has(tf) ? " · 含均线" : "";
   const sessionNote =
-    tf === "intraday" ? " · 夜盘·盘前·盘中·盘后一体分时" : "";
+    tf === "intraday" ? " · Yahoo 1D 分时（美东时间）" : "";
   els.sectorPickChart.innerHTML = `
     <div class="chart-head">
       <h3>${escapeHtml(pick.name || pick.label || "")} · ${escapeHtml(
