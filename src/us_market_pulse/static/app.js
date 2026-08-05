@@ -4072,6 +4072,39 @@ function layoutTreemap(nodes, x, y, w, h, out) {
   }
 }
 
+/** Clamp treemap labels to real pixel boxes after layout (fixes phone overflow). */
+function fitSectorMapLabels() {
+  const stage = els.sectorMapCanvas?.querySelector(".sector-map-stage");
+  if (!stage) return;
+  stage.querySelectorAll(".map-stock").forEach((el) => {
+    const w = el.clientWidth;
+    const h = el.clientHeight;
+    el.classList.toggle("is-tiny", w < 40 || h < 26);
+    el.classList.toggle("is-compact", w < 62 || h < 38);
+    el.classList.toggle("is-roomy", w >= 86 && h >= 50);
+    const nm = el.querySelector(".nm");
+    if (nm && (w < 72 || h < 44)) nm.hidden = true;
+    const pct = el.querySelector(".pct");
+    if (pct && (w < 30 || h < 20)) pct.hidden = true;
+  });
+  stage.querySelectorAll(".map-group-label").forEach((el) => {
+    const host = el.parentElement;
+    if (!host) return;
+    if (host.clientWidth < 52 || host.clientHeight < 36) {
+      el.hidden = true;
+      host.querySelector(".map-group-body")?.classList.remove("has-label");
+    }
+  });
+  stage.querySelectorAll(".map-sector-label").forEach((el) => {
+    const host = el.parentElement;
+    if (!host) return;
+    if (host.clientWidth < 64 || host.clientHeight < 48) {
+      el.hidden = true;
+      host.querySelector(".map-sector-body")?.classList.remove("has-label");
+    }
+  });
+}
+
 function renderSectorMap(map) {
   if (!els.sectorMapCanvas) return;
   const sectors = map?.sectors || [];
@@ -4095,8 +4128,12 @@ function renderSectorMap(map) {
     return;
   }
 
+  const narrow =
+    typeof window !== "undefined" &&
+    (window.matchMedia("(max-width: 720px)").matches ||
+      document.documentElement.classList.contains("pulse-native-app"));
   const width = 1000;
-  const height = 520;
+  const height = narrow ? 640 : 520;
   const sectorNodes = sectors.map((s) => ({
     ...s,
     value: Math.max(0.5, Number(s.weight) || 1),
@@ -4111,7 +4148,7 @@ function renderSectorMap(map) {
       const sy = sec.y + gap;
       const sw = Math.max(1, sec.w - gap * 2);
       const sh = Math.max(1, sec.h - gap * 2);
-      const showHead = sh > 64 && sw > 70;
+      const showHead = narrow ? sh > 72 && sw > 86 : sh > 64 && sw > 70;
       const innerW = Math.max(1, sw - 2);
       const innerH = Math.max(1, sh - (showHead ? 17 : 2));
       const groups = (sec.groups || []).map((g) => ({
@@ -4122,7 +4159,9 @@ function renderSectorMap(map) {
       layoutTreemap(groups, 0, 0, innerW, innerH, groupRects);
       const groupsHtml = groupRects
         .map((grp) => {
-          const showGHead = grp.h > 42 && grp.w > 50;
+          const showGHead = narrow
+            ? grp.h > 52 && grp.w > 64
+            : grp.h > 42 && grp.w > 50;
           const bodyW = Math.max(1, grp.w - 1);
           const bodyH = Math.max(1, grp.h - (showGHead ? 13 : 1));
           const stocks = (grp.children || []).map((c) => ({
@@ -4133,8 +4172,13 @@ function renderSectorMap(map) {
           layoutTreemap(stocks, 0, 0, bodyW, bodyH, stockRects);
           const stocksHtml = stockRects
             .map((st) => {
-              const showName = st.w / bodyW > 0.28 && st.h / bodyH > 0.34;
-              const showPct = st.w / bodyW > 0.18 && st.h / bodyH > 0.22;
+              // Phone: ticker + % only — company names overflow tiny cells.
+              const showName = narrow
+                ? false
+                : st.w / bodyW > 0.28 && st.h / bodyH > 0.34;
+              const showPct = narrow
+                ? st.w > 28 && st.h > 22
+                : st.w / bodyW > 0.18 && st.h / bodyH > 0.22;
               const pct = st.change_pct;
               const cls =
                 pct == null || Number.isNaN(Number(pct))
@@ -4220,7 +4264,13 @@ function renderSectorMap(map) {
     })
     .join("");
 
-  els.sectorMapCanvas.innerHTML = `<div class="sector-map-stage">${html}</div>`;
+  els.sectorMapCanvas.innerHTML = `<div class="sector-map-stage${
+    narrow ? " is-narrow" : ""
+  }">${html}</div>`;
+  requestAnimationFrame(() => {
+    fitSectorMapLabels();
+    requestAnimationFrame(fitSectorMapLabels);
+  });
 
   els.sectorMapCanvas.querySelectorAll("[data-desk].map-sector-label").forEach((btn) => {
     btn.addEventListener("click", () => {
