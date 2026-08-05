@@ -19,8 +19,11 @@ from us_market_pulse.earnings_calendar import (
 from us_market_pulse.market_map import symbols_for_desk
 from us_market_pulse.markets import (
     PORTFOLIO_TIMEFRAMES,
+    _SESSION_META,
     _filter_session_window,
     _session_cycle_bounds,
+    _session_id_for_ts,
+    _session_segments,
     fetch_symbol_bundle,
 )
 from us_market_pulse.portfolio_intel import match_portfolio_intel
@@ -582,6 +585,40 @@ def _series_intraday_ok(row: dict[str, Any] | None) -> bool:
     return len(intra.get("points") or []) >= 2
 
 
+def _annotate_intraday_sessions(series_row: dict[str, Any] | None) -> dict[str, Any] | None:
+    """Tag points + attach 夜盘/盘前/盘中/盘后 metadata for the desk chart."""
+    if not isinstance(series_row, dict):
+        return series_row
+    pts = list(series_row.get("points") or [])
+    if len(pts) < 2:
+        series_row["session_labels"] = [s["label"] for s in _SESSION_META]
+        return series_row
+    for p in pts:
+        if not isinstance(p, dict):
+            continue
+        if p.get("t") and not p.get("session"):
+            try:
+                p["session"] = _session_id_for_ts(int(p["t"]))
+            except (TypeError, ValueError):
+                p["session"] = "regular"
+    series_row["points"] = pts
+    series_row["chart"] = "line"
+    series_row["sessions"] = _session_segments(pts)
+    series_row["session_labels"] = [s["label"] for s in _SESSION_META]
+    return series_row
+
+
+def _ensure_bundle_intraday_sessions(bundle: dict[str, Any] | None) -> dict[str, Any] | None:
+    if not isinstance(bundle, dict):
+        return bundle
+    series = dict(bundle.get("series") or {})
+    intra = series.get("intraday")
+    if isinstance(intra, dict) and (intra.get("points") or []):
+        series["intraday"] = _annotate_intraday_sessions(dict(intra))
+        bundle["series"] = series
+    return bundle
+
+
 def _spark_points_from_row(row: dict[str, Any] | None) -> list[dict[str, Any]]:
     """Prefer full-session intraday line points for list sparklines (same as desk 分时)."""
     if not row:
@@ -1041,7 +1078,9 @@ async def _fetch_quote(
         and _bundle_has_full_chart(cached.get("bundle"))
         and _series_intraday_ok(cached.get("bundle"))
     ):
-        return cached.get("bundle"), []
+        bundle = cached.get("bundle")
+        _ensure_bundle_intraday_sessions(bundle)
+        return bundle, []
 
     # Start Nasdaq immediately — Yahoo 429s often burn the desk budget alone.
     nd_intra_task = asyncio.create_task(
@@ -1078,6 +1117,7 @@ async def _fetch_quote(
     if bundle and _bundle_has_full_chart(bundle) and not need_intra:
         nd_intra_task.cancel()
         nd_ohlc_task.cancel()
+        _ensure_bundle_intraday_sessions(bundle)
         _SYM_CACHE[cache_key] = {"bundle": bundle, "fetched_at": time.time()}
         return bundle, errs
 
@@ -1134,27 +1174,20 @@ async def _fetch_quote(
                             "session": sid,
                         }
                     )
-        sessions = _session_segments_local(pts)
-        labels = []
-        seen: set[str] = set()
-        for s in sessions:
-            if s["id"] not in seen:
-                seen.add(s["id"])
-                labels.append(s["label"])
-        series["intraday"] = {
-            "tf": "intraday",
-            "label": "分时",
-            "blurb": "盘前·盘中·盘后·夜盘一体分时（Nasdaq）",
-            "range": "1d",
-            "interval": "1m",
-            "chart": "line",
-            "points": pts,
-            "change": nd.get("change"),
-            "change_pct": nd.get("change_pct"),
-            "previous_close": nd.get("previous_close"),
-            "sessions": sessions,
-            "session_labels": labels or ["盘前", "盘中", "盘后", "夜盘"],
-        }
+        series["intraday"] = _annotate_intraday_sessions(
+            {
+                "tf": "intraday",
+                "label": "分时",
+                "blurb": "夜盘·盘前·盘中·盘后一体分时（Nasdaq）",
+                "range": "1d",
+                "interval": "1m",
+                "chart": "line",
+                "points": pts,
+                "change": nd.get("change"),
+                "change_pct": nd.get("change_pct"),
+                "previous_close": nd.get("previous_close"),
+            }
+        )
 
     for tf_id, row in ohlc_series.items():
         if tf_id == "day" and not need_day:
@@ -1169,6 +1202,9 @@ async def _fetch_quote(
 
     if not series:
         return bundle, extra_errs
+
+    if isinstance(series.get("intraday"), dict):
+        series["intraday"] = _annotate_intraday_sessions(dict(series["intraday"]))
 
     intra_pts = list((series.get("intraday") or {}).get("points") or [])
     spark_pts = (
