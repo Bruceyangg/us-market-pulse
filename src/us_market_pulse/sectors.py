@@ -25,11 +25,13 @@ from us_market_pulse.markets import (
 )
 from us_market_pulse.portfolio_intel import match_portfolio_intel
 from us_market_pulse.quotes import (
+    apply_list_quote_fields,
     build_nasdaq_ohlc_series,
     fetch_day_quotes,
     fetch_nasdaq_daily_bars,
     fetch_nasdaq_intraday,
     fetch_nasdaq_intraday_many,
+    session_from_status,
 )
 from us_market_pulse.topics import TOPICS, filter_topic_items, topic_bearish_analysis
 
@@ -551,6 +553,9 @@ _PICKS_TTL = 180.0
 # Per-symbol Yahoo quote/earnings snippets shared across sectors
 _SYM_CACHE: dict[str, Any] = {}
 _SYM_TTL = 180.0
+# Shared holdings/sectors 分时 poll — short TTL so Yahoo-like tape stays fresh
+_INTRADAY_SNAP_CACHE: dict[str, Any] = {}
+_INTRADAY_SNAP_TTL = 1.0
 
 
 def _pick_has_chart(row: dict[str, Any] | None) -> bool:
@@ -618,6 +623,146 @@ def _ensure_bundle_intraday_sessions(bundle: dict[str, Any] | None) -> dict[str,
         series["intraday"] = _annotate_intraday_sessions(dict(intra))
         bundle["series"] = series
     return bundle
+
+
+async def fetch_intraday_snapshot(
+    symbol: str,
+    *,
+    force: bool = False,
+) -> dict[str, Any] | None:
+    """Fast 1D 分时 snapshot for holdings + sectors auto-refresh.
+
+    Nasdaq-first (sub-second) so 1s client polls stay responsive; Yahoo is only
+    a short fallback when Nasdaq is empty.
+    """
+    sym = (symbol or "").strip().upper()
+    if not sym:
+        return None
+    cache_key = f"intraday_snap:{sym}"
+    cached = _INTRADAY_SNAP_CACHE.get(cache_key)
+    if (
+        not force
+        and isinstance(cached, dict)
+        and time.time() - float(cached.get("at") or 0) < _INTRADAY_SNAP_TTL
+        and isinstance(cached.get("data"), dict)
+        and _series_intraday_ok(cached.get("data"))
+    ):
+        return dict(cached["data"])
+
+    yahoo_headers = {
+        "User-Agent": USER_AGENT,
+        "Accept": "application/json",
+        "Accept-Language": "en-US,en;q=0.9",
+        "Origin": "https://finance.yahoo.com",
+        "Referer": "https://finance.yahoo.com/",
+    }
+    series_row: dict[str, Any] | None = None
+    price: Any = None
+    change: Any = None
+    change_pct: Any = None
+    source = "none"
+
+    async with httpx.AsyncClient(
+        headers=yahoo_headers,
+        follow_redirects=True,
+        trust_env=False,
+        timeout=httpx.Timeout(2.2, connect=1.0),
+    ) as client:
+        # Fast path: Nasdaq only (typical 200–800ms).
+        nd = None
+        try:
+            nd = await asyncio.wait_for(
+                fetch_nasdaq_intraday(client, sym, max_points=480),
+                timeout=2.0,
+            )
+        except Exception:  # noqa: BLE001
+            nd = None
+
+        if nd and len(nd.get("points") or []) >= 2:
+            raw_pts = [
+                {"t": int(p["t"]), "v": float(p["v"])}
+                for p in (nd.get("points") or [])
+                if p.get("t") and p.get("v") is not None
+            ]
+            series_row = _annotate_intraday_sessions(
+                {
+                    "tf": "intraday",
+                    "label": "分时",
+                    "blurb": "Yahoo 1D 分时 · 含盘前/盘后",
+                    "range": "1d",
+                    "interval": "1m",
+                    "chart": "line",
+                    "points": raw_pts,
+                    "change": nd.get("change"),
+                    "change_pct": nd.get("change_pct"),
+                    "previous_close": nd.get("previous_close"),
+                }
+            )
+            price = nd.get("price")
+            change = nd.get("change")
+            change_pct = nd.get("change_pct")
+            source = "nasdaq"
+        else:
+            # Short Yahoo fallback only when Nasdaq fails.
+            try:
+                bundle, _errs = await asyncio.wait_for(
+                    fetch_symbol_bundle(
+                        client,
+                        symbol=sym,
+                        label=sym,
+                        short=sym,
+                        timeframes=[_INTRADAY_TF],
+                        include_yearly=False,
+                    ),
+                    timeout=1.8,
+                )
+            except Exception:  # noqa: BLE001
+                bundle = None
+            if bundle and _series_intraday_ok(bundle):
+                _ensure_bundle_intraday_sessions(bundle)
+                intra = (bundle.get("series") or {}).get("intraday")
+                if isinstance(intra, dict):
+                    series_row = dict(intra)
+                price = bundle.get("price")
+                change = bundle.get("change")
+                change_pct = bundle.get("change_pct")
+                source = "yahoo"
+
+    if not series_row or len(series_row.get("points") or []) < 2:
+        # Serve last good snapshot rather than blank the chart on a blip.
+        if isinstance(cached, dict) and isinstance(cached.get("data"), dict):
+            return dict(cached["data"])
+        return None
+
+    # Prefer last tape point's session; fall back to ET clock.
+    sid = "regular"
+    last_pts = list(series_row.get("points") or [])
+    if last_pts:
+        sid = str(last_pts[-1].get("session") or "") or sid
+    if sid not in {"pre", "regular", "post", "night"}:
+        sid, _label = session_from_status(None)
+    else:
+        _label = {"pre": "盘前", "regular": "盘中", "post": "盘后", "night": "夜盘"}.get(
+            sid, "盘中"
+        )
+        # If tape still says regular but clock is pre/post, prefer clock for badge.
+        clock_sid, clock_label = session_from_status(None)
+        if clock_sid in {"pre", "post", "night"}:
+            sid, _label = clock_sid, clock_label
+    data = {
+        "symbol": sym,
+        "price": price,
+        "change": change,
+        "change_pct": change_pct,
+        "previous_close": series_row.get("previous_close"),
+        "series": {"intraday": series_row},
+        "source": source,
+        "session": sid,
+        "session_label": _label,
+        "fetched_at": time.time(),
+    }
+    _INTRADAY_SNAP_CACHE[cache_key] = {"at": time.time(), "data": data}
+    return dict(data)
 
 
 def _spark_points_from_row(row: dict[str, Any] | None) -> list[dict[str, Any]]:
@@ -948,7 +1093,7 @@ def _lite_pick_from_quote(
         and etf_day is not None
         and float(day_pct) > float(etf_day)
     )
-    return {
+    row = {
         "symbol": sym,
         "name": vc.get("name") or sym,
         "label": vc.get("name") or sym,
@@ -971,6 +1116,8 @@ def _lite_pick_from_quote(
         "move_analysis": None,
         "url": f"https://finance.yahoo.com/quote/{sym}",
     }
+    apply_list_quote_fields(row, quote)
+    return row
 
 
 def _etf_by_id(sector_id: str) -> dict[str, Any] | None:
@@ -2231,6 +2378,8 @@ async def build_sector_desk(
                 "lite": False,
                 "chart_attempted": True,
             }
+            # Keep 收盘涨跌幅 / 实时涨跌幅 / 时段 from day quote (list UI).
+            apply_list_quote_fields(rich, selected_pick)
             replaced = False
             for idx, row in enumerate(pick_rows):
                 if row.get("symbol") == selected:

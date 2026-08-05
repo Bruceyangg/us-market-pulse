@@ -1634,12 +1634,16 @@ body {
 }
 
 .holding-row .price.up,
-.holding-row .chg.up {
+.holding-row .chg.up,
+.holding-row .rt-price.up,
+.holding-row .rt-chg.up {
   color: #d92b2b;
 }
 
 .holding-row .price.down,
-.holding-row .chg.down {
+.holding-row .chg.down,
+.holding-row .rt-price.down,
+.holding-row .rt-chg.down {
   color: var(--signal);
 }
 
@@ -1654,11 +1658,21 @@ body {
   font-variant-numeric: tabular-nums;
 }
 
-.holding-row .chg.up {
+.holding-row .chg.chg-close.up {
+  background: #d92b2b;
+  color: #fff;
+}
+
+.holding-row .chg.chg-close.down {
+  background: var(--signal);
+  color: #fff;
+}
+
+.holding-row .chg.up:not(.chg-close) {
   background: rgba(217, 43, 43, 0.12);
 }
 
-.holding-row .chg.down {
+.holding-row .chg.down:not(.chg-close) {
   background: rgba(15, 138, 106, 0.12);
 }
 
@@ -3120,14 +3134,86 @@ body {
   height: auto;
 }
 
-.sector-pick-list .sector-pick-main .quote {
+.sector-pick-list .sector-pick-main .quote,
+.portfolio-body .sector-pick-main .quote {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  justify-content: center;
+  gap: 0.1rem;
+  flex: 0 0 auto;
+  min-width: 7.6rem;
+  white-space: nowrap;
+}
+
+.sector-pick-list .quote-main,
+.sector-pick-list .quote-rt,
+.portfolio-body .quote-main,
+.portfolio-body .quote-rt {
   display: inline-flex;
   align-items: center;
   justify-content: flex-end;
-  gap: 0.45rem;
-  flex: 0 0 auto;
-  min-width: 8.4rem;
-  white-space: nowrap;
+  gap: 0.32rem;
+}
+
+.sector-pick-list .holding-row .chg.chg-close,
+.portfolio-body .holding-row .chg.chg-close {
+  color: #fff;
+  min-width: 4.2rem;
+  padding: 0.18rem 0.32rem;
+  border-radius: 6px;
+  font-weight: 700;
+}
+
+.sector-pick-list .holding-row .chg.chg-close.up,
+.portfolio-body .holding-row .chg.chg-close.up {
+  background: #d92b2b;
+  color: #fff;
+}
+
+.sector-pick-list .holding-row .chg.chg-close.down,
+.portfolio-body .holding-row .chg.chg-close.down {
+  background: var(--signal);
+  color: #fff;
+}
+
+.sector-pick-list .rt-price,
+.sector-pick-list .rt-chg,
+.portfolio-body .rt-price,
+.portfolio-body .rt-chg {
+  font-size: 0.62rem;
+  font-weight: 650;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -0.01em;
+}
+
+.sector-pick-list .rt-price.up,
+.sector-pick-list .rt-chg.up,
+.portfolio-body .rt-price.up,
+.portfolio-body .rt-chg.up {
+  color: #d92b2b;
+}
+
+.sector-pick-list .rt-price.down,
+.sector-pick-list .rt-chg.down,
+.portfolio-body .rt-price.down,
+.portfolio-body .rt-chg.down {
+  color: var(--signal);
+}
+
+.sector-pick-list .session-tag,
+.portfolio-body .session-tag {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 1.7rem;
+  padding: 0.04rem 0.22rem;
+  border-radius: 3px;
+  font-size: 0.56rem;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  color: var(--ink-soft);
+  background: color-mix(in srgb, var(--ink-soft) 16%, transparent);
 }
 
 .sector-pick-list .sector-hold-btn {

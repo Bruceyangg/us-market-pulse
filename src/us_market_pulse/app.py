@@ -42,7 +42,7 @@ from us_market_pulse.earnings_calendar import (
     parse_day_param,
 )
 from us_market_pulse.market_map import build_market_map
-from us_market_pulse.sectors import build_sector_desk
+from us_market_pulse.sectors import build_sector_desk, fetch_intraday_snapshot
 from us_market_pulse.symbol_lookup import resolve_holding_query, suggest_holdings
 from us_market_pulse.topics import build_war_desk
 from us_market_pulse.portfolio import (
@@ -274,6 +274,18 @@ async def api_sectors(
         selected_symbol=symbol,
     )
     return desk
+
+
+@app.get("/api/quote/intraday")
+async def api_quote_intraday(
+    symbol: str = Query(..., min_length=1, max_length=16),
+    refresh: bool = Query(default=False),
+) -> dict[str, Any]:
+    """Shared Yahoo-first 分时 snapshot for holdings + sectors auto-refresh."""
+    snap = await fetch_intraday_snapshot(symbol, force=refresh)
+    if not snap:
+        raise HTTPException(status_code=404, detail="暂无分时数据")
+    return snap
 
 
 @app.get("/api/sectors/map")
@@ -569,14 +581,9 @@ async def api_portfolio_add(request: Request, body: HoldingIn) -> dict[str, Any]
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
-    # Save first, then try a short quote enrich. Never block "add" on Yahoo/Nasdaq.
-    try:
-        view = await asyncio.wait_for(
-            build_portfolio_view(username, force_refresh=False),
-            timeout=8.0,
-        )
-    except Exception:  # noqa: BLE001
-        view = _portfolio_stub_view(username, selected=symbol)
+    # Instant ack — never wait on Yahoo/Nasdaq for +/− from the sectors desk.
+    # Holdings page refreshes quotes via /api/portfolio separately.
+    view = _portfolio_stub_view(username, selected=symbol)
     view["user"] = current_user(request)
     return {
         "ok": True,
@@ -592,13 +599,7 @@ async def api_portfolio_remove(request: Request, body: HoldingIn) -> dict[str, A
         remove_holding(username, body.symbol)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
-    try:
-        view = await asyncio.wait_for(
-            build_portfolio_view(username, force_refresh=False),
-            timeout=8.0,
-        )
-    except Exception:  # noqa: BLE001
-        view = _portfolio_stub_view(username)
+    view = _portfolio_stub_view(username)
     view["user"] = current_user(request)
     return {"ok": True, "portfolio": view}
 
