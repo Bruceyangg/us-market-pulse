@@ -29,6 +29,7 @@ const state = {
   portfolioSort: { key: "change_pct", dir: "desc" },
   portfolioPreview: null,
   portfolioSelectBusy: false,
+  portfolioBoardCache: {},
   holdingToggleBusy: false,
   holdingSymbols: null,
   holdingsOnly: false,
@@ -64,8 +65,10 @@ const PORTFOLIO_TF_KEYS = ["intraday", "day", "month", "quarter"];
 if (!PORTFOLIO_TF_KEYS.includes(state.portfolioTf)) {
   state.portfolioTf = "intraday";
 }
-const PAGE = document.body?.dataset?.page || "desk";
+let PAGE = document.body?.dataset?.page || "desk";
 const AUTHED = Boolean(document.getElementById("user-chip") || document.getElementById("btn-logout"));
+const pageTimers = [];
+const PAGE_DATA_TTL_MS = 3 * 60 * 1000;
 
 const els = {
   status: document.getElementById("status-line"),
@@ -1562,23 +1565,100 @@ function renderPortfolio(data) {
   renderPortfolioFocus(data);
 }
 
-async function selectPortfolioSymbol(symbol, { quiet = false } = {}) {
-  if (!symbol || state.portfolioSelectBusy) return;
-  if (symbol === state.portfolio?.selected) {
-    state.portfolioPreview = null;
+function cachePortfolioBoard(board) {
+  const sym = String(board?.symbol || "").toUpperCase();
+  if (!sym || !board) return;
+  if (!state.portfolioBoardCache) state.portfolioBoardCache = {};
+  if (pickHasChart(board) || (board.series?.intraday?.points || []).length >= 2) {
+    state.portfolioBoardCache[sym] = board;
+  }
+}
+
+function applyPortfolioSelectionLocal(symbol) {
+  const data = state.portfolio;
+  if (!data) return null;
+  const holdings = data.holdings || [];
+  const hit = holdings.find((h) => h.symbol === symbol);
+  if (!hit) return null;
+  const cached = state.portfolioBoardCache?.[symbol];
+  const board =
+    cached && (pickHasChart(cached) || (cached.series?.intraday?.points || []).length >= 2)
+      ? { ...hit, ...cached, symbol }
+      : hit;
+  const nextHoldings = holdings.map((h) =>
+    h.symbol === symbol ? { ...h, ...board, symbol } : h
+  );
+  state.portfolio = {
+    ...data,
+    holdings: nextHoldings,
+    selected: symbol,
+    selected_symbol: symbol,
+    selected_board: board,
+    board,
+    selected_earnings: board.earnings || data.selected_earnings || null,
+    value_chain: board.value_chain || data.value_chain || null,
+  };
+  state.portfolioPreview = null;
+  return state.portfolio;
+}
+
+function mergePortfolioSelectResponse(symbol, res) {
+  const board = res?.selected_board || res?.board || res?.portfolio?.selected_board;
+  if (board) cachePortfolioBoard(board);
+  if (res?.portfolio?.holdings) {
+    for (const h of res.portfolio.holdings) cachePortfolioBoard(h);
+  }
+  if (state.portfolio?.selected !== symbol) return;
+  if (board) {
+    const holdings = (state.portfolio.holdings || []).map((h) =>
+      h.symbol === symbol ? { ...h, ...board, symbol } : h
+    );
+    state.portfolio = {
+      ...state.portfolio,
+      holdings,
+      selected: symbol,
+      selected_symbol: symbol,
+      selected_board: board,
+      board,
+      selected_earnings: res.selected_earnings || board.earnings || null,
+      value_chain: res.value_chain || board.value_chain || null,
+    };
     renderPortfolio(state.portfolio);
-    if (PAGE === "desk") loadHoldingIntel({ symbol });
+    persistPageDataCache();
     return;
   }
+  if (res?.portfolio) {
+    state.portfolio = res.portfolio;
+    for (const h of res.portfolio.holdings || []) cachePortfolioBoard(h);
+    renderPortfolio(state.portfolio);
+    persistPageDataCache();
+  }
+}
+
+async function selectPortfolioSymbol(symbol, { quiet = false } = {}) {
+  const sym = String(symbol || "").trim().toUpperCase();
+  if (!sym) return;
+  if (sym === state.portfolio?.selected && pickHasChart(state.portfolio?.selected_board)) {
+    state.portfolioPreview = null;
+    renderPortfolio(state.portfolio);
+    if (PAGE === "desk") loadHoldingIntel({ symbol: sym, soft: true });
+    return;
+  }
+  // Paint instantly from local list / board cache — never block the UI on /select.
+  const painted = applyPortfolioSelectionLocal(sym);
+  if (painted) {
+    renderPortfolio(painted);
+    setStatus(`已切换 ${painted.selected_board?.name || sym}`);
+    if (PAGE === "desk") loadHoldingIntel({ symbol: sym, soft: true });
+  }
+  if (state.portfolioSelectBusy) return;
   state.portfolioSelectBusy = true;
   try {
-    const data = await portfolioPost("/api/portfolio/select", { symbol });
-    state.portfolioPreview = null;
-    renderPortfolio(data.portfolio);
-    if (PAGE === "desk") loadHoldingIntel({ symbol });
+    const data = await portfolioPost("/api/portfolio/select", { symbol: sym });
+    mergePortfolioSelectResponse(sym, data);
   } catch (err) {
     if (!quiet && els.portfolioBlurb) {
-      els.portfolioBlurb.textContent = `切换失败：${err.message || err}`;
+      els.portfolioBlurb.textContent = `详情刷新失败：${err.message || err}`;
     }
   } finally {
     state.portfolioSelectBusy = false;
@@ -1606,7 +1686,24 @@ async function ensurePortfolioSelection(data) {
   }
   try {
     const res = await portfolioPost("/api/portfolio/select", { symbol: target });
-    return res.portfolio || data;
+    if (res?.portfolio) return res.portfolio;
+    if (res?.selected_board) {
+      const board = res.selected_board;
+      cachePortfolioBoard(board);
+      return {
+        ...data,
+        selected: target,
+        selected_symbol: target,
+        selected_board: board,
+        board,
+        selected_earnings: res.selected_earnings || board.earnings,
+        value_chain: res.value_chain || board.value_chain,
+        holdings: holdings.map((h) =>
+          h.symbol === target ? { ...h, ...board, symbol: target } : h
+        ),
+      };
+    }
+    return data;
   } catch {
     return {
       ...data,
@@ -1634,7 +1731,10 @@ async function loadPortfolio({ refresh = false } = {}) {
     let data = await res.json();
     data = await ensurePortfolioSelection(data);
     syncHoldingSymbolsFromPortfolio(data);
+    for (const h of data.holdings || []) cachePortfolioBoard(h);
+    if (data.selected_board) cachePortfolioBoard(data.selected_board);
     renderPortfolio(data);
+    persistPageDataCache();
     try {
       localStorage.setItem(
         "pulse_portfolio_backup",
@@ -2017,13 +2117,14 @@ function renderHoldingIntel(data) {
   els.holdingIntelList.innerHTML = items.map(holdingIntelCardHtml).join("");
 }
 
-async function loadHoldingIntel({ refresh = false, symbol } = {}) {
+async function loadHoldingIntel({ refresh = false, symbol, soft = false } = {}) {
   if (!els.holdingIntelList && !els.holdingIntelChips) return null;
   if (!AUTHED) return null;
   const filter =
     symbol !== undefined ? symbol || "" : state.holdingFilter || "";
   state.holdingFilter = filter;
-  if (els.holdingIntelList) {
+  // Soft switch: keep previous intel visible while the next filter loads.
+  if (!soft && els.holdingIntelList) {
     els.holdingIntelList.innerHTML =
       '<p class="empty">同步持仓相关情报…</p>';
   }
@@ -4787,27 +4888,30 @@ function scheduleSectorsDeskHeightSync() {
 
 function selectSectorSymbol(sym) {
   const symbol = (sym || "").trim().toUpperCase();
-  if (!symbol || symbol === state.sectorSymbol) return;
+  if (!symbol) return;
   const data = state.sectors;
   const pick = (data?.picks || []).find((p) => p.symbol === symbol);
-  // Instant local switch when full chart series already loaded
-  if (data && pick && pickHasChart(pick)) {
+  if (!data || !pick) {
     state.sectorSymbol = symbol;
-    data.selected_symbol = symbol;
-    data.selected_pick = pick;
-    data.selected_earnings = pick.earnings || null;
-    data.value_chain = pick.value_chain || data.value_chain;
-    data.symbol_news = pick.symbol_news || [];
     syncSectorQuery();
-    renderSectorPicks(data);
-    setStatus(`已切换 ${pick.name || symbol} · ${pick.sector_label || ""}`);
+    loadSectorDesk();
     return;
   }
+  const already =
+    symbol === state.sectorSymbol && pickHasChart(data.selected_pick);
+  // Always paint locally first (lite spark or full chart) — never wait on network.
   state.sectorSymbol = symbol;
+  data.selected_symbol = symbol;
+  data.selected_pick = pick;
+  data.selected_earnings = pick.earnings || null;
+  data.value_chain = pick.value_chain || data.value_chain;
+  data.symbol_news = pick.symbol_news || [];
   syncSectorQuery();
-  if (els.sectorPickChart) {
-    els.sectorPickChart.innerHTML = '<p class="chart-placeholder">加载走势…</p>';
-  }
+  renderSectorPicks(data);
+  setStatus(`已切换 ${pick.name || symbol} · ${pick.sector_label || ""}`);
+  persistPageDataCache();
+  if (already || pickHasChart(pick)) return;
+  // Background upgrade for day/month/quarter series
   loadSectorDesk();
 }
 
@@ -4834,8 +4938,34 @@ async function loadSectorDesk({ force = false } = {}) {
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     const data = await res.json();
     if (data?.active_sector_id) sectorCachePut(data.active_sector_id, data);
+    // Keep previously upgraded picks when the new payload is still lite.
+    if (state.sectors?.picks?.length && data?.picks?.length) {
+      const prevBySym = Object.fromEntries(
+        state.sectors.picks
+          .filter((p) => pickHasChart(p))
+          .map((p) => [p.symbol, p])
+      );
+      data.picks = data.picks.map((p) => {
+        const prev = prevBySym[p.symbol];
+        if (prev && !pickHasChart(p)) {
+          return {
+            ...p,
+            series: { ...(p.series || {}), ...prev.series },
+            points: prev.points?.length ? prev.points : p.points,
+            lite: false,
+          };
+        }
+        return p;
+      });
+      if (data.selected_symbol && prevBySym[data.selected_symbol] && !pickHasChart(data.selected_pick)) {
+        data.selected_pick =
+          data.picks.find((p) => p.symbol === data.selected_symbol) ||
+          data.selected_pick;
+      }
+    }
     renderSectorDesk(data);
     syncSectorQuery();
+    persistPageDataCache();
     const hot = (data.hot_sectors || []).map((s) => s.label).slice(0, 2).join("、");
     const n = (data.picks || []).length;
     setStatus(
@@ -5150,7 +5280,111 @@ function bindEarningsDesk() {
   });
 }
 
+function clearPageTimers() {
+  while (pageTimers.length) {
+    clearInterval(pageTimers.pop());
+  }
+}
+
+function trackPageInterval(fn, ms) {
+  const id = window.setInterval(fn, ms);
+  pageTimers.push(id);
+  return id;
+}
+
+function pageDataKey(page = PAGE) {
+  return `pulse_data:${page}`;
+}
+
+function persistPageDataCache() {
+  try {
+    if (PAGE === "desk" && state.portfolio) {
+      for (const h of state.portfolio.holdings || []) cachePortfolioBoard(h);
+      if (state.portfolio.selected_board) {
+        cachePortfolioBoard(state.portfolio.selected_board);
+      }
+      sessionStorage.setItem(
+        pageDataKey("desk"),
+        JSON.stringify({
+          at: Date.now(),
+          portfolio: state.portfolio,
+          portfolioTf: state.portfolioTf,
+          boardCache: state.portfolioBoardCache || {},
+          holdingFilter: state.holdingFilter || "",
+        })
+      );
+    }
+    if (PAGE === "sectors" && state.sectors) {
+      sessionStorage.setItem(
+        pageDataKey("sectors"),
+        JSON.stringify({
+          at: Date.now(),
+          sectors: state.sectors,
+          sectorId: state.sectorId,
+          sectorSymbol: state.sectorSymbol,
+          sectorTf: state.sectorTf,
+          sectorCache: state.sectorCache || {},
+        })
+      );
+    }
+    if (PAGE === "markets" && state.markets) {
+      sessionStorage.setItem(
+        pageDataKey("markets"),
+        JSON.stringify({
+          at: Date.now(),
+          markets: state.markets,
+          marketTf: state.marketTf,
+        })
+      );
+    }
+  } catch {
+    /* quota / private mode */
+  }
+}
+
+function readPageDataCache(page = PAGE) {
+  try {
+    const raw = sessionStorage.getItem(pageDataKey(page));
+    if (!raw) return null;
+    const row = JSON.parse(raw);
+    if (!row || Date.now() - Number(row.at || 0) > PAGE_DATA_TTL_MS) return null;
+    return row;
+  } catch {
+    return null;
+  }
+}
+
+function paintFromPageDataCache(page = PAGE) {
+  const row = readPageDataCache(page);
+  if (!row) return false;
+  if (page === "desk" && row.portfolio) {
+    state.portfolio = row.portfolio;
+    if (row.portfolioTf) state.portfolioTf = row.portfolioTf;
+    if (row.boardCache) state.portfolioBoardCache = row.boardCache;
+    if (row.holdingFilter != null) state.holdingFilter = row.holdingFilter;
+    renderPortfolio(row.portfolio);
+    return true;
+  }
+  if (page === "sectors" && row.sectors) {
+    state.sectors = row.sectors;
+    if (row.sectorId) state.sectorId = row.sectorId;
+    if (row.sectorSymbol) state.sectorSymbol = row.sectorSymbol;
+    if (row.sectorTf) state.sectorTf = row.sectorTf;
+    if (row.sectorCache) state.sectorCache = row.sectorCache;
+    renderSectorDesk(row.sectors);
+    return true;
+  }
+  if (page === "markets" && row.markets) {
+    state.markets = row.markets;
+    if (row.marketTf) state.marketTf = row.marketTf;
+    renderMarkets(row.markets);
+    return true;
+  }
+  return false;
+}
+
 function bootPage() {
+  clearPageTimers();
   if (PAGE === "login") {
     bindAuthPage();
     setStatus("登录后查看个人持仓");
@@ -5161,36 +5395,50 @@ function bootPage() {
       setStatus("未登录 · 持仓需登录后查看");
       return;
     }
+    const painted = paintFromPageDataCache("desk");
+    if (painted) {
+      restoreScrollPosition();
+      setStatus("已恢复持仓缓存 · 后台刷新中…");
+    }
     loadPortfolio().then(() => {
       const selected = state.portfolio?.selected || "";
-      loadHoldingIntel({ symbol: selected || "" });
+      loadHoldingIntel({ symbol: selected || "", soft: painted });
+      persistPageDataCache();
     });
-    setInterval(() => {
+    trackPageInterval(() => {
       loadPortfolio({ refresh: true });
       loadHoldingIntel({
         symbol: state.holdingFilter || state.portfolio?.selected || "",
+        soft: true,
       });
     }, 90 * 1000);
   } else if (PAGE === "markets") {
+    const painted = paintFromPageDataCache("markets");
+    if (painted) restoreScrollPosition();
     loadMarketsDesk();
-    setInterval(() => loadMarketsDesk(), 90 * 1000);
+    trackPageInterval(() => loadMarketsDesk(), 90 * 1000);
   } else if (PAGE === "sectors") {
     const params = new URLSearchParams(location.search);
     const qSector = (params.get("sector") || "").trim().toLowerCase();
     const qSymbol = (params.get("symbol") || "").trim().toUpperCase();
     if (qSector) state.sectorId = qSector;
     if (qSymbol) state.sectorSymbol = qSymbol;
+    const painted = paintFromPageDataCache("sectors");
+    if (painted) {
+      restoreScrollPosition();
+      setStatus("已恢复板块缓存 · 后台刷新中…");
+    }
     bindSectorDesk();
     refreshHoldingSymbols().finally(() => loadSectorDesk());
-    setInterval(() => loadSectorDesk(), 90 * 1000);
+    trackPageInterval(() => loadSectorDesk(), 90 * 1000);
   } else if (PAGE === "earnings") {
     bindEarningsDesk();
     loadEarningsDesk();
-    setInterval(() => loadEarningsDesk(), 5 * 60 * 1000);
+    trackPageInterval(() => loadEarningsDesk(), 5 * 60 * 1000);
   } else if (PAGE === "intel") {
     readIntelQueryFlags();
     loadIntel();
-    setInterval(() => loadIntel(), 5 * 60 * 1000);
+    trackPageInterval(() => loadIntel(), 5 * 60 * 1000);
   } else if (PAGE === "settings") {
     loadSettingsPage();
     loadAccessTip();
@@ -5301,9 +5549,12 @@ function syncNavActive() {
 }
 
 function navigateToHref(href) {
-  saveScrollPosition();
   const url = new URL(href, location.origin);
   const samePath = url.pathname === location.pathname;
+
+  // Snapshot desk/sectors data before leaving so the next visit paints instantly.
+  persistPageDataCache();
+  saveScrollPosition();
 
   if (samePath) {
     if (url.hash) {
@@ -5322,7 +5573,7 @@ function navigateToHref(href) {
     return;
   }
 
-  location.href = `${url.pathname}${url.hash || ""}`;
+  location.href = `${url.pathname}${url.search || ""}${url.hash || ""}`;
 }
 
 function cycleNav(delta) {
@@ -5371,8 +5622,14 @@ function bindStickyNavChrome() {
     });
   });
 
-  window.addEventListener("pagehide", saveScrollPosition);
-  window.addEventListener("beforeunload", saveScrollPosition);
+  window.addEventListener("pagehide", () => {
+    persistPageDataCache();
+    saveScrollPosition();
+  });
+  window.addEventListener("beforeunload", () => {
+    persistPageDataCache();
+    saveScrollPosition();
+  });
   let scrollSaveTimer = 0;
   window.addEventListener(
     "scroll",

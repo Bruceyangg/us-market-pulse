@@ -295,6 +295,168 @@ def _empty_portfolio_view(username: str, data: dict[str, Any]) -> dict[str, Any]
     }
 
 
+async def upgrade_selected_board(
+    username: str,
+    symbol: str,
+    *,
+    force: bool = False,
+) -> dict[str, Any]:
+    """Fetch only the selected symbol's chart/earnings — used by fast /select."""
+    sym = normalize_symbol(symbol)
+    data = load_portfolio(username)
+    holdings = data.get("holdings") or []
+    holding_meta = next((h for h in holdings if h.get("symbol") == sym), None)
+    if not holding_meta:
+        raise ValueError("该代码不在持仓列表中")
+
+    now = time.time()
+    errors: list[str] = []
+    boards: dict[str, Any] = dict(_CACHE.get("boards") or {})
+    cached = boards.get(sym) if isinstance(boards.get(sym), dict) else None
+    cache_fresh = (
+        not force
+        and cached
+        and (now - float(_CACHE.get("quotes_at") or 0) < _QUOTE_TTL)
+        and (_pick_has_chart(cached) or _pick_has_intraday(cached))
+    )
+
+    yahoo_headers = {
+        "User-Agent": USER_AGENT,
+        "Accept": "application/json",
+        "Accept-Language": "en-US,en;q=0.9",
+        "Origin": "https://finance.yahoo.com",
+        "Referer": "https://finance.yahoo.com/",
+    }
+
+    bundle: dict[str, Any] | None = cached if cache_fresh else None
+    if not bundle:
+        try:
+            async with httpx.AsyncClient(
+                headers=yahoo_headers,
+                follow_redirects=True,
+                trust_env=False,
+                timeout=httpx.Timeout(14.0, connect=3.0),
+            ) as http:
+                bundle, errs = await asyncio.wait_for(
+                    _fetch_quote_limited(http, sym, sym, force=force),
+                    timeout=14.0,
+                )
+            errors.extend(errs or [])
+        except (asyncio.TimeoutError, httpx.HTTPError) as exc:
+            bundle = None
+            errors.append(f"{sym}: chart timeout ({exc.__class__.__name__})")
+
+    day_quotes: dict[str, Any] = {}
+    try:
+        day_quotes = await asyncio.wait_for(fetch_day_quotes([sym]), timeout=6.0)
+    except Exception as exc:  # noqa: BLE001
+        errors.append(f"day quote: {exc}")
+    quote = day_quotes.get(sym)
+
+    vc = _value_chain_for(sym)
+    if bundle and (_bundle_has_full_chart(bundle) or _pick_has_intraday(bundle)):
+        wave = _momentum_fields(bundle)
+        day_pct = bundle.get("change_pct")
+        if day_pct is None and quote:
+            day_pct = quote.get("change_pct")
+        rich = {
+            **holding_meta,
+            **bundle,
+            "name": holding_meta.get("name")
+            or vc.get("name")
+            or bundle.get("label")
+            or sym,
+            "label": holding_meta.get("name")
+            or vc.get("name")
+            or bundle.get("label")
+            or sym,
+            "month_change_pct": wave["month_change_pct"],
+            "quarter_change_pct": wave["quarter_change_pct"],
+            "momentum": wave["momentum"],
+            "is_wave": wave["is_wave"],
+            "is_strong": wave["is_wave"] or float(day_pct or 0) > 0,
+            "sector_label": str(vc.get("industry") or "持仓"),
+            "value_chain": vc,
+            "lite": False,
+            "chart_attempted": True,
+            "url": bundle.get("url") or f"https://finance.yahoo.com/quote/{sym}",
+        }
+        if rich.get("price") is None and quote:
+            rich["price"] = quote.get("price")
+            rich["change"] = quote.get("change")
+            rich["change_pct"] = quote.get("change_pct")
+        boards[sym] = bundle
+        _CACHE["boards"] = boards
+        _CACHE["quotes_at"] = now
+    else:
+        rich = _lite_holding_card(holding_meta, quote)
+        rich["chart_attempted"] = True
+        rich["value_chain"] = vc
+
+    earn = None
+    try:
+        upcoming_map = await asyncio.wait_for(
+            get_upcoming_earnings_map(force=False),
+            timeout=6.0,
+        )
+    except Exception:  # noqa: BLE001
+        upcoming_map = {}
+    try:
+        async with httpx.AsyncClient(
+            headers=yahoo_headers,
+            follow_redirects=True,
+            trust_env=False,
+            timeout=httpx.Timeout(6.0, connect=2.0),
+        ) as earn_client:
+            earn = await asyncio.wait_for(
+                _fetch_earnings_cached(
+                    earn_client,
+                    sym,
+                    force=force,
+                    upcoming_map=upcoming_map,
+                ),
+                timeout=6.0,
+            )
+    except Exception as exc:  # noqa: BLE001
+        errors.append(f"{sym}: earnings {exc}")
+    if earn:
+        rich["earnings"] = earn
+
+    wave = _momentum_fields(rich)
+    try:
+        rich["move_analysis"] = _move_analysis(
+            day_pct=rich.get("change_pct"),
+            month_pct=wave["month_change_pct"]
+            if _pick_has_chart(rich)
+            else rich.get("month_change_pct"),
+            quarter_pct=wave["quarter_change_pct"],
+            vs_sector_pct=None,
+            is_wave=bool(rich.get("is_wave")),
+            sector_label=str(rich.get("sector_label") or ""),
+            etf_day_pct=None,
+            earnings=earn if isinstance(earn, dict) else None,
+            value_chain=vc,
+            news=None,
+        )
+    except Exception:  # noqa: BLE001
+        rich["move_analysis"] = {
+            "bias": "neutral",
+            "bias_zh": "中性",
+            "summary": "行情数据不足，暂无法判断涨跌驱动。",
+            "factors": ["等待报价刷新后再解读"],
+        }
+
+    return {
+        "selected": sym,
+        "selected_symbol": sym,
+        "selected_board": rich,
+        "board": rich,
+        "selected_earnings": rich.get("earnings"),
+        "value_chain": rich.get("value_chain"),
+        "errors": errors,
+    }
+
+
 async def build_portfolio_view(
     username: str,
     *,
