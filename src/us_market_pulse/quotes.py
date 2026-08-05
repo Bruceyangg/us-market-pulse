@@ -6,6 +6,7 @@ import re
 from datetime import date, datetime, timezone
 from typing import Any
 from urllib.parse import quote
+from zoneinfo import ZoneInfo
 
 import httpx
 
@@ -14,7 +15,10 @@ USER_AGENT = (
     "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
 )
 
+_ET = ZoneInfo("America/New_York")
 _NUM_RE = re.compile(r"[^0-9+\-.]")
+# Nasdaq intraday z.dateTime like "4:00 AM ET" / "7:59 PM ET"
+_NASDAQ_TIME_RE = re.compile(r"^\s*(\d{1,2}):(\d{2})\s*(AM|PM)\s*ET\s*$", re.I)
 
 
 def _parse_number(value: Any) -> float | None:
@@ -206,6 +210,37 @@ def _parse_pct_text(value: Any) -> float | None:
         return None
 
 
+def _parse_nasdaq_intraday_ts(row: dict[str, Any], day: date) -> int | None:
+    """
+    Nasdaq chart `x` is ~4h behind real ET during EDT; prefer z.dateTime
+    ("4:00 AM ET") which matches the exchange tape.
+    """
+    z = row.get("z") if isinstance(row.get("z"), dict) else {}
+    text = str((z or {}).get("dateTime") or "").strip()
+    m = _NASDAQ_TIME_RE.match(text)
+    if m:
+        hour = int(m.group(1))
+        minute = int(m.group(2))
+        ampm = m.group(3).upper()
+        if ampm == "PM" and hour != 12:
+            hour += 12
+        elif ampm == "AM" and hour == 12:
+            hour = 0
+        try:
+            return int(
+                datetime(
+                    day.year, day.month, day.day, hour, minute, tzinfo=_ET
+                ).timestamp()
+            )
+        except ValueError:
+            pass
+    x = row.get("x")
+    try:
+        return int(x) // 1000 if x is not None else None
+    except (TypeError, ValueError):
+        return None
+
+
 async def fetch_nasdaq_intraday(
     client: httpx.AsyncClient,
     symbol: str,
@@ -214,7 +249,7 @@ async def fetch_nasdaq_intraday(
 ) -> dict[str, Any] | None:
     """
     Intraday line points from Nasdaq official chart API.
-    Works when Yahoo chart returns 403/429. Covers pre-market (~4:00 ET) onward.
+    Works when Yahoo chart returns 403/429. Covers ~4:00–20:00 ET extended hours.
     """
     sym = (symbol or "").strip().upper()
     path_sym = _nasdaq_path_symbol(sym)
@@ -239,28 +274,35 @@ async def fetch_nasdaq_intraday(
         raw = data.get("chart") or []
         if not isinstance(raw, list) or len(raw) < 2:
             return None
+        # Tape is for the current ET trading date (extended hours same calendar day)
+        day = datetime.now(tz=_ET).date()
         points: list[dict[str, Any]] = []
         for row in raw:
             if not isinstance(row, dict):
                 continue
+            z = row.get("z") if isinstance(row.get("z"), dict) else {}
             y = row.get("y")
             if y is None:
-                z = row.get("z") if isinstance(row.get("z"), dict) else {}
-                y = z.get("value")
+                y = (z or {}).get("value")
             try:
                 price = float(y)
             except (TypeError, ValueError):
                 continue
-            x = row.get("x")
-            try:
-                ts = int(x) // 1000 if x is not None else 0
-            except (TypeError, ValueError):
-                ts = 0
+            ts = _parse_nasdaq_intraday_ts(row, day)
             if not ts or price <= 0:
                 continue
-            points.append({"t": ts, "v": round(price, 6)})
+            points.append({"t": int(ts), "v": round(price, 6)})
         if len(points) < 2:
             return None
+        points.sort(key=lambda p: p["t"])
+        # Drop duplicate timestamps (keep last)
+        dedup: list[dict[str, Any]] = []
+        for p in points:
+            if dedup and dedup[-1]["t"] == p["t"]:
+                dedup[-1] = p
+            else:
+                dedup.append(p)
+        points = dedup
         if len(points) > max_points:
             step = max(1, len(points) // max_points)
             trimmed = points[::step]
