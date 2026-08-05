@@ -317,11 +317,10 @@ async def fetch_nasdaq_intraday(
                 dedup.append(p)
         points = dedup
         if len(points) > max_points:
-            step = max(1, len(points) // max_points)
-            trimmed = points[::step]
-            if trimmed[-1] is not points[-1]:
-                trimmed.append(points[-1])
-            points = trimmed[:max_points]
+            # Session-aware sample — never truncate the 盘后 tail with [:max].
+            from us_market_pulse.markets import sample_session_points
+
+            points = sample_session_points(points, max_points)
         change_pct = _parse_pct_text(data.get("percentageChange"))
         price = _parse_number(data.get("lastSalePrice"))
         if price is None:
