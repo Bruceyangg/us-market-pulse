@@ -803,7 +803,17 @@ function paintZoomableChart(key) {
   if (resetBtn) resetBtn.classList.toggle("is-hidden", !zoomed);
   if (zoomRoot) zoomRoot.classList.toggle("is-zoomed", zoomed);
   root.querySelectorAll(":scope > .ma-legend").forEach((el) => el.remove());
-  if (kind === "candle") {
+  // 分时 always uses the session line renderer, even if a stale kind says candle.
+  if (tf === "intraday") {
+    const linePts = toLineSparkPoints(points);
+    stage.innerHTML = renderSessionIntradaySvg(linePts.length ? linePts : points, {
+      up,
+      viewStart: z.start,
+      viewEnd: z.start + z.count,
+      sessions: meta.sessions,
+      previousClose: meta.previousClose,
+    });
+  } else if (kind === "candle") {
     // Keep SVG inside the zoom stage; park MA legend as a sibling so it cannot
     // overflow/paint over 个股财报 below when the chart card is height-clipped.
     stage.innerHTML = candleChartHtml(points, tf, z).replace(
@@ -817,14 +827,6 @@ function paintZoomableChart(key) {
         maLegendHtml(active.length ? active : MA_PERIODS)
       );
     }
-  } else if (tf === "intraday") {
-    stage.innerHTML = renderSessionIntradaySvg(points, {
-      up,
-      viewStart: z.start,
-      viewEnd: z.start + z.count,
-      sessions: meta.sessions,
-      previousClose: meta.previousClose,
-    });
   } else {
     stage.innerHTML = renderChartSvg(points, {
       up,
@@ -1127,53 +1129,67 @@ function pctSparkBar(pct) {
   </svg>`;
 }
 
+function toLineSparkPoints(raw) {
+  return (raw || [])
+    .map((p) => {
+      if (!p) return null;
+      // Candle bars store volume in `v` — prefer close for line sparks
+      const isCandle =
+        p.c != null && (p.o != null || p.h != null || p.l != null);
+      const v = isCandle ? Number(p.c) : Number(p.v ?? p.c);
+      if (Number.isNaN(v)) return null;
+      return { t: p.t, v };
+    })
+    .filter(Boolean);
+}
+
 function holdingSparkSvg(holding, tf) {
   const want = tf || "intraday";
-  const series = holding?.series?.[want];
-  // Sector list always prefers 24h points even if other TF series exist
-  const points =
-    want === "intraday"
-      ? series?.points ||
-        holding?.series?.intraday?.points ||
-        holding?.points ||
-        []
-      : series?.points || holding?.points || [];
-  const kind = series?.chart || (want === "intraday" ? "line" : "candle");
-  // Color the spark from the same series used for the path (desk 分时),
-  // not the day quote %, so left/middle intraday shapes stay consistent.
-  const pct =
-    want === "intraday"
-      ? series?.change_pct != null
-        ? series.change_pct
-        : holding?.series?.intraday?.change_pct != null
-          ? holding.series.intraday.change_pct
-          : points.length >= 2
-            ? ((Number(points[points.length - 1].v ?? points[points.length - 1].c) -
-                Number(points[0].v ?? points[0].c)) /
-                Math.abs(Number(points[0].v ?? points[0].c) || 1)) *
-              100
-            : holding?.change_pct
-      : series?.change_pct != null
-        ? series.change_pct
-        : holdingTfPct(holding, want) != null
-          ? holdingTfPct(holding, want)
+  // List column always paints a line spark (never mini-candles / pct bars).
+  // Only use true intraday series — do not borrow day OHLC from `points`
+  // (that made some rows look like short bars / different shapes).
+  if (want === "intraday") {
+    const sparkPoints = toLineSparkPoints(
+      holding?.series?.intraday?.points || []
+    );
+    const pct =
+      holding?.series?.intraday?.change_pct != null
+        ? holding.series.intraday.change_pct
+        : sparkPoints.length >= 2
+          ? ((sparkPoints[sparkPoints.length - 1].v - sparkPoints[0].v) /
+              Math.abs(sparkPoints[0].v || 1)) *
+            100
           : holding?.change_pct;
+    const up = !(typeof pct === "number" && pct < 0);
+    const path = sparklinePath(sparkPoints, 120, 30, 2);
+    if (!path) {
+      return `<svg class="spark spark-empty" viewBox="0 0 120 30" preserveAspectRatio="none" aria-hidden="true"></svg>`;
+    }
+    const stroke = up ? TAPE_UP : TAPE_DOWN;
+    return `<svg class="spark" viewBox="0 0 120 30" preserveAspectRatio="none" aria-hidden="true"><path d="${path}" fill="none" stroke="${stroke}" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"></path></svg>`;
+  }
+
+  const series = holding?.series?.[want];
+  const points = series?.points || holding?.points || [];
+  const kind = series?.chart || "candle";
+  const pct =
+    series?.change_pct != null
+      ? series.change_pct
+      : holdingTfPct(holding, want) != null
+        ? holdingTfPct(holding, want)
+        : holding?.change_pct;
   const up = !(typeof pct === "number" && pct < 0);
   if (kind === "candle") {
     return (
-      miniCandleSvg(points, { width: 120, height: 30 }) || pctSparkBar(pct)
+      miniCandleSvg(points, { width: 120, height: 30 }) ||
+      `<svg class="spark spark-empty" viewBox="0 0 120 30" preserveAspectRatio="none" aria-hidden="true"></svg>`
     );
   }
-  const sparkPoints = points.map((p) => {
-    if (!p) return p;
-    if (p.c != null && (p.o != null || p.h != null || p.l != null)) {
-      return { t: p.t, v: p.c };
-    }
-    if (p.c != null && p.v == null) return { t: p.t, v: p.c };
-    return p;
-  });
+  const sparkPoints = toLineSparkPoints(points);
   const path = sparklinePath(sparkPoints, 120, 30, 2);
-  if (!path) return pctSparkBar(pct);
+  if (!path) {
+    return `<svg class="spark spark-empty" viewBox="0 0 120 30" preserveAspectRatio="none" aria-hidden="true"></svg>`;
+  }
   const stroke = up ? TAPE_UP : TAPE_DOWN;
   return `<svg class="spark" viewBox="0 0 120 30" preserveAspectRatio="none" aria-hidden="true"><path d="${path}" fill="none" stroke="${stroke}" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"></path></svg>`;
 }
@@ -4508,40 +4524,45 @@ function renderMoveAnalysis(pick) {
 function resolveSectorChartSeries(pick, preferredTf) {
   const seriesMap = pick?.series || {};
   const want = preferredTf || "intraday";
+
+  // 分时 must always be a session line — never fall back to day/month candles
+  // (that painted a 柱状图 while the 分时 tab stayed selected).
+  if (want === "intraday") {
+    const preferred = seriesMap.intraday;
+    const raw = preferred?.points || [];
+    const points = toLineSparkPoints(raw);
+    if (points.length >= 2) {
+      return {
+        tf: "intraday",
+        series: {
+          ...(preferred || {}),
+          chart: "line",
+          points: preferred?.points || points,
+        },
+        points,
+        kind: "line",
+      };
+    }
+    return {
+      tf: "intraday",
+      series: preferred || null,
+      points: [],
+      kind: "line",
+    };
+  }
+
   const preferred = seriesMap[want];
-  const preferredKind =
-    preferred?.chart || (want === "intraday" ? "line" : "candle");
-  const preferredRaw =
-    preferred?.points || (want === "intraday" ? pick?.points || [] : []);
-  const preferredPoints =
-    preferredKind === "candle"
-      ? sanitizeCandleBars(preferredRaw)
-      : (preferredRaw || []).filter(Boolean);
+  const preferredRaw = preferred?.points || [];
+  const preferredPoints = sanitizeCandleBars(preferredRaw);
   if (preferredPoints.length >= 2) {
     return {
       tf: want,
-      series: preferred || { chart: preferredKind, points: preferredRaw },
+      series: preferred || { chart: "candle", points: preferredRaw },
       points: preferredPoints,
-      kind: preferredKind,
+      kind: "candle",
     };
   }
-  // Candle tabs stay empty when missing — do not silently snap back to 分时.
-  if (want !== "intraday") {
-    return { tf: want, series: preferred || null, points: [], kind: "candle" };
-  }
-  // Intraday fallback: any available series so the desk still paints
-  const order = ["intraday", "day", "month", "quarter"];
-  for (const tf of order) {
-    const series = seriesMap[tf];
-    const raw = series?.points || (tf === "intraday" ? pick?.points || [] : []);
-    const kind = series?.chart || (tf === "intraday" ? "line" : "candle");
-    const points =
-      kind === "candle" ? sanitizeCandleBars(raw) : (raw || []).filter(Boolean);
-    if (points.length >= 2) {
-      return { tf, series: series || { chart: kind, points: raw }, points, kind };
-    }
-  }
-  return { tf: want, series: null, points: [], kind: "line" };
+  return { tf: want, series: preferred || null, points: [], kind: "candle" };
 }
 
 function renderSectorPickChart() {
