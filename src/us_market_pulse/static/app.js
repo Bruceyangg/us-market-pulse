@@ -1320,37 +1320,101 @@ function renderPortfolioChart() {
     els.portfolioChart.classList.add("is-empty");
     els.portfolioChart.classList.remove("is-preview");
     els.portfolioChart.innerHTML =
-      '<p class="chart-placeholder">添加持仓后，右侧将显示分时 / K 线详情</p>';
+      '<p class="chart-placeholder">添加持仓后，中间将显示分时 / K 线详情</p>';
     return;
   }
 
-  const series = board.series?.[tf];
-  const points = series?.points || board.points || [];
+  // Same series resolution as sectors desk — one paint path for list spark + chart
+  const pick = {
+    ...board,
+    name: board.label || board.name || board.symbol,
+  };
+  const resolved = resolveSectorChartSeries(pick, tf);
+  const series = resolved.series;
+  const points = resolved.points;
+  const kind = resolved.kind;
+
+  if (points.length < 2) {
+    const tfLabel =
+      { intraday: "分时", day: "日图", month: "月图", quarter: "季图" }[tf] ||
+      "走势";
+    els.portfolioChart.classList.remove("is-empty");
+    els.portfolioChart.classList.toggle("is-preview", Boolean(preview));
+    els.portfolioChart.innerHTML = `
+      <div class="chart-head">
+        <h3>${escapeHtml(pick.name || "")} · ${escapeHtml(
+          pick.symbol || ""
+        )}${preview ? '<span class="preview-tag">预览</span>' : ""}</h3>
+        <span class="range chg ${pctClass(pick.change_pct)}">${escapeHtml(
+          pctText(pick.change_pct)
+        )}</span>
+      </div>
+      <div class="portfolio-stats" aria-label="区间读数">
+        <span><span class="k">现价</span><span class="v ${pctClass(
+          pick.change_pct
+        )}">${escapeHtml(
+          pick.price == null ? "—" : formatNumber(pick.price, "")
+        )}</span></span>
+        <span><span class="k">开</span><span class="v">—</span></span>
+        <span><span class="k">高</span><span class="v">—</span></span>
+        <span><span class="k">低</span><span class="v">—</span></span>
+        <span><span class="k">月涨幅</span><span class="v ${pctClass(
+          pick.month_change_pct
+        )}">${escapeHtml(pctText(pick.month_change_pct))}</span></span>
+      </div>
+      <p class="chart-placeholder">暂无${escapeHtml(
+        tfLabel
+      )}数据 · 点右上角刷新重试</p>
+    `;
+    return;
+  }
+
+  const zoomWin = defaultChartZoom(points.length, tf, kind);
+  const viewPoints = points.slice(zoomWin.start, zoomWin.start + zoomWin.count);
   const pct =
-    series?.change_pct != null ? series.change_pct : board.change_pct;
+    series?.change_pct != null && kind === "line"
+      ? series.change_pct
+      : viewPoints.length >= 2
+        ? kind === "candle"
+          ? ((Number(viewPoints[viewPoints.length - 1].c) -
+              Number(viewPoints[0].o ?? viewPoints[0].c)) /
+              Math.abs(Number(viewPoints[0].o ?? viewPoints[0].c) || 1)) *
+            100
+          : ((Number(
+              viewPoints[viewPoints.length - 1].v ??
+                viewPoints[viewPoints.length - 1].c
+            ) -
+              Number(viewPoints[0].v ?? viewPoints[0].c)) /
+              Math.abs(Number(viewPoints[0].v ?? viewPoints[0].c) || 1)) *
+            100
+        : series?.change_pct != null
+          ? series.change_pct
+          : pick.change_pct;
   const up = !(typeof pct === "number" && pct < 0);
-  const pctText =
-    typeof pct === "number" ? `${pct >= 0 ? "+" : ""}${pct.toFixed(2)}%` : "—";
-  const kind =
-    series?.chart || meta.chart || (tf === "intraday" ? "line" : "candle");
-  const stats = seriesStats(points, kind);
-  const price = board.price != null ? board.price : stats.last;
+  const stats = seriesStats(viewPoints.length ? viewPoints : points, kind);
+  const maNote = MA_CHART_TFS.has(tf) ? " · 含均线" : "";
+  const sessionNote =
+    tf === "intraday"
+      ? ` · ${(series?.session_labels || []).length ? (series.session_labels || []).join("·") : "盘前·盘中·盘后·夜盘"}一体分时`
+      : "";
 
   els.portfolioChart.classList.remove("is-empty");
   els.portfolioChart.classList.toggle("is-preview", Boolean(preview));
   els.portfolioChart.innerHTML = `
     <div class="chart-head">
-      <h3>${escapeHtml(board.label || board.symbol || "")} · ${escapeHtml(
-        board.symbol || ""
-      )}${preview ? '<span class="preview-tag">预览</span>' : ""}</h3>
+      <h3>${escapeHtml(pick.name || "")} · ${escapeHtml(pick.symbol || "")}${
+        pick.is_wave ? '<span class="hot-tag">涨势</span>' : ""
+      }${preview ? '<span class="preview-tag">预览</span>' : ""}</h3>
       <span class="range chg ${up ? "up" : "down"}">${escapeHtml(
-        meta.label || ""
-      )} · 区间 ${pctText}</span>
+        pctText(pct)
+      )}</span>
     </div>
     <div class="portfolio-stats" aria-label="区间读数">
       <span><span class="k">现价</span><span class="v ${
         up ? "up" : "down"
-      }">${escapeHtml(price == null ? "—" : formatNumber(price, ""))}</span></span>
+      }">${escapeHtml(
+        pick.price == null ? "—" : formatNumber(pick.price, "")
+      )}</span></span>
       <span><span class="k">开</span><span class="v">${escapeHtml(
         stats.open == null ? "—" : formatNumber(stats.open, "")
       )}</span></span>
@@ -1360,18 +1424,18 @@ function renderPortfolioChart() {
       <span><span class="k">低</span><span class="v down">${escapeHtml(
         stats.low == null ? "—" : formatNumber(stats.low, "")
       )}</span></span>
-      <span><span class="k">量</span><span class="v">${escapeHtml(
-        formatCompact(stats.volume)
-      )}</span></span>
+      <span><span class="k">月涨幅</span><span class="v ${pctClass(
+        pick.month_change_pct
+      )}">${escapeHtml(pctText(pick.month_change_pct))}</span></span>
     </div>
     <div class="chart-canvas" data-zoom-host="portfolio"></div>
-    <div class="chart-foot">${escapeHtml(
-      series?.blurb || meta.blurb || ""
-    )} · 红涨绿跌 · 延迟报价 · 捏合缩放</div>
+    <div class="chart-foot">红涨绿跌${maNote}${sessionNote} · ${escapeHtml(
+      pick.sector_label || "持仓"
+    )} · 捏合缩放</div>
   `;
   bindZoomableChart(els.portfolioChart.querySelector("[data-zoom-host]"), {
     key: "portfolio",
-    scope: `${board.symbol || ""}:${tf}`,
+    scope: `${pick.symbol || ""}:${tf}`,
     points,
     tf,
     kind,
@@ -1384,20 +1448,25 @@ function renderPortfolioChart() {
 function holdingsCountNote(data, meta) {
   const n = (data?.holdings || []).length;
   if (!n) return "打开「管理持仓」添加代码；支持导出 / 导入备份";
-  return `全部 ${n} 只 · ${meta?.label || ""} · 悬停预览 · 点击锁定 · ↑↓ 切换`;
+  const waveN = (data?.holdings || []).filter((h) => h.is_wave).length;
+  return `${n} 只持仓 · ${waveN} 只涨势 · ${meta?.label || "分时"} · 点选看走势 · ↑↓ 切换`;
 }
 
 function renderPortfolio(data) {
   state.portfolio = data || null;
   const holdings = data?.holdings || [];
-  const selected = data?.selected || holdings[0]?.symbol || "";
+  const selected =
+    data?.selected || data?.selected_symbol || holdings[0]?.symbol || "";
+  const selectedBoard =
+    data?.selected_board ||
+    holdings.find((h) => h.symbol === selected) ||
+    null;
   const tf = state.portfolioTf || data?.default_tf || "intraday";
   const meta =
     (data?.timeframes || []).find((t) => t.id === tf) || {
       id: tf,
       label: tf,
     };
-  const previewSym = state.portfolioPreview;
 
   if (els.portfolioBlurb) {
     els.portfolioBlurb.textContent =
@@ -1405,47 +1474,85 @@ function renderPortfolio(data) {
       `自定义股票 · 云端同步 · 最多 ${data?.max_holdings || 20} 只 · 红涨绿跌`;
   }
 
-  updatePortfolioSortMarks();
+  const titleEl = document.getElementById("portfolio-picks-title");
+  if (titleEl) titleEl.textContent = "我的持仓";
 
   if (els.holdingRail) {
     if (!holdings.length) {
       els.holdingRail.innerHTML =
         '<p class="empty">还没有持仓，点右上角「管理持仓」添加美股代码。</p>';
     } else {
-      const rows = sortedHoldings(holdings, tf);
+      const rows = sortedHoldings(holdings, "intraday");
       els.holdingRail.innerHTML = rows
         .map((h) => {
-          const pct = holdingTfPct(h, tf);
-          const cls =
-            pct == null || Number.isNaN(pct) ? "" : pct >= 0 ? "up" : "down";
-          const pctText =
-            pct == null || Number.isNaN(pct)
-              ? "—"
-              : `${pct >= 0 ? "+" : ""}${pct.toFixed(2)}%`;
-          const active = h.symbol === selected ? "is-active" : "";
-          const preview =
-            previewSym && h.symbol === previewSym && h.symbol !== selected
-              ? "is-preview"
-              : "";
+          // List tape matches sectors: day % + 24h spark (not desk TF)
+          const pct = h.change_pct;
+          const on = h.symbol === selected;
+          const sparkSrc =
+            on && selectedBoard?.series?.intraday?.points?.length >= 2
+              ? selectedBoard
+              : h;
           return `
-            <button type="button" class="holding-row ${cls} ${active} ${preview}" data-holding="${escapeHtml(
+            <div class="holding-row sector-pick-row ${
+              on ? "is-active" : ""
+            } ${pctClass(pct)}" data-holding="${escapeHtml(
               h.symbol
-            )}" role="option" aria-selected="${
-              h.symbol === selected ? "true" : "false"
+            )}" data-symbol="${escapeHtml(h.symbol)}" role="option" aria-selected="${
+              on ? "true" : "false"
             }">
-              <span class="meta">
-                <span class="nm">${escapeHtml(h.name || h.label || h.symbol)}</span>
-                <span class="sym">${escapeHtml(h.symbol)}</span>
-              </span>
-              <span class="spark-wrap">${holdingSparkSvg(h, tf)}</span>
-              <span class="price ${cls}">${
-                h.price == null ? "—" : formatNumber(h.price, "")
-              }</span>
-              <span class="chg ${cls}">${pctText}</span>
-            </button>
+              <button type="button" class="sector-pick-main" data-holding="${escapeHtml(
+                h.symbol
+              )}" data-symbol="${escapeHtml(h.symbol)}">
+                <span class="meta">
+                  <span class="nm">${escapeHtml(h.name || h.label || h.symbol)}${
+                    h.is_wave
+                      ? '<span class="hot-tag">涨势</span>'
+                      : h.is_strong
+                        ? '<span class="hot-tag">强</span>'
+                        : ""
+                  }</span>
+                  <span class="sym">${escapeHtml(h.symbol)} · ${escapeHtml(
+                    h.sector_label || "持仓"
+                  )} · 月 ${escapeHtml(pctText(h.month_change_pct))}</span>
+                </span>
+                <span class="spark-wrap">${holdingSparkSvg(
+                  sparkSrc,
+                  "intraday"
+                )}</span>
+                <span class="quote">
+                  <span class="price ${pctClass(pct)}">${escapeHtml(
+                    h.price == null ? "—" : formatNumber(h.price, "")
+                  )}</span>
+                  <span class="chg ${pctClass(pct)}">${escapeHtml(
+                    pctText(pct)
+                  )}</span>
+                </span>
+              </button>
+              <button
+                type="button"
+                class="sector-hold-btn is-held"
+                data-hold-symbol="${escapeHtml(h.symbol)}"
+                data-hold-name="${escapeHtml(h.name || "")}"
+                data-hold-action="remove"
+                title="从持仓移除 ${escapeHtml(h.symbol)}"
+                aria-label="从持仓移除 ${escapeHtml(h.symbol)}"
+              >−</button>
+            </div>
           `;
         })
         .join("");
+      els.holdingRail
+        .querySelectorAll(".sector-hold-btn[data-hold-symbol]")
+        .forEach((btn) => {
+          btn.addEventListener("click", (event) => {
+            event.preventDefault();
+            event.stopPropagation();
+            const sym = btn.getAttribute("data-hold-symbol") || "";
+            if (!sym) return;
+            if (!confirm(`确定从持仓移除 ${sym}？`)) return;
+            toggleSectorHolding(sym);
+          });
+        });
     }
   }
   if (els.portfolioTfNote) {
