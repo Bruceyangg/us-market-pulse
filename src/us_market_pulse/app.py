@@ -50,10 +50,12 @@ from us_market_pulse.portfolio import (
     add_holding,
     build_portfolio_view,
     load_portfolio,
+    normalize_symbol,
     remove_holding,
     replace_holdings,
     resolve_and_normalize,
     select_holding,
+    upgrade_selected_board,
 )
 from us_market_pulse.portfolio_intel import summarize_holding_intel
 from us_market_pulse.push import push_status, scheduler_loop, send_digest
@@ -608,9 +610,33 @@ async def api_portfolio_select(request: Request, body: HoldingIn) -> dict[str, A
         select_holding(username, body.symbol)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
-    view = await build_portfolio_view(username, force_refresh=False)
-    view["user"] = current_user(request)
-    return {"ok": True, "portfolio": view}
+    # Fast path: only upgrade the selected board (no full-list Yahoo round-trip).
+    sym = normalize_symbol(body.symbol)
+    try:
+        upgraded = await asyncio.wait_for(
+            upgrade_selected_board(username, sym, force=False),
+            timeout=16.0,
+        )
+    except Exception as exc:  # noqa: BLE001
+        upgraded = {
+            "selected": sym,
+            "selected_symbol": sym,
+            "selected_board": None,
+            "errors": [str(exc)],
+        }
+    return {
+        "ok": True,
+        "selected": upgraded.get("selected") or sym,
+        "selected_symbol": upgraded.get("selected_symbol")
+        or upgraded.get("selected")
+        or sym,
+        "selected_board": upgraded.get("selected_board"),
+        "board": upgraded.get("board") or upgraded.get("selected_board"),
+        "selected_earnings": upgraded.get("selected_earnings"),
+        "value_chain": upgraded.get("value_chain"),
+        "errors": upgraded.get("errors") or [],
+        "user": current_user(request),
+    }
 
 
 @app.put("/api/portfolio")
