@@ -472,18 +472,17 @@ const SESSION_LABELS = {
 };
 
 /**
- * Trading-day ET axis: 盘前 → 盘中 → 盘后 → 夜盘
- * Cycle starts at 04:00 ET. Bands are equal-width on the desk so 夜盘
- * never collapses into a sliver / looks blank after 20:00.
+ * Broker-style ET axis: 夜盘 → 盘前 → 盘中 → 盘后
+ * Cycle starts at 20:00 ET (≈北京时间 08:00→次日 08:00). Equal-width bands.
  */
 const SESSION_CYCLE = [
-  { id: "pre", label: "盘前", start: 0, end: 5 * 60 + 30 }, // 04:00–09:30
-  { id: "regular", label: "盘中", start: 5 * 60 + 30, end: 12 * 60 }, // 09:30–16:00
-  { id: "post", label: "盘后", start: 12 * 60, end: 16 * 60 }, // 16:00–20:00
-  { id: "night", label: "夜盘", start: 16 * 60, end: 24 * 60 }, // 20:00–04:00
+  { id: "night", label: "夜盘", start: 0, end: 8 * 60 }, // 20:00–04:00
+  { id: "pre", label: "盘前", start: 8 * 60, end: 13 * 60 + 30 }, // 04:00–09:30
+  { id: "regular", label: "盘中", start: 13 * 60 + 30, end: 20 * 60 }, // 09:30–16:00
+  { id: "post", label: "盘后", start: 20 * 60, end: 24 * 60 }, // 16:00–20:00
 ];
 const SESSION_CYCLE_MINS = 24 * 60;
-const SESSION_LABEL_ORDER = ["盘前", "盘中", "盘后", "夜盘"];
+const SESSION_LABEL_ORDER = ["夜盘", "盘前", "盘中", "盘后"];
 
 function sessionBandIndex(cycleMins) {
   const cm = clamp(cycleMins, 0, SESSION_CYCLE_MINS);
@@ -493,7 +492,7 @@ function sessionBandIndex(cycleMins) {
   return SESSION_CYCLE.length - 1;
 }
 
-/** Equal-width session bands: map cycle minutes → x inside 盘前/盘中/盘后/夜盘. */
+/** Equal-width session bands: map cycle minutes → x inside 夜盘/盘前/盘中/盘后. */
 function xOfSessionCycle(cycleMins, padX, plotW) {
   const bandW = plotW / SESSION_CYCLE.length;
   const idx = sessionBandIndex(cycleMins);
@@ -523,57 +522,56 @@ function sessionIdFromTs(ts) {
     if (mins >= 4 * 60 && mins < 9 * 60 + 30) return "pre";
     if (mins >= 9 * 60 + 30 && mins < 16 * 60) return "regular";
     if (mins >= 16 * 60 && mins < 20 * 60) return "post";
-    return "night"; // 20:00–04:00
+    return "night"; // 20:00–03:59
   } catch {
     return "regular";
   }
 }
 
-/** Minutes into the 04:00→04:00 ET trading cycle (盘前…夜盘). */
-function etCycleMins(ts) {
+/**
+ * Minutes into the 20:00→20:00 ET cycle (夜盘…盘后).
+ * Prefer absolute cycle_start from the API so 20:00 start/end don't collide.
+ */
+function etCycleMins(ts, cycleStartTs = null) {
+  const t = Number(ts);
+  const origin = Number(cycleStartTs);
+  if (Number.isFinite(t) && Number.isFinite(origin) && origin > 0) {
+    return clamp((t - origin) / 60, 0, SESSION_CYCLE_MINS);
+  }
   try {
     const { mins } = etParts(ts);
-    // 04:00–23:59 → offset from 04:00; 00:00–03:59 → night tail after 20:00
-    return mins >= 4 * 60 ? mins - 4 * 60 : mins + 20 * 60;
+    return mins >= 20 * 60 ? mins - 20 * 60 : mins + 4 * 60;
   } catch {
     return 8 * 60;
   }
 }
 
-/** Guarantee a flat 夜盘 hold from 20:00 (or last print) → now. */
-function ensureNightHoldPoints(view) {
+/** Pad a leading 夜盘 anchor when the first print starts late. */
+function ensureSessionAnchors(view, previousClose = null, cycleStartTs = null) {
   const rows = Array.isArray(view) ? view.slice() : [];
   if (!rows.length) return rows;
-  const nowSec = Date.now() / 1000;
-  const nowCm = etCycleMins(nowSec);
-  if (sessionIdFromTs(nowSec) !== "night") return rows;
-  const last = rows[rows.length - 1];
-  const lastV = Number(last?.v ?? last?.c);
-  if (!Number.isFinite(lastV)) return rows;
-  const nightStartCm = 16 * 60;
-  // Drop prior synthetic night pads; keep vendor/real points.
   const kept = rows.filter((p) => !p?._pad);
   const base = kept.length ? kept : rows;
-  const out = base.map((p) => ({ ...p, _cm: p._cm ?? etCycleMins(p.t) }));
+  const out = base.map((p) => ({
+    ...p,
+    _cm: p._cm ?? etCycleMins(p.t, cycleStartTs),
+  }));
   out.sort((a, b) => a._cm - b._cm || Number(a.t) - Number(b.t));
-  let tip = out[out.length - 1];
-  const tipV = Number(tip.v ?? tip.c);
-  if (tip._cm < nightStartCm) {
-    out.push({
-      t: nowSec - (nowCm - nightStartCm) * 60,
-      v: tipV,
+  const first = out[0];
+  const padV = Number(
+    previousClose != null && Number.isFinite(Number(previousClose))
+      ? previousClose
+      : first?.v ?? first?.c
+  );
+  if (Number.isFinite(padV) && first._cm > 15) {
+    const padT = Number.isFinite(Number(cycleStartTs))
+      ? Number(cycleStartTs)
+      : Number(first.t) - first._cm * 60;
+    out.unshift({
+      t: padT,
+      v: padV,
       session: "night",
-      _cm: nightStartCm,
-      _pad: true,
-    });
-    tip = out[out.length - 1];
-  }
-  if (nowCm - tip._cm > 0.5) {
-    out.push({
-      t: nowSec,
-      v: Number(tip.v ?? tip.c),
-      session: "night",
-      _cm: nowCm,
+      _cm: 0,
       _pad: true,
     });
   }
@@ -612,7 +610,8 @@ function buildSessionSegmentsFromPoints(points) {
 
 /**
  * Composite 分时 on a fixed ET time axis:
- * always paint 盘前 / 盘中 / 盘后 / 夜盘 (left → right), even if a band is empty.
+ * always paint 夜盘 / 盘前 / 盘中 / 盘后 (left → right), even if a band is empty.
+ * Holdings and sectors share this renderer.
  */
 function renderSessionIntradaySvg(
   points,
@@ -622,6 +621,7 @@ function renderSessionIntradaySvg(
     viewEnd = null,
     sessions = null,
     previousClose = null,
+    cycleStart = null,
   } = {}
 ) {
   const width = 320;
@@ -632,20 +632,25 @@ function renderSessionIntradaySvg(
   const plotW = width - padX * 2;
   const plotH = height - padTop - padBottom;
   void sessions; // time-axis bands are authoritative
+  const cycleStartTs =
+    cycleStart != null && Number.isFinite(Number(cycleStart))
+      ? Number(cycleStart)
+      : null;
   const raw = ensurePointSessions(
     (points || []).filter((p) => p && Number.isFinite(Number(p.v ?? p.c)))
   );
   const end = viewEnd == null ? raw.length : Math.min(raw.length, viewEnd);
   const start = clamp(viewStart, 0, Math.max(0, end));
-  // Full series for 分时 — index zoom must not clip the trailing 夜盘 tip.
   let view = raw
-    .map((p) => ({ ...p, _cm: p.t != null ? etCycleMins(p.t) : 0 }))
+    .map((p) => ({
+      ...p,
+      _cm: p.t != null ? etCycleMins(p.t, cycleStartTs) : 0,
+    }))
     .sort((a, b) => a._cm - b._cm || Number(a.t) - Number(b.t));
-  // Optional zoom window, but always re-apply 夜盘 hold afterward.
   if (!(start === 0 && end >= raw.length)) {
     view = view.slice(start, end);
   }
-  view = ensureNightHoldPoints(view);
+  view = ensureSessionAnchors(view, previousClose, cycleStartTs);
   if (view.length < 2) {
     return `<svg viewBox="0 0 ${width} ${height}" role="img" aria-label="暂无走势"><text x="16" y="90" fill="${themeMutedFill()}" font-size="13">暂无分时数据</text></svg>`;
   }
@@ -705,7 +710,7 @@ function renderSessionIntradaySvg(
         )}" stroke="rgba(148,163,184,0.55)" stroke-width="1" stroke-dasharray="4 3"></line>`
       : "";
 
-  // Single continuous path through 盘前…夜盘.
+  // Single continuous path through 夜盘…盘后.
   const line = coords
     .map(([x, y], i) => `${i === 0 ? "M" : "L"}${x.toFixed(2)},${y.toFixed(2)}`)
     .join(" ");
@@ -714,40 +719,6 @@ function renderSessionIntradaySvg(
   ).toFixed(2)} L${coords[0][0].toFixed(2)},${(padTop + plotH).toFixed(2)} Z`;
   const stroke = up ? TAPE_UP : TAPE_DOWN;
   const fill = up ? TAPE_UP_SOFT : TAPE_DOWN_SOFT;
-
-  // 夜盘: always paint a full-band hold from 20:00 → now (and light dash to 04:00).
-  const nowCm = etCycleMins(Date.now() / 1000);
-  const nightStartCm = 16 * 60;
-  const nightEndCm = SESSION_CYCLE_MINS;
-  let nightRay = "";
-  if (sessionIdFromTs(Date.now() / 1000) === "night") {
-    const holdV = Number(view[view.length - 1].v ?? view[view.length - 1].c);
-    const y = yOf(holdV);
-    const xNight0 = padX + 3 * bandW; // left edge of equal-width 夜盘
-    const xNow = xOfCycle(Math.max(nightStartCm, nowCm));
-    const xNight1 = padX + 4 * bandW;
-    if (Number.isFinite(y)) {
-      nightRay = `
-        <line x1="${xNight0.toFixed(2)}" y1="${y.toFixed(2)}" x2="${xNow.toFixed(
-          2
-        )}" y2="${y.toFixed(
-          2
-        )}" stroke="${stroke}" stroke-width="2.4" stroke-linecap="round"></line>
-        <line x1="${xNow.toFixed(2)}" y1="${y.toFixed(2)}" x2="${xNight1.toFixed(
-          2
-        )}" y2="${y.toFixed(
-          2
-        )}" stroke="${stroke}" stroke-width="1.6" stroke-dasharray="4 3" stroke-opacity="0.55"></line>
-        <circle cx="${xNow.toFixed(2)}" cy="${y.toFixed(
-          2
-        )}" r="2.8" fill="${stroke}"></circle>
-        <text x="${((xNight0 + xNow) / 2).toFixed(2)}" y="${(y - 6).toFixed(
-          1
-        )}" text-anchor="middle" fill="${themeMutedFill()}" font-size="7.5">夜盘持平</text>
-      `;
-    }
-    void nightEndCm;
-  }
 
   const footLabels = SESSION_CYCLE.map((s, i) => {
     const midX = padX + i * bandW + bandW / 2;
@@ -759,13 +730,12 @@ function renderSessionIntradaySvg(
   }).join("");
 
   return `
-    <svg class="session-intraday-svg" viewBox="0 0 ${width} ${height}" preserveAspectRatio="none" role="img" aria-label="盘前盘中盘后夜盘一体分时">
+    <svg class="session-intraday-svg" viewBox="0 0 ${width} ${height}" preserveAspectRatio="none" role="img" aria-label="夜盘盘前盘中盘后一体分时">
       ${bands}
       ${dividers}
       ${prevLine}
       <path d="${area}" fill="${fill}"></path>
       <path d="${line}" fill="none" stroke="${stroke}" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round"></path>
-      ${nightRay}
       ${footLabels}
     </svg>
   `;
@@ -927,7 +897,7 @@ function paintZoomableChart(key) {
   if (zoomRoot) zoomRoot.classList.toggle("is-zoomed", zoomed);
   root.querySelectorAll(":scope > .ma-legend").forEach((el) => el.remove());
   // 分时 always uses the session line renderer, even if a stale kind says candle.
-  // Never index-slice 分时 — that clipped the trailing 夜盘 hold off the canvas.
+  // Never index-slice 分时 — that clipped session tips off the canvas.
   if (tf === "intraday") {
     const linePts = toLineSparkPoints(points);
     stage.innerHTML = renderSessionIntradaySvg(linePts.length ? linePts : points, {
@@ -936,6 +906,7 @@ function paintZoomableChart(key) {
       viewEnd: null,
       sessions: meta.sessions,
       previousClose: meta.previousClose,
+      cycleStart: meta.cycleStart,
     });
   } else if (kind === "candle") {
     // Keep SVG inside the zoom stage; park MA legend as a sibling so it cannot
@@ -962,7 +933,17 @@ function paintZoomableChart(key) {
 
 function bindZoomableChart(
   canvasEl,
-  { key, scope, points, tf, kind, up, sessions = null, previousClose = null }
+  {
+    key,
+    scope,
+    points,
+    tf,
+    kind,
+    up,
+    sessions = null,
+    previousClose = null,
+    cycleStart = null,
+  }
 ) {
   if (!canvasEl) return;
   const list = points || [];
@@ -977,6 +958,7 @@ function bindZoomableChart(
     len,
     sessions,
     previousClose,
+    cycleStart,
   });
   ensureChartZoom(key, scope, len, tf, kind);
   const z = state.chartZoom[key];
@@ -1539,7 +1521,7 @@ function renderPortfolioChart() {
   const stats = seriesStats(viewPoints.length ? viewPoints : points, kind);
   const maNote = MA_CHART_TFS.has(tf) ? " · 含均线" : "";
   const sessionNote =
-    tf === "intraday" ? " · 盘前·盘中·盘后·夜盘一体分时" : "";
+    tf === "intraday" ? " · 夜盘·盘前·盘中·盘后一体分时" : "";
 
   els.portfolioChart.classList.remove("is-empty");
   els.portfolioChart.classList.toggle("is-preview", Boolean(preview));
@@ -1585,6 +1567,7 @@ function renderPortfolioChart() {
     up,
     sessions: series?.sessions || null,
     previousClose: series?.previous_close ?? null,
+    cycleStart: series?.cycle_start ?? null,
   });
 }
 
@@ -4822,7 +4805,7 @@ function renderSectorPickChart() {
     : "";
   const maNote = MA_CHART_TFS.has(tf) ? " · 含均线" : "";
   const sessionNote =
-    tf === "intraday" ? " · 盘前·盘中·盘后·夜盘一体分时" : "";
+    tf === "intraday" ? " · 夜盘·盘前·盘中·盘后一体分时" : "";
   els.sectorPickChart.innerHTML = `
     <div class="chart-head">
       <h3>${escapeHtml(pick.name || pick.label || "")} · ${escapeHtml(
@@ -4863,6 +4846,7 @@ function renderSectorPickChart() {
     up,
     sessions: series?.sessions || null,
     previousClose: series?.previous_close ?? null,
+    cycleStart: series?.cycle_start ?? null,
   });
   renderMonthPanel(pick);
   renderStockEarnings(data.selected_earnings || pick.earnings, pick);
