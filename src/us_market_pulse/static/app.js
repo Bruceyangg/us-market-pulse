@@ -467,6 +467,15 @@ const SESSION_LABELS = {
   post: "盘后",
 };
 
+/** Full ET cycle starting 20:00 → next 20:00 (minutes from cycle start). */
+const SESSION_CYCLE = [
+  { id: "night", label: "夜盘", start: 0, end: 8 * 60 }, // 20:00–04:00
+  { id: "pre", label: "盘前", start: 8 * 60, end: 8 * 60 + 5 * 60 + 30 }, // 04:00–09:30
+  { id: "regular", label: "盘中", start: 8 * 60 + 5 * 60 + 30, end: 8 * 60 + 12 * 60 }, // 09:30–16:00
+  { id: "post", label: "盘后", start: 8 * 60 + 12 * 60, end: 24 * 60 }, // 16:00–20:00
+];
+const SESSION_CYCLE_MINS = 24 * 60;
+
 function sessionIdFromTs(ts) {
   if (!ts) return "regular";
   try {
@@ -485,6 +494,24 @@ function sessionIdFromTs(ts) {
     return "post";
   } catch {
     return "regular";
+  }
+}
+
+/** Minutes into the 20:00→20:00 ET session cycle. */
+function etCycleMins(ts) {
+  try {
+    const parts = new Intl.DateTimeFormat("en-US", {
+      timeZone: "America/New_York",
+      hour: "numeric",
+      minute: "numeric",
+      hour12: false,
+    }).formatToParts(new Date(Number(ts) * 1000));
+    const hour = Number(parts.find((p) => p.type === "hour")?.value || 0);
+    const minute = Number(parts.find((p) => p.type === "minute")?.value || 0);
+    const mins = hour * 60 + minute;
+    return mins >= 20 * 60 ? mins - 20 * 60 : mins + 4 * 60;
+  } catch {
+    return 12 * 60;
   }
 }
 
@@ -519,7 +546,10 @@ function buildSessionSegmentsFromPoints(points) {
   return segs;
 }
 
-/** Composite 分时: 夜盘 / 盘前 / 盘中 / 盘后 as one continuous line with session bands. */
+/**
+ * Composite 分时 on a fixed ET time axis:
+ * always paint 夜盘 / 盘前 / 盘中 / 盘后 bands (even when a band has no ticks).
+ */
 function renderSessionIntradaySvg(
   points,
   {
@@ -535,70 +565,78 @@ function renderSessionIntradaySvg(
   const padX = 8;
   const padTop = 18;
   const padBottom = 16;
+  const plotW = width - padX * 2;
   const plotH = height - padTop - padBottom;
+  void sessions; // time-axis bands are authoritative; ignore index ranges
   const raw = ensurePointSessions(
     (points || []).filter((p) => p && Number.isFinite(Number(p.v ?? p.c)))
   );
   const end = viewEnd == null ? raw.length : Math.min(raw.length, viewEnd);
   const start = clamp(viewStart, 0, Math.max(0, end));
-  const view = raw.slice(start, end);
+  let view = raw.slice(start, end);
   if (view.length < 2) {
     return `<svg viewBox="0 0 ${width} ${height}" role="img" aria-label="暂无走势"><text x="16" y="90" fill="${themeMutedFill()}" font-size="13">暂无分时数据</text></svg>`;
   }
-  const vals = view.map((p) => Number(p.v ?? p.c));
-  let min = Math.min(...vals);
-  let max = Math.max(...vals);
+
   const prev =
     previousClose != null && Number.isFinite(Number(previousClose))
       ? Number(previousClose)
       : null;
+  // Anchor missing leading 夜盘 with prior close / first print so the
+  // left band is not empty whitespace while 盘前 later starts.
+  const first = view[0];
+  const firstCycle = first?.t != null ? etCycleMins(first.t) : 0;
+  if (firstCycle > 30) {
+    const anchorV = prev != null ? prev : Number(first.v ?? first.c);
+    view = [
+      {
+        t: Number(first.t) - firstCycle * 60,
+        v: anchorV,
+        session: "night",
+        _pad: true,
+      },
+      ...view,
+    ];
+  }
+
+  const vals = view.map((p) => Number(p.v ?? p.c));
+  let min = Math.min(...vals);
+  let max = Math.max(...vals);
   if (prev != null) {
     min = Math.min(min, prev);
     max = Math.max(max, prev);
   }
   const span = max - min || 1;
-  const stepX = (width - padX * 2) / (view.length - 1);
   const yOf = (v) => padTop + (1 - (v - min) / span) * plotH;
-  const coords = vals.map((v, i) => [padX + i * stepX, yOf(v)]);
+  const xOfCycle = (cycleMins) =>
+    padX + (clamp(cycleMins, 0, SESSION_CYCLE_MINS) / SESSION_CYCLE_MINS) * plotW;
 
-  let segs = Array.isArray(sessions) && sessions.length
-    ? sessions
-        .map((s) => ({
-          id: s.id,
-          label: s.label || SESSION_LABELS[s.id] || s.id,
-          i0: Math.max(0, (s.i0 ?? 0) - start),
-          i1: Math.min(view.length - 1, (s.i1 ?? 0) - start),
-        }))
-        .filter((s) => s.i1 >= 0 && s.i0 < view.length && s.i1 >= s.i0)
-    : buildSessionSegmentsFromPoints(view);
+  const coords = view.map((p) => {
+    const cm = p.t != null ? etCycleMins(p.t) : 12 * 60;
+    return [xOfCycle(cm), yOf(Number(p.v ?? p.c))];
+  });
 
-  if (!segs.length) {
-    segs = [{ id: "regular", label: "盘中", i0: 0, i1: view.length - 1 }];
-  }
+  const bands = SESSION_CYCLE.map((s) => {
+    const x0 = xOfCycle(s.start);
+    const x1 = xOfCycle(s.end);
+    const w = Math.max(2, x1 - x0);
+    const fill = SESSION_BAND_COLORS[s.id] || "rgba(128,128,128,0.08)";
+    const midX = x0 + w / 2;
+    return `
+      <rect x="${x0.toFixed(2)}" y="${padTop}" width="${w.toFixed(
+        2
+      )}" height="${plotH}" fill="${fill}"></rect>
+      <text x="${midX.toFixed(2)}" y="${(padTop - 5).toFixed(
+        1
+      )}" text-anchor="middle" fill="${themeMutedFill()}" font-size="8.5" font-weight="600">${escapeHtml(
+        s.label
+      )}</text>
+    `;
+  }).join("");
 
-  const bands = segs
+  const dividers = SESSION_CYCLE.slice(1)
     .map((s) => {
-      const x0 = padX + s.i0 * stepX - stepX * 0.35;
-      const x1 = padX + s.i1 * stepX + stepX * 0.35;
-      const w = Math.max(2, x1 - x0);
-      const fill = SESSION_BAND_COLORS[s.id] || "rgba(128,128,128,0.08)";
-      const midX = x0 + w / 2;
-      const label = escapeHtml(s.label || "");
-      return `
-        <rect x="${x0.toFixed(2)}" y="${padTop}" width="${w.toFixed(
-          2
-        )}" height="${plotH}" fill="${fill}"></rect>
-        <text x="${midX.toFixed(2)}" y="${(padTop - 5).toFixed(
-          1
-        )}" text-anchor="middle" fill="${themeMutedFill()}" font-size="8.5" font-weight="600">${label}</text>
-      `;
-    })
-    .join("");
-
-  const dividers = segs
-    .slice(1)
-    .map((s) => {
-      const x = padX + s.i0 * stepX;
+      const x = xOfCycle(s.start);
       return `<line x1="${x.toFixed(2)}" y1="${padTop}" x2="${x.toFixed(
         2
       )}" y2="${(padTop + plotH).toFixed(
@@ -625,19 +663,17 @@ function renderSessionIntradaySvg(
   const stroke = up ? TAPE_UP : TAPE_DOWN;
   const fill = up ? TAPE_UP_SOFT : TAPE_DOWN_SOFT;
 
-  const footLabels = segs
-    .map((s) => {
-      const midX = padX + ((s.i0 + s.i1) / 2) * stepX;
-      return `<text x="${midX.toFixed(2)}" y="${(height - 4).toFixed(
-        1
-      )}" text-anchor="middle" fill="${themeMutedFill()}" font-size="7.5">${escapeHtml(
-        s.label || ""
-      )}</text>`;
-    })
-    .join("");
+  const footLabels = SESSION_CYCLE.map((s) => {
+    const midX = (xOfCycle(s.start) + xOfCycle(s.end)) / 2;
+    return `<text x="${midX.toFixed(2)}" y="${(height - 4).toFixed(
+      1
+    )}" text-anchor="middle" fill="${themeMutedFill()}" font-size="7.5">${escapeHtml(
+      s.label
+    )}</text>`;
+  }).join("");
 
   return `
-    <svg class="session-intraday-svg" viewBox="0 0 ${width} ${height}" preserveAspectRatio="none" role="img" aria-label="盘前盘中盘后夜盘一体分时">
+    <svg class="session-intraday-svg" viewBox="0 0 ${width} ${height}" preserveAspectRatio="none" role="img" aria-label="夜盘盘前盘中盘后一体分时">
       ${bands}
       ${dividers}
       ${prevLine}
@@ -1138,7 +1174,9 @@ function toLineSparkPoints(raw) {
         p.c != null && (p.o != null || p.h != null || p.l != null);
       const v = isCandle ? Number(p.c) : Number(p.v ?? p.c);
       if (Number.isNaN(v)) return null;
-      return { t: p.t, v };
+      const row = { t: p.t, v };
+      if (p.session) row.session = p.session;
+      return row;
     })
     .filter(Boolean);
 }
@@ -1413,9 +1451,7 @@ function renderPortfolioChart() {
   const stats = seriesStats(viewPoints.length ? viewPoints : points, kind);
   const maNote = MA_CHART_TFS.has(tf) ? " · 含均线" : "";
   const sessionNote =
-    tf === "intraday"
-      ? ` · ${(series?.session_labels || []).length ? (series.session_labels || []).join("·") : "盘前·盘中·盘后·夜盘"}一体分时`
-      : "";
+    tf === "intraday" ? " · 夜盘·盘前·盘中·盘后一体分时" : "";
 
   els.portfolioChart.classList.remove("is-empty");
   els.portfolioChart.classList.toggle("is-preview", Boolean(preview));
@@ -4591,6 +4627,9 @@ function resolveSectorChartSeries(pick, preferredTf) {
           ...(preferred || {}),
           chart: "line",
           points: preferred?.points || points,
+          session_labels: ["夜盘", "盘前", "盘中", "盘后"],
+          previous_close:
+            preferred?.previous_close ?? pick?.previous_close ?? null,
         },
         points,
         kind: "line",
@@ -4695,9 +4734,7 @@ function renderSectorPickChart() {
     : "";
   const maNote = MA_CHART_TFS.has(tf) ? " · 含均线" : "";
   const sessionNote =
-    tf === "intraday"
-      ? ` · ${(series?.session_labels || []).length ? (series.session_labels || []).join("·") : "盘前·盘中·盘后·夜盘"}一体分时`
-      : "";
+    tf === "intraday" ? " · 夜盘·盘前·盘中·盘后一体分时" : "";
   els.sectorPickChart.innerHTML = `
     <div class="chart-head">
       <h3>${escapeHtml(pick.name || pick.label || "")} · ${escapeHtml(
