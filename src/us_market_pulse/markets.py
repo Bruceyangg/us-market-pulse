@@ -198,17 +198,14 @@ def _session_cycle_bounds(
     now: datetime | None = None,
 ) -> tuple[datetime, datetime]:
     """
-    Current extended cycle: prior 20:00 ET → now.
-    Covers 夜盘 → 盘前 → 盘中 → 盘后 as one continuous window.
+    Current extended cycle: previous 20:00 ET → now (~24h).
+    Always anchor at the prior 20:00 so after 20:00 ET we still keep the
+    full day tape (盘前·盘中·盘后) plus the new 夜盘, instead of clipping
+    to only the last hour.
     """
     now_et = now.astimezone(_ET) if now else datetime.now(tz=_ET)
-    today_open_night = now_et.replace(hour=20, minute=0, second=0, microsecond=0)
-    if now_et >= today_open_night:
-        start = today_open_night
-    else:
-        start = today_open_night - timedelta(days=1)
-    # Weekend: if start lands Sat/Sun night into Mon pre, still fine —
-    # Yahoo simply returns available bars.
+    today_night = now_et.replace(hour=20, minute=0, second=0, microsecond=0)
+    start = today_night - timedelta(days=1)
     return start, now_et
 
 

@@ -17,7 +17,12 @@ from us_market_pulse.earnings_calendar import (
     peek_upcoming_earnings_map,
 )
 from us_market_pulse.market_map import symbols_for_desk
-from us_market_pulse.markets import PORTFOLIO_TIMEFRAMES, fetch_symbol_bundle
+from us_market_pulse.markets import (
+    PORTFOLIO_TIMEFRAMES,
+    _filter_session_window,
+    _session_cycle_bounds,
+    fetch_symbol_bundle,
+)
 from us_market_pulse.portfolio_intel import match_portfolio_intel
 from us_market_pulse.quotes import (
     build_nasdaq_ohlc_series,
@@ -1074,15 +1079,32 @@ async def _fetch_quote(
         extra_errs.append(f"{sym}: Nasdaq OHLC failed ({exc.__class__.__name__})")
 
     if nd and len(nd.get("points") or []) >= 2 and need_intra:
-        pts = [
-            {
-                "t": int(p["t"]),
-                "v": float(p["v"]),
-                "session": _session_id_et(int(p["t"])),
-            }
+        raw_pts = [
+            {"t": int(p["t"]), "v": float(p["v"])}
             for p in (nd.get("points") or [])
             if p.get("t") and p.get("v") is not None
         ]
+        start_et, end_et = _session_cycle_bounds()
+        pts = _filter_session_window(
+            raw_pts,
+            start_ts=int(start_et.timestamp()),
+            end_ts=int(end_et.timestamp()) + 120,
+        )
+        # Nasdaq AH ends ~20:00 ET — stretch into current 夜盘 so the desk
+        # does not look stuck in 盘中 after the close.
+        if pts:
+            now_ts = int(end_et.timestamp())
+            last = pts[-1]
+            if now_ts - int(last["t"]) >= 180:
+                sid = _session_id_et(now_ts)
+                if sid in {"night", "post"} and last.get("session") != sid:
+                    pts.append(
+                        {
+                            "t": now_ts,
+                            "v": float(last["v"]),
+                            "session": sid,
+                        }
+                    )
         sessions = _session_segments_local(pts)
         labels = []
         seen: set[str] = set()

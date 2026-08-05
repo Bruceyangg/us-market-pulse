@@ -4480,10 +4480,12 @@ function renderSectorPicks(data) {
                   )} · 月 ${escapeHtml(pctText(pick.month_change_pct))}</span>
                 </span>
                 <span class="spark-wrap">${holdingSparkSvg(sparkSrc, "intraday")}</span>
-                <span class="price ${pctClass(pct)}">${escapeHtml(
-                  pick.price == null ? "—" : formatNumber(pick.price, "")
-                )}</span>
-                <span class="chg ${pctClass(pct)}">${escapeHtml(pctText(pct))}</span>
+                <span class="quote">
+                  <span class="price ${pctClass(pct)}">${escapeHtml(
+                    pick.price == null ? "—" : formatNumber(pick.price, "")
+                  )}</span>
+                  <span class="chg ${pctClass(pct)}">${escapeHtml(pctText(pct))}</span>
+                </span>
               </button>
               <button
                 type="button"
