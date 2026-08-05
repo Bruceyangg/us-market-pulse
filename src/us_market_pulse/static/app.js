@@ -4218,9 +4218,30 @@ function renderMoveAnalysis(pick) {
 
 function resolveSectorChartSeries(pick, preferredTf) {
   const seriesMap = pick?.series || {};
-  const order = [preferredTf, "intraday", "day", "month", "quarter"].filter(
-    (tf, idx, arr) => tf && arr.indexOf(tf) === idx
-  );
+  const want = preferredTf || "intraday";
+  const preferred = seriesMap[want];
+  const preferredKind =
+    preferred?.chart || (want === "intraday" ? "line" : "candle");
+  const preferredRaw =
+    preferred?.points || (want === "intraday" ? pick?.points || [] : []);
+  const preferredPoints =
+    preferredKind === "candle"
+      ? sanitizeCandleBars(preferredRaw)
+      : (preferredRaw || []).filter(Boolean);
+  if (preferredPoints.length >= 2) {
+    return {
+      tf: want,
+      series: preferred || { chart: preferredKind, points: preferredRaw },
+      points: preferredPoints,
+      kind: preferredKind,
+    };
+  }
+  // Candle tabs stay empty when missing — do not silently snap back to 分时.
+  if (want !== "intraday") {
+    return { tf: want, series: preferred || null, points: [], kind: "candle" };
+  }
+  // Intraday fallback: any available series so the desk still paints
+  const order = ["intraday", "day", "month", "quarter"];
   for (const tf of order) {
     const series = seriesMap[tf];
     const raw = series?.points || (tf === "intraday" ? pick?.points || [] : []);
@@ -4231,12 +4252,7 @@ function resolveSectorChartSeries(pick, preferredTf) {
       return { tf, series: series || { chart: kind, points: raw }, points, kind };
     }
   }
-  return {
-    tf: preferredTf || "intraday",
-    series: null,
-    points: [],
-    kind: preferredTf === "intraday" ? "line" : "candle",
-  };
+  return { tf: want, series: null, points: [], kind: "line" };
 }
 
 function renderSectorPickChart() {
@@ -4261,32 +4277,22 @@ function renderSectorPickChart() {
     return;
   }
   const resolved = resolveSectorChartSeries(pick, tf);
-  // If preferred TF is empty but another has data, switch to it so the chart shows
-  if (resolved.points.length >= 2 && resolved.tf !== tf) {
-    // Keep user's TF button state, but render available data with a note — or auto-switch
-    if (!(pick.series && pick.series[tf]?.points?.length >= 2)) {
-      tf = resolved.tf;
-      state.sectorTf = tf;
-      if (els.sectorTfFilters) {
-        els.sectorTfFilters.querySelectorAll("[data-stf]").forEach((btn) => {
-          const on = btn.getAttribute("data-stf") === tf;
-          btn.classList.toggle("is-active", on);
-          btn.setAttribute("aria-selected", on ? "true" : "false");
-        });
-      }
-    }
-  }
   const series = resolved.series;
   const points = resolved.points;
   const kind = resolved.kind;
   if (points.length < 2) {
+    const tfLabel =
+      { intraday: "分时", day: "日图", month: "月图", quarter: "季图" }[tf] ||
+      "走势";
     els.sectorPickChart.innerHTML = `
       <div class="chart-head">
         <h3>${escapeHtml(pick.name || pick.label || "")} · ${escapeHtml(
           pick.symbol || ""
         )}</h3>
       </div>
-      <p class="chart-placeholder">加载走势中… 若一直空白请点刷新</p>
+      <p class="chart-placeholder">暂无${escapeHtml(
+        tfLabel
+      )}数据 · 点右上角刷新重试</p>
     `;
     renderMonthPanel(pick);
     renderStockEarnings(data.selected_earnings || pick.earnings, pick);

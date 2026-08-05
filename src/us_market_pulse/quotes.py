@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+from datetime import date, datetime, timezone
 from typing import Any
 from urllib.parse import quote
 
@@ -320,4 +321,198 @@ async def fetch_nasdaq_intraday_many(
                     out[sym] = row
 
         await asyncio.gather(*(one(s) for s in uniq))
+    return out
+
+
+def _nasdaq_headers(path_sym: str) -> dict[str, str]:
+    return {
+        "User-Agent": USER_AGENT,
+        "Accept": "application/json,text/plain,*/*",
+        "Accept-Language": "en-US,en;q=0.9",
+        "Origin": "https://www.nasdaq.com",
+        "Referer": f"https://www.nasdaq.com/market-activity/stocks/{path_sym.lower()}",
+    }
+
+
+def _candle_change(points: list[dict[str, Any]]) -> tuple[float | None, float | None]:
+    if len(points) < 2:
+        return None, None
+    first = float(points[0]["o"] if points[0].get("o") is not None else points[0]["c"])
+    last = float(points[-1]["c"])
+    if first == 0:
+        return round(last - first, 4), None
+    return round(last - first, 4), round((last - first) / first * 100.0, 3)
+
+
+def _aggregate_ohlc_bars(
+    bars: list[dict[str, Any]],
+    *,
+    period: str,
+) -> list[dict[str, Any]]:
+    """Aggregate daily OHLC into month or quarter candles."""
+    if not bars:
+        return []
+    groups: dict[tuple[int, int], list[dict[str, Any]]] = {}
+    order: list[tuple[int, int]] = []
+    for bar in bars:
+        dt = datetime.fromtimestamp(int(bar["t"]), tz=timezone.utc)
+        if period == "quarter":
+            key = (dt.year, (dt.month - 1) // 3)
+        else:
+            key = (dt.year, dt.month)
+        if key not in groups:
+            groups[key] = []
+            order.append(key)
+        groups[key].append(bar)
+
+    out: list[dict[str, Any]] = []
+    for key in order:
+        rows = groups[key]
+        if not rows:
+            continue
+        o = float(rows[0]["o"])
+        c = float(rows[-1]["c"])
+        h = max(float(r["h"]) for r in rows)
+        l = min(float(r["l"]) for r in rows)
+        vols = [float(r["v"]) for r in rows if r.get("v") is not None]
+        out.append(
+            {
+                "t": int(rows[0]["t"]),
+                "o": round(o, 6),
+                "h": round(h, 6),
+                "l": round(l, 6),
+                "c": round(c, 6),
+                "v": round(sum(vols), 2) if vols else None,
+            }
+        )
+    return out
+
+
+async def fetch_nasdaq_daily_bars(
+    client: httpx.AsyncClient,
+    symbol: str,
+    *,
+    fromdate: date | str | None = None,
+    todate: date | str | None = None,
+) -> list[dict[str, Any]]:
+    """
+    Daily OHLC from Nasdaq chart API (fromdate/todate).
+    Used when Yahoo day/month/quarter charts are blocked (403/429).
+    """
+    sym = (symbol or "").strip().upper()
+    path_sym = _nasdaq_path_symbol(sym)
+    if not path_sym:
+        return []
+    to_d = todate or date.today()
+    from_d = fromdate or date(to_d.year - 25, 1, 1)
+    url = (
+        f"https://api.nasdaq.com/api/quote/{quote(path_sym, safe='/')}/chart"
+        f"?assetclass=stocks&fromdate={from_d}&todate={to_d}"
+    )
+    try:
+        resp = await client.get(url, timeout=22.0, headers=_nasdaq_headers(path_sym))
+        if resp.status_code >= 400:
+            return []
+        data = (resp.json() or {}).get("data") or {}
+        raw = data.get("chart") or []
+        if not isinstance(raw, list) or len(raw) < 2:
+            return []
+        bars: list[dict[str, Any]] = []
+        for row in raw:
+            if not isinstance(row, dict):
+                continue
+            z = row.get("z") if isinstance(row.get("z"), dict) else {}
+            close = _parse_number(z.get("close") if z else None)
+            if close is None:
+                close = _parse_number(row.get("y"))
+            if close is None or close <= 0:
+                continue
+            open_ = _parse_number(z.get("open")) if z else None
+            high = _parse_number(z.get("high")) if z else None
+            low = _parse_number(z.get("low")) if z else None
+            vol = _parse_number(z.get("volume")) if z else None
+            if open_ is None:
+                open_ = close
+            if high is None:
+                high = max(open_, close)
+            if low is None:
+                low = min(open_, close)
+            x = row.get("x")
+            try:
+                ts = int(x) // 1000 if x is not None else 0
+            except (TypeError, ValueError):
+                ts = 0
+            if not ts:
+                continue
+            bars.append(
+                {
+                    "t": ts,
+                    "o": round(float(open_), 6),
+                    "h": round(float(high), 6),
+                    "l": round(float(low), 6),
+                    "c": round(float(close), 6),
+                    "v": round(float(vol), 2) if vol is not None else None,
+                }
+            )
+        return bars
+    except Exception:  # noqa: BLE001
+        return []
+
+
+def build_nasdaq_ohlc_series(
+    daily_bars: list[dict[str, Any]],
+) -> dict[str, dict[str, Any]]:
+    """Build day / month / quarter candle series from Nasdaq daily bars."""
+    if len(daily_bars) < 2:
+        return {}
+    day_pts = daily_bars[-560:] if len(daily_bars) > 560 else list(daily_bars)
+    month_pts = _aggregate_ohlc_bars(daily_bars, period="month")
+    if len(month_pts) > 360:
+        month_pts = month_pts[-360:]
+    quarter_pts = _aggregate_ohlc_bars(daily_bars, period="quarter")
+    if len(quarter_pts) > 200:
+        quarter_pts = quarter_pts[-200:]
+
+    out: dict[str, dict[str, Any]] = {}
+    specs = (
+        (
+            "day",
+            "日图",
+            "近 2 年日 K · MA5/10/30/60/120/250（红涨绿跌）",
+            "2y",
+            "1d",
+            day_pts,
+        ),
+        (
+            "month",
+            "月图",
+            "历史月 K · MA5/10/30/60/120/250（红涨绿跌）",
+            "max",
+            "1mo",
+            month_pts,
+        ),
+        (
+            "quarter",
+            "季图",
+            "历史季 K · 均线叠加（红涨绿跌）",
+            "max",
+            "3mo",
+            quarter_pts,
+        ),
+    )
+    for tf_id, label, blurb, range_, interval, points in specs:
+        if len(points) < 2:
+            continue
+        change, change_pct = _candle_change(points)
+        out[tf_id] = {
+            "tf": tf_id,
+            "label": label,
+            "blurb": blurb + "（Nasdaq）",
+            "range": range_,
+            "interval": interval,
+            "chart": "candle",
+            "points": points,
+            "change": change,
+            "change_pct": change_pct,
+        }
     return out

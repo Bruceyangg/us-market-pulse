@@ -19,7 +19,13 @@ from us_market_pulse.earnings_calendar import (
 from us_market_pulse.market_map import symbols_for_desk
 from us_market_pulse.markets import PORTFOLIO_TIMEFRAMES, fetch_symbol_bundle
 from us_market_pulse.portfolio_intel import match_portfolio_intel
-from us_market_pulse.quotes import fetch_day_quotes, fetch_nasdaq_intraday, fetch_nasdaq_intraday_many
+from us_market_pulse.quotes import (
+    build_nasdaq_ohlc_series,
+    fetch_day_quotes,
+    fetch_nasdaq_daily_bars,
+    fetch_nasdaq_intraday,
+    fetch_nasdaq_intraday_many,
+)
 from us_market_pulse.topics import TOPICS, filter_topic_items, topic_bearish_analysis
 
 # Cap concurrent Yahoo chart fetches per sector switch
@@ -1015,23 +1021,65 @@ async def _fetch_quote(
         and _bundle_has_full_chart(cached.get("bundle"))
     ):
         return cached.get("bundle"), []
-    bundle, errs = await fetch_symbol_bundle(
-        client,
-        symbol=sym,
-        label=label or sym,
-        short=sym,
-        timeframes=SECTOR_TIMEFRAMES,
-        include_yearly=False,
+
+    # Start Nasdaq immediately — Yahoo 429s often burn the desk budget alone.
+    nd_intra_task = asyncio.create_task(
+        fetch_nasdaq_intraday(client, sym, max_points=240)
     )
+    nd_ohlc_task = asyncio.create_task(fetch_nasdaq_daily_bars(client, sym))
+
+    bundle: dict[str, Any] | None = None
+    errs: list[str] = []
+    try:
+        bundle, errs = await asyncio.wait_for(
+            fetch_symbol_bundle(
+                client,
+                symbol=sym,
+                label=label or sym,
+                short=sym,
+                timeframes=SECTOR_TIMEFRAMES,
+                include_yearly=False,
+            ),
+            timeout=5.0,
+        )
+    except asyncio.TimeoutError:
+        errs = [f"{sym}: Yahoo chart slow/timeout"]
+    except Exception as exc:  # noqa: BLE001
+        errs = [f"{sym}: Yahoo bundle failed ({exc.__class__.__name__})"]
+
     if bundle and _bundle_has_full_chart(bundle):
+        nd_intra_task.cancel()
+        nd_ohlc_task.cancel()
         _SYM_CACHE[cache_key] = {"bundle": bundle, "fetched_at": time.time()}
         return bundle, errs
 
-    # Yahoo blocked/empty — still serve desk 分时 from Nasdaq chart API
-    nd = await fetch_nasdaq_intraday(client, sym, max_points=240)
-    if nd and len(nd.get("points") or []) >= 2:
+    series = dict((bundle or {}).get("series") or {})
+    need_intra = len((series.get("intraday") or {}).get("points") or []) < 2
+    need_day = len((series.get("day") or {}).get("points") or []) < 2
+    need_month = len((series.get("month") or {}).get("points") or []) < 2
+    need_quarter = len((series.get("quarter") or {}).get("points") or []) < 2
+    extra_errs = list(errs or [])
+
+    nd = None
+    ohlc_series: dict[str, Any] = {}
+    try:
+        nd = await nd_intra_task
+    except Exception as exc:  # noqa: BLE001
+        extra_errs.append(f"{sym}: Nasdaq intra failed ({exc.__class__.__name__})")
+    try:
+        daily_res = await nd_ohlc_task
+        if isinstance(daily_res, list):
+            ohlc_series = build_nasdaq_ohlc_series(daily_res)
+    except Exception as exc:  # noqa: BLE001
+        extra_errs.append(f"{sym}: Nasdaq OHLC failed ({exc.__class__.__name__})")
+
+    if nd and len(nd.get("points") or []) >= 2 and need_intra:
         pts = [
-            {"t": int(p["t"]), "v": float(p["v"]), "session": _session_id_et(int(p["t"]))}
+            {
+                "t": int(p["t"]),
+                "v": float(p["v"]),
+                "session": _session_id_et(int(p["t"])),
+            }
             for p in (nd.get("points") or [])
             if p.get("t") and p.get("v") is not None
         ]
@@ -1042,7 +1090,7 @@ async def _fetch_quote(
             if s["id"] not in seen:
                 seen.add(s["id"])
                 labels.append(s["label"])
-        intra = {
+        series["intraday"] = {
             "tf": "intraday",
             "label": "分时",
             "blurb": "盘前·盘中·盘后·夜盘一体分时（Nasdaq）",
@@ -1056,26 +1104,69 @@ async def _fetch_quote(
             "sessions": sessions,
             "session_labels": labels or ["盘前", "盘中", "盘后", "夜盘"],
         }
-        fallback = {
-            "id": sym.lower(),
-            "symbol": sym,
-            "label": label or sym,
-            "short": sym,
-            "price": nd.get("price"),
-            "change": nd.get("change"),
-            "change_pct": nd.get("change_pct"),
-            "points": pts[-64:],
-            "series": {"intraday": intra},
-            "url": f"https://finance.yahoo.com/quote/{sym}",
-            "source": "nasdaq",
-        }
-        # Cache briefly so desk can paint; do not pretend we have day/month K
+
+    for tf_id, row in ohlc_series.items():
+        if tf_id == "day" and not need_day:
+            continue
+        if tf_id == "month" and not need_month:
+            continue
+        if tf_id == "quarter" and not need_quarter:
+            continue
+        if len((series.get(tf_id) or {}).get("points") or []) >= 2:
+            continue
+        series[tf_id] = row
+
+    if not series:
+        return bundle, extra_errs
+
+    intra_pts = list((series.get("intraday") or {}).get("points") or [])
+    spark_pts = (
+        intra_pts[-64:]
+        if intra_pts
+        else list(((series.get("day") or {}).get("points") or [])[-64:])
+    )
+    if spark_pts and spark_pts[0].get("c") is not None and spark_pts[0].get("v") is None:
+        spark_pts = [
+            {"t": p["t"], "v": p["c"]} for p in spark_pts if p.get("c") is not None
+        ]
+
+    price = (bundle or {}).get("price")
+    change = (bundle or {}).get("change")
+    change_pct = (bundle or {}).get("change_pct")
+    if nd:
+        price = nd.get("price") if nd.get("price") is not None else price
+        change = nd.get("change") if nd.get("change") is not None else change
+        change_pct = (
+            nd.get("change_pct") if nd.get("change_pct") is not None else change_pct
+        )
+    if price is None and series.get("day", {}).get("points"):
+        price = series["day"]["points"][-1].get("c")
+
+    fallback = {
+        "id": ((bundle or {}).get("id") or sym.lower()),
+        "symbol": sym,
+        "label": (bundle or {}).get("label") or label or sym,
+        "short": (bundle or {}).get("short") or sym,
+        "price": price,
+        "change": change,
+        "change_pct": change_pct,
+        "points": spark_pts,
+        "series": series,
+        "url": (bundle or {}).get("url") or f"https://finance.yahoo.com/quote/{sym}",
+        "source": "nasdaq" if (nd or ohlc_series) else (bundle or {}).get("source"),
+    }
+    if _bundle_has_full_chart(fallback):
+        _SYM_CACHE[cache_key] = {"bundle": fallback, "fetched_at": time.time()}
+        note = f"{sym}: Yahoo chart incomplete; filled from Nasdaq"
+        return fallback, extra_errs + [note]
+    if _pick_has_intraday(fallback):
+        # Intraday-only: short TTL so we retry OHLC soon
         _SYM_CACHE[cache_key] = {
             "bundle": fallback,
             "fetched_at": time.time() - max(0, _SYM_TTL - 45),
         }
-        return fallback, errs + [f"{sym}: Yahoo chart unavailable; using Nasdaq 分时"]
-    return bundle, errs
+        return fallback, extra_errs + [f"{sym}: using Nasdaq 分时 (日/月/季 pending)"]
+    return bundle, extra_errs
 
 
 def _session_id_et(ts: int) -> str:
@@ -2017,25 +2108,23 @@ async def build_sector_desk(
         ):
             selected = pick_rows[0]["symbol"] if pick_rows else selected
 
-    # Ensure selected symbol has a full chart bundle (cache miss or lite row).
+    # Ensure selected symbol has day/month/quarter (not just list 分时 spark).
     # Skip per-symbol earnings here — Yahoo quoteSummary can take 20s+ and blocks the desk.
     selected_pick = next((p for p in pick_rows if p.get("symbol") == selected), None)
-    need_selected_chart = bool(selected) and not (
-        _pick_has_chart(selected_pick) or _pick_has_intraday(selected_pick)
-    )
-    # Always (re)fetch when the selected row lacks day/month charts. Do not let a
-    # prior chart_attempted / intraday-only spark cache block the full desk chart.
+    # Intraday-only rows must still upgrade — otherwise 日/月/季 stay empty.
+    need_selected_chart = bool(selected) and not _pick_has_chart(selected_pick)
     if selected and need_selected_chart:
         try:
             async with httpx.AsyncClient(
                 headers=yahoo_headers,
                 follow_redirects=True,
                 trust_env=False,
-                timeout=httpx.Timeout(8.0, connect=2.5),
+                # Nasdaq daily OHLC (~25y) can take a few seconds when Yahoo is blocked
+                timeout=httpx.Timeout(16.0, connect=3.0),
             ) as client:
                 bundle, errs = await asyncio.wait_for(
                     _fetch_quote_limited(client, selected, selected, force=force),
-                    timeout=8.0,
+                    timeout=16.0,
                 )
         except (asyncio.TimeoutError, httpx.HTTPError) as exc:
             bundle, errs = None, [f"{selected}: chart timeout ({exc.__class__.__name__})"]
