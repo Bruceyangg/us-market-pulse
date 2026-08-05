@@ -15,7 +15,7 @@ import httpx
 from us_market_pulse.config import DATA_DIR
 from us_market_pulse.earnings_calendar import get_upcoming_earnings_map
 from us_market_pulse.markets import PORTFOLIO_TIMEFRAMES
-from us_market_pulse.quotes import fetch_day_quotes
+from us_market_pulse.quotes import apply_list_quote_fields, fetch_day_quotes
 from us_market_pulse.sectors import (
     USER_AGENT,
     _bundle_has_full_chart,
@@ -240,7 +240,7 @@ def _lite_holding_card(
     except (TypeError, ValueError):
         momentum = 0.0
     is_strong = day_pct is not None and float(day_pct) > 0
-    return {
+    row = {
         **holding,
         "name": name,
         "label": name,
@@ -262,6 +262,8 @@ def _lite_holding_card(
         "sector_label": str(vc.get("industry") or "持仓"),
         "url": f"https://finance.yahoo.com/quote/{sym}",
     }
+    apply_list_quote_fields(row, quote)
+    return row
 
 
 def _empty_portfolio_view(username: str, data: dict[str, Any]) -> dict[str, Any]:
@@ -353,10 +355,8 @@ async def upgrade_selected_board(
             "chart_attempted": True,
             "url": bundle.get("url") or f"https://finance.yahoo.com/quote/{sym}",
         }
-        if rich.get("price") is None and quote:
-            rich["price"] = quote.get("price")
-            rich["change"] = quote.get("change")
-            rich["change_pct"] = quote.get("change_pct")
+        if quote:
+            apply_list_quote_fields(rich, quote)
         if earn:
             rich["earnings"] = earn
         elif isinstance(bundle.get("earnings"), dict):
@@ -607,11 +607,8 @@ async def build_portfolio_view(
             "chart_attempted": True,
             "url": bundle.get("url") or f"https://finance.yahoo.com/quote/{selected}",
         }
-        # Prefer day quote tape if bundle omitted price
-        if rich.get("price") is None and selected_card:
-            rich["price"] = selected_card.get("price")
-            rich["change"] = selected_card.get("change")
-            rich["change_pct"] = selected_card.get("change_pct")
+        # Keep list 收盘/实时 fields from day quote (don't let chart tape overwrite).
+        apply_list_quote_fields(rich, day_quotes.get(selected) or selected_card)
         for idx, row in enumerate(cards):
             if row.get("symbol") == selected:
                 cards[idx] = rich
