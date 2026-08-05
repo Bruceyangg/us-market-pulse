@@ -32,6 +32,7 @@ const state = {
   portfolioSelectPending: null,
   portfolioBoardCache: {},
   holdingToggleBusy: false,
+  holdingToggleBusySyms: null,
   intradayPollBusy: false,
   holdingSymbols: null,
   holdingsOnly: false,
@@ -1941,6 +1942,39 @@ async function refreshHoldingSymbols({ force = false } = {}) {
   }
 }
 
+function paintHoldingToggle(sym, held) {
+  const symbol = String(sym || "").toUpperCase();
+  if (!symbol) return;
+  document
+    .querySelectorAll(`.sector-hold-btn[data-hold-symbol="${symbol}"]`)
+    .forEach((btn) => {
+      btn.classList.toggle("is-held", held);
+      btn.setAttribute("data-hold-action", held ? "remove" : "add");
+      btn.textContent = held ? "−" : "+";
+      const title = held ? `从持仓移除 ${symbol}` : `加入持仓 ${symbol}`;
+      btn.title = title;
+      btn.setAttribute("aria-label", title);
+    });
+  document
+    .querySelectorAll(
+      `.sector-pick-row[data-symbol="${symbol}"], .holding-row[data-holding="${symbol}"]`
+    )
+    .forEach((row) => {
+      row.classList.toggle("in-holding", held);
+      const nm = row.querySelector(".meta .nm");
+      if (!nm) return;
+      const tag = nm.querySelector(".hold-tag");
+      if (held && !tag) {
+        nm.insertAdjacentHTML(
+          "beforeend",
+          '<span class="hold-tag">持仓</span>'
+        );
+      } else if (!held && tag) {
+        tag.remove();
+      }
+    });
+}
+
 async function toggleSectorHolding(symbol, name = "") {
   const sym = String(symbol || "").trim().toUpperCase();
   if (!sym) return;
@@ -1950,9 +1984,15 @@ async function toggleSectorHolding(symbol, name = "") {
     )}`;
     return;
   }
-  if (state.holdingToggleBusy) return;
-  state.holdingToggleBusy = true;
+  if (!state.holdingToggleBusySyms) state.holdingToggleBusySyms = new Set();
+  if (state.holdingToggleBusySyms.has(sym)) return;
+  state.holdingToggleBusySyms.add(sym);
   const held = isInHoldings(sym);
+  // Optimistic UI — flip +/− immediately, don't wait on network.
+  if (!state.holdingSymbols) state.holdingSymbols = new Set();
+  if (held) state.holdingSymbols.delete(sym);
+  else state.holdingSymbols.add(sym);
+  paintHoldingToggle(sym, !held);
   try {
     const data = held
       ? await portfolioPost("/api/portfolio/remove", { symbol: sym })
@@ -1961,12 +2001,10 @@ async function toggleSectorHolding(symbol, name = "") {
           name: name || "",
         });
     syncHoldingSymbolsFromPortfolio(data.portfolio);
+    paintHoldingToggle(sym, isInHoldings(sym));
     if (PAGE === "desk") {
-      const portfolio = await ensurePortfolioSelection(data.portfolio);
-      renderPortfolio(portfolio);
+      // Soft refresh quotes in background — list already updated if present.
       loadPortfolio({ refresh: false });
-    } else if (PAGE === "sectors") {
-      renderSectorPicks(state.sectors || {});
     }
     setStatus(
       held
@@ -1974,9 +2012,13 @@ async function toggleSectorHolding(symbol, name = "") {
         : `已加入持仓 ${data.resolved?.name || name || sym}（${sym}）`
     );
   } catch (err) {
+    // Revert optimistic flip
+    if (held) state.holdingSymbols.add(sym);
+    else state.holdingSymbols.delete(sym);
+    paintHoldingToggle(sym, held);
     setStatus(`${held ? "移除" : "加入"}失败：${err.message || err}`);
   } finally {
-    state.holdingToggleBusy = false;
+    state.holdingToggleBusySyms.delete(sym);
   }
 }
 
