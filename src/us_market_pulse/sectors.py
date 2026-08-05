@@ -1307,8 +1307,9 @@ def _window_change_pct(points: list[dict[str, Any]] | None, bars: int) -> float 
 
 
 def _series_points(bundle: dict[str, Any] | None, tf: str) -> list[dict[str, Any]]:
-    series = ((bundle or {}).get("series") or {}).get(tf) or {}
-    return list(series.get("points") or bundle.get("points") or [])
+    b = bundle or {}
+    series = (b.get("series") or {}).get(tf) or {}
+    return list(series.get("points") or b.get("points") or [])
 
 
 def _momentum_fields(bundle: dict[str, Any] | None) -> dict[str, Any]:

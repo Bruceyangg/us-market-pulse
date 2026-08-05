@@ -485,7 +485,15 @@ async def api_portfolio(
     request: Request, refresh: bool = Query(default=False)
 ) -> dict[str, Any]:
     username = require_user(request)
-    view = await build_portfolio_view(username, force_refresh=refresh)
+    try:
+        view = await asyncio.wait_for(
+            build_portfolio_view(username, force_refresh=refresh),
+            timeout=45.0,
+        )
+    except Exception as exc:  # noqa: BLE001
+        view = _portfolio_stub_view(username)
+        view["errors"] = [f"持仓行情暂不可用：{exc}"]
+        view["note"] = "持仓列表已加载；行情稍后自动刷新。"
     view["user"] = current_user(request)
     return view
 

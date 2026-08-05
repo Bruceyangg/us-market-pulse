@@ -250,8 +250,12 @@ async def build_portfolio_view(
             )
             for sym in need
         ]
-        results = await asyncio.gather(*tasks)
-        for sym, (bundle, errs) in zip(need, results, strict=True):
+        results = await asyncio.gather(*tasks, return_exceptions=True)
+        for sym, result in zip(need, results, strict=True):
+            if isinstance(result, Exception):
+                errors.append(f"{sym}: {result}")
+                continue
+            bundle, errs = result
             errors.extend(errs)
             if bundle:
                 boards[sym] = bundle
@@ -297,51 +301,84 @@ async def build_portfolio_view(
     ]
 
     # Sector-desk style enrichment: earnings / value chain / move analysis
-    upcoming_map = await get_upcoming_earnings_map(force=force_refresh) if symbols else {}
+    upcoming_map: dict[str, Any] = {}
     earnings_by_symbol: dict[str, Any] = {}
     if symbols:
-        async with httpx.AsyncClient(
-            headers={
-                "User-Agent": "Mozilla/5.0 (compatible; PulseDesk/1.0)",
-                "Accept": "application/json",
-            },
-            follow_redirects=True,
-            trust_env=False,
-        ) as earn_client:
-            earn_results = await asyncio.gather(
-                *[
-                    _fetch_earnings_cached(
-                        earn_client,
-                        sym,
-                        force=force_refresh,
-                        upcoming_map=upcoming_map,
-                    )
-                    for sym in symbols
-                ]
+        try:
+            upcoming_map = await asyncio.wait_for(
+                get_upcoming_earnings_map(force=force_refresh),
+                timeout=12.0,
             )
-        for sym, earn in zip(symbols, earn_results, strict=True):
-            if earn:
-                earnings_by_symbol[sym] = earn
+        except Exception as exc:  # noqa: BLE001
+            errors.append(f"earnings calendar: {exc}")
+            upcoming_map = {}
+        try:
+            async with httpx.AsyncClient(
+                headers={
+                    "User-Agent": "Mozilla/5.0 (compatible; PulseDesk/1.0)",
+                    "Accept": "application/json",
+                },
+                follow_redirects=True,
+                trust_env=False,
+            ) as earn_client:
+                earn_results = await asyncio.wait_for(
+                    asyncio.gather(
+                        *[
+                            _fetch_earnings_cached(
+                                earn_client,
+                                sym,
+                                force=force_refresh,
+                                upcoming_map=upcoming_map,
+                            )
+                            for sym in symbols
+                        ],
+                        return_exceptions=True,
+                    ),
+                    timeout=20.0,
+                )
+            for sym, earn in zip(symbols, earn_results, strict=True):
+                if isinstance(earn, Exception):
+                    errors.append(f"{sym}: earnings {earn}")
+                    continue
+                if earn:
+                    earnings_by_symbol[sym] = earn
+        except Exception as exc:  # noqa: BLE001
+            errors.append(f"earnings: {exc}")
 
     cards = []
     for h in holdings:
         sym = h["symbol"]
-        board = boards.get(sym) or {}
+        board = boards.get(sym) if isinstance(boards.get(sym), dict) else {}
         vc = _value_chain_for(sym)
         earn = earnings_by_symbol.get(sym)
-        wave = _momentum_fields(board if board else None)
-        analysis = _move_analysis(
-            day_pct=board.get("change_pct"),
-            month_pct=wave["month_change_pct"],
-            quarter_pct=wave["quarter_change_pct"],
-            vs_sector_pct=None,
-            is_wave=bool(wave["is_wave"]),
-            sector_label=str(vc.get("industry") or ""),
-            etf_day_pct=None,
-            earnings=earn if isinstance(earn, dict) else None,
-            value_chain=vc,
-            news=None,
-        )
+        try:
+            wave = _momentum_fields(board)
+            analysis = _move_analysis(
+                day_pct=board.get("change_pct"),
+                month_pct=wave["month_change_pct"],
+                quarter_pct=wave["quarter_change_pct"],
+                vs_sector_pct=None,
+                is_wave=bool(wave["is_wave"]),
+                sector_label=str(vc.get("industry") or ""),
+                etf_day_pct=None,
+                earnings=earn if isinstance(earn, dict) else None,
+                value_chain=vc,
+                news=None,
+            )
+        except Exception as exc:  # noqa: BLE001
+            errors.append(f"{sym}: enrich {exc}")
+            wave = {
+                "month_change_pct": None,
+                "quarter_change_pct": None,
+                "momentum": 0.0,
+                "is_wave": False,
+            }
+            analysis = {
+                "bias": "neutral",
+                "bias_zh": "中性",
+                "summary": "行情数据不足，暂无法判断涨跌驱动。",
+                "factors": ["等待报价刷新后再解读"],
+            }
         cards.append(
             {
                 **h,
