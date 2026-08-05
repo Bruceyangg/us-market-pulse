@@ -1961,7 +1961,7 @@ body {
 
   .sector-pick-list .sector-pick-main,
   .portfolio-body .sector-pick-main {
-    grid-template-columns: minmax(0, 1fr) 5.9rem;
+    grid-template-columns: minmax(0, 1fr) 6.2rem;
     grid-template-areas:
       "meta quote"
       "spark quote";
@@ -1988,10 +1988,10 @@ body {
     flex-direction: column;
     align-items: stretch;
     justify-content: center;
-    gap: 0.14rem;
+    gap: 0.12rem;
     min-width: 0;
-    width: 5.9rem;
-    max-width: 5.9rem;
+    width: 6.2rem;
+    max-width: 6.2rem;
     white-space: normal;
   }
 
@@ -2024,18 +2024,30 @@ body {
 
   .sector-pick-list .quote-rt,
   .portfolio-body .quote-rt {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-end;
     width: 100%;
-    justify-content: flex-end;
-    flex-wrap: nowrap;
-    gap: 0.16rem;
-    overflow: hidden;
+    gap: 0.06rem;
+    overflow: visible;
   }
 
   .sector-pick-list .rt-price,
   .sector-pick-list .rt-chg,
   .portfolio-body .rt-price,
   .portfolio-body .rt-chg {
-    font-size: 0.58rem;
+    font-size: 0.6rem;
+    max-width: 100%;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .sector-pick-list .quote-rt .rt-chg,
+  .portfolio-body .quote-rt .rt-chg {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.18rem;
   }
 
   .sector-pick-list .session-tag,
@@ -6374,7 +6386,7 @@ html.pulse-native-app .portfolio-body .sector-pick-row {
 
 html.pulse-native-app .sector-pick-list .sector-pick-main,
 html.pulse-native-app .portfolio-body .sector-pick-main {
-  grid-template-columns: minmax(0, 1fr) 5.9rem;
+  grid-template-columns: minmax(0, 1fr) 6.2rem;
   grid-template-areas:
     "meta quote"
     "spark quote";
@@ -6400,9 +6412,19 @@ html.pulse-native-app .portfolio-body .sector-pick-main .quote {
   grid-area: quote;
   align-items: stretch;
   min-width: 0;
-  width: 5.9rem;
-  max-width: 5.9rem;
+  width: 6.2rem;
+  max-width: 6.2rem;
   white-space: normal;
+}
+
+html.pulse-native-app .sector-pick-list .quote-rt,
+html.pulse-native-app .portfolio-body .quote-rt {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 0.06rem;
+  width: 100%;
+  overflow: visible;
 }
 
 html.pulse-native-app .sector-pick-list .quote-main,

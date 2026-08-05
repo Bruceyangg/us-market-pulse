@@ -3890,12 +3890,11 @@ function listQuoteHtml(pick) {
         )}</span>
         <span class="rt-chg ${pctClass(rtPct)}">${escapeHtml(
           pctText(rtPct)
-        )}</span>
-        ${
+        )}${
           sessionLabel
             ? `<span class="session-tag">${escapeHtml(sessionLabel)}</span>`
             : ""
-        }
+        }</span>
       </span>`
           : ""
       }
