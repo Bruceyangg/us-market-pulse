@@ -478,6 +478,9 @@ html[data-theme="dark"] .holding-intel-sticky {
   background: rgba(255, 255, 255, 0.88);
   text-decoration: none;
   color: inherit;
+  min-width: 0;
+  overflow: hidden;
+  box-sizing: border-box;
   transition: border-color 0.18s ease, box-shadow 0.18s ease;
 }
 
@@ -508,6 +511,11 @@ html[data-theme="dark"] .holding-intel-sticky {
   margin: 0;
   font-size: 0.9rem;
   line-height: 1.35;
+  overflow: hidden;
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  overflow-wrap: anywhere;
 }
 
 .holding-intel-card .en {
@@ -1180,6 +1188,9 @@ body {
   text-decoration: none;
   color: inherit;
   min-height: 7.5rem;
+  min-width: 0;
+  overflow: hidden;
+  box-sizing: border-box;
   transition: transform 0.2s ease;
 }
 
@@ -1190,6 +1201,9 @@ body {
 .index-card .label {
   font-size: 0.8rem;
   color: var(--ink-soft);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .index-card .short {
@@ -1198,6 +1212,9 @@ body {
   font-size: 0.72rem;
   color: var(--ink-soft);
   opacity: 0.85;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .index-card .value {
@@ -1206,6 +1223,10 @@ body {
   font-size: 1.45rem;
   letter-spacing: -0.03em;
   font-variant-numeric: tabular-nums;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 100%;
 }
 
 .index-card .chg {
@@ -1213,6 +1234,10 @@ body {
   font-size: 0.82rem;
   font-weight: 600;
   font-variant-numeric: tabular-nums;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 100%;
 }
 
 /* A股习惯：红涨绿跌 */
@@ -3014,6 +3039,7 @@ body {
 
 .sector-chip {
   width: 100%;
+  min-width: 0;
   appearance: none;
   border: 1px solid var(--line);
   border-radius: 14px;
@@ -3028,6 +3054,8 @@ body {
   padding: 0.65rem 0.75rem 0.7rem;
   min-height: 6.4rem;
   text-align: left;
+  overflow: hidden;
+  box-sizing: border-box;
   transition: border-color 0.15s ease, background 0.15s ease, transform 0.15s ease;
 }
 
@@ -3056,6 +3084,7 @@ body {
 .sector-chip .chip-name {
   font-weight: 750;
   font-size: 0.92rem;
+  min-width: 0;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -4214,6 +4243,9 @@ html[data-theme="dark"] .sector-pick-list .sector-hold-btn.is-held:hover {
   backdrop-filter: blur(10px);
   box-shadow: var(--shadow);
   min-height: 10rem;
+  min-width: 0;
+  overflow: hidden;
+  box-sizing: border-box;
 }
 
 .mood-card.skeleton {
@@ -5717,6 +5749,7 @@ html[data-theme="dark"] #btn-portfolio-manage.is-open {
 .earnings-focus-card {
   appearance: none;
   width: 100%;
+  min-width: 0;
   text-align: left;
   display: grid;
   gap: 0.28rem;
@@ -5729,6 +5762,8 @@ html[data-theme="dark"] #btn-portfolio-manage.is-open {
   font: inherit;
   cursor: pointer;
   align-content: start;
+  overflow: hidden;
+  box-sizing: border-box;
 }
 
 /* Subtle per-card tint so modules read as distinct blocks */
@@ -5762,24 +5797,50 @@ html[data-theme="dark"] #btn-portfolio-manage.is-open {
   display: flex;
   justify-content: space-between;
   gap: 0.4rem;
-  align-items: baseline;
+  align-items: flex-start;
+  min-width: 0;
+  max-width: 100%;
 }
 
 .earnings-focus-card .sym {
+  flex: 0 1 auto;
+  min-width: 0;
   font-weight: 800;
   font-size: 1rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .earnings-focus-card .when {
-  font-size: 0.72rem;
+  flex: 1 1 auto;
+  min-width: 0;
+  max-width: 70%;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 0.06rem;
+  font-size: 0.7rem;
   font-weight: 700;
   color: var(--amber);
+  text-align: right;
+  line-height: 1.2;
+}
+
+.earnings-focus-card .when-date,
+.earnings-focus-card .when-session {
+  display: block;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
   white-space: nowrap;
 }
 
 .earnings-focus-card .name,
 .earnings-focus-card .cap,
 .earnings-focus-card .why {
+  min-width: 0;
+  max-width: 100%;
   font-size: 0.76rem;
   color: var(--ink-soft);
   overflow: hidden;
@@ -5788,11 +5849,19 @@ html[data-theme="dark"] #btn-portfolio-manage.is-open {
   -webkit-line-clamp: 2;
   line-height: 1.35;
   white-space: normal;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+.earnings-focus-card .name,
+.earnings-focus-card .cap {
+  -webkit-line-clamp: 1;
 }
 
 .earnings-focus-card .why {
   color: var(--bear);
   font-weight: 650;
+  -webkit-line-clamp: 2;
 }
 
 .earnings-filters {
@@ -5876,7 +5945,7 @@ html[data-theme="dark"] #btn-portfolio-manage.is-open {
 
 .earnings-mega-card {
   display: grid;
-  grid-template-columns: 1fr auto;
+  grid-template-columns: minmax(0, 1fr) auto;
   gap: 0.15rem 0.4rem;
   padding: 0.5rem 0.55rem;
   border-radius: 10px;
@@ -5884,17 +5953,30 @@ html[data-theme="dark"] #btn-portfolio-manage.is-open {
   background: var(--chip-bg);
   color: inherit;
   text-decoration: none;
+  min-width: 0;
+  overflow: hidden;
+  box-sizing: border-box;
 }
 
 .earnings-mega-card .sym {
   font-weight: 800;
   font-size: 0.88rem;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .earnings-mega-card .when {
   font-size: 0.72rem;
   font-weight: 700;
   color: var(--amber);
+  min-width: 0;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  text-align: right;
 }
 
 .earnings-mega-card .name,
@@ -5905,6 +5987,7 @@ html[data-theme="dark"] #btn-portfolio-manage.is-open {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  min-width: 0;
 }
 
 .earnings-table-wrap {
@@ -5935,9 +6018,10 @@ html[data-theme="dark"] #btn-portfolio-manage.is-open {
 
 .earnings-table {
   display: grid;
-  gap: 0.3rem;
+  gap: 0;
   max-height: min(70vh, 42rem);
   overflow: auto;
+  min-width: 0;
 }
 
 .earnings-row {
@@ -5961,20 +6045,25 @@ html[data-theme="dark"] #btn-portfolio-manage.is-open {
   color: inherit;
   text-decoration: none;
   font-size: 0.78rem;
+  min-width: 0;
+  overflow: hidden;
 }
 
 .earnings-row.head {
   position: sticky;
   top: 0;
-  z-index: 1;
-  background: var(--elevated-soft);
+  z-index: 3;
+  background: var(--panel);
   color: var(--ink-soft);
   font-size: 0.7rem;
   font-weight: 700;
   border-color: var(--line);
+  box-shadow: 0 1px 0 var(--line);
 }
 
-.earnings-row.head > span {
+.earnings-row.head > span,
+.earnings-row > * {
+  min-width: 0;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -5993,6 +6082,7 @@ html[data-theme="dark"] #btn-portfolio-manage.is-open {
 }
 
 .earnings-row:not(.head) {
+  margin-top: 0.3rem;
   background: var(--chip-bg);
   border-color: var(--line);
 }
@@ -6048,9 +6138,12 @@ html[data-theme="dark"] #btn-portfolio-manage.is-open {
 html[data-theme="dark"] .earnings-date-tab.is-active,
 html[data-theme="dark"] .earnings-mega,
 html[data-theme="dark"] .earnings-focus,
-html[data-theme="dark"] .earnings-table-wrap,
-html[data-theme="dark"] .earnings-row.head {
+html[data-theme="dark"] .earnings-table-wrap {
   background: rgba(18, 28, 40, 0.72);
+}
+
+html[data-theme="dark"] .earnings-row.head {
+  background: #121c28;
 }
 
 html[data-theme="dark"] .earnings-focus-card:nth-child(4n + 1) {
@@ -6342,6 +6435,64 @@ html.pulse-native-app .atmosphere {
     min-width: 4.2rem;
     font-size: 0.72rem;
     padding-inline: 0.35rem;
+  }
+
+  /* Earnings focus cards: keep date/session inside module */
+  .earnings-focus {
+    padding: 0.65rem 0.6rem 0.7rem;
+    min-width: 0;
+    overflow: hidden;
+  }
+
+  .earnings-focus-card {
+    padding: 0.65rem 0.65rem;
+    min-height: 0;
+  }
+
+  .earnings-focus-card .when {
+    max-width: 62%;
+    font-size: 0.66rem;
+  }
+
+  .earnings-focus-card .why {
+    -webkit-line-clamp: 2;
+  }
+
+  .earnings-table-wrap {
+    min-width: 0;
+    overflow: hidden;
+    padding: 0.6rem 0.55rem 0.7rem;
+  }
+
+  .earnings-table {
+    max-height: min(62vh, 36rem);
+  }
+
+  .earnings-row {
+    gap: 0.22rem 0.4rem;
+    padding: 0.4rem 0.45rem;
+    font-size: 0.72rem;
+  }
+
+  .index-card {
+    padding: 0.85rem 0.8rem;
+  }
+
+  .index-card .value {
+    font-size: 1.25rem;
+  }
+
+  .mood-card {
+    padding: 0.9rem 0.9rem;
+    min-height: 0;
+  }
+
+  .mood-card .tilt {
+    font-size: 1.65rem;
+  }
+
+  .mood-card ul {
+    font-size: 0.8rem;
   }
 }
 

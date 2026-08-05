@@ -5699,9 +5699,10 @@ function renderEarningsDesk(data) {
               )}">
                 <span class="top">
                   <span class="sym">${escapeHtml(row.symbol)}</span>
-                  <span class="when">${escapeHtml(row.date || "")} · ${escapeHtml(
-                    row.time_zh || ""
-                  )}</span>
+                  <span class="when">
+                    <span class="when-date">${escapeHtml(row.date || "")}</span>
+                    <span class="when-session">${escapeHtml(row.time_zh || "")}</span>
+                  </span>
                 </span>
                 <span class="name">${escapeHtml(row.name || "")}</span>
                 <span class="cap">预期 ${escapeHtml(
