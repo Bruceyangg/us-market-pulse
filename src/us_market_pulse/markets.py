@@ -12,12 +12,12 @@ import httpx
 
 _ET = ZoneInfo("America/New_York")
 
-# Full extended session cycle labels (ET)
+# Trading-day order (ET): 盘前 → 盘中 → 盘后 → 夜盘
 _SESSION_META: list[dict[str, str]] = [
-    {"id": "night", "label": "夜盘"},
     {"id": "pre", "label": "盘前"},
     {"id": "regular", "label": "盘中"},
     {"id": "post", "label": "盘后"},
+    {"id": "night", "label": "夜盘"},
 ]
 INDEX_SPECS: list[dict[str, str]] = [
     {
@@ -198,14 +198,14 @@ def _session_cycle_bounds(
     now: datetime | None = None,
 ) -> tuple[datetime, datetime]:
     """
-    Current extended cycle: previous 20:00 ET → now (~24h).
-    Always anchor at the prior 20:00 so after 20:00 ET we still keep the
-    full day tape (盘前·盘中·盘后) plus the new 夜盘, instead of clipping
-    to only the last hour.
+    Current trading cycle: most recent 04:00 ET → now.
+
+    Order on the desk is 盘前→盘中→盘后→夜盘. Before 04:00 ET we are still
+    in the previous day's 夜盘, so the window starts at yesterday 04:00.
     """
     now_et = now.astimezone(_ET) if now else datetime.now(tz=_ET)
-    today_night = now_et.replace(hour=20, minute=0, second=0, microsecond=0)
-    start = today_night - timedelta(days=1)
+    today_pre = now_et.replace(hour=4, minute=0, second=0, microsecond=0)
+    start = today_pre if now_et >= today_pre else today_pre - timedelta(days=1)
     return start, now_et
 
 
