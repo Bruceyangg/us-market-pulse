@@ -581,8 +581,10 @@ async def _fetch_yahoo_series(
             day_change = round(float(price) - float(prev), 4)
             day_change_pct = round((float(price) - float(prev)) / float(prev) * 100.0, 3)
 
-        # For composite 分时, prefer vs prior close when available (matches list %)
-        if use_session and day_change_pct is not None:
+        # Yahoo 1D / session 分时: show day change vs previous close (not first→last tape).
+        if day_change_pct is not None and (
+            use_session or (chart == "line" and bool(tf.get("prepost")))
+        ):
             change, change_pct = day_change, day_change_pct
 
         out: dict[str, Any] = {
