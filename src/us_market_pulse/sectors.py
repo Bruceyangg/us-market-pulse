@@ -551,6 +551,9 @@ _PICKS_TTL = 180.0
 # Per-symbol Yahoo quote/earnings snippets shared across sectors
 _SYM_CACHE: dict[str, Any] = {}
 _SYM_TTL = 180.0
+# Shared holdings/sectors 分时 poll — short TTL so Yahoo-like tape stays fresh
+_INTRADAY_SNAP_CACHE: dict[str, Any] = {}
+_INTRADAY_SNAP_TTL = 25.0
 
 
 def _pick_has_chart(row: dict[str, Any] | None) -> bool:
@@ -618,6 +621,131 @@ def _ensure_bundle_intraday_sessions(bundle: dict[str, Any] | None) -> dict[str,
         series["intraday"] = _annotate_intraday_sessions(dict(intra))
         bundle["series"] = series
     return bundle
+
+
+async def fetch_intraday_snapshot(
+    symbol: str,
+    *,
+    force: bool = False,
+) -> dict[str, Any] | None:
+    """Yahoo-first 1D 分时 for holdings + sectors auto-refresh (shared path)."""
+    sym = (symbol or "").strip().upper()
+    if not sym:
+        return None
+    cache_key = f"intraday_snap:{sym}"
+    cached = _INTRADAY_SNAP_CACHE.get(cache_key)
+    if (
+        not force
+        and isinstance(cached, dict)
+        and time.time() - float(cached.get("at") or 0) < _INTRADAY_SNAP_TTL
+        and isinstance(cached.get("data"), dict)
+        and _series_intraday_ok(cached.get("data"))
+    ):
+        return dict(cached["data"])
+
+    yahoo_headers = {
+        "User-Agent": USER_AGENT,
+        "Accept": "application/json",
+        "Accept-Language": "en-US,en;q=0.9",
+        "Origin": "https://finance.yahoo.com",
+        "Referer": "https://finance.yahoo.com/",
+    }
+    series_row: dict[str, Any] | None = None
+    price: Any = None
+    change: Any = None
+    change_pct: Any = None
+    source = "none"
+
+    async with httpx.AsyncClient(
+        headers=yahoo_headers,
+        follow_redirects=True,
+        trust_env=False,
+        timeout=httpx.Timeout(6.0, connect=2.0),
+    ) as client:
+        nd_task = asyncio.create_task(
+            fetch_nasdaq_intraday(client, sym, max_points=480)
+        )
+
+        async def _yahoo_intra() -> dict[str, Any] | None:
+            bundle, _errs = await fetch_symbol_bundle(
+                client,
+                symbol=sym,
+                label=sym,
+                short=sym,
+                timeframes=[_INTRADAY_TF],
+                include_yearly=False,
+            )
+            return bundle
+
+        bundle: dict[str, Any] | None = None
+        try:
+            bundle = await asyncio.wait_for(_yahoo_intra(), timeout=4.0)
+        except Exception:  # noqa: BLE001
+            bundle = None
+
+        if bundle and _series_intraday_ok(bundle):
+            nd_task.cancel()
+            try:
+                await nd_task
+            except Exception:  # noqa: BLE001
+                pass
+            _ensure_bundle_intraday_sessions(bundle)
+            intra = (bundle.get("series") or {}).get("intraday")
+            if isinstance(intra, dict):
+                series_row = dict(intra)
+            price = bundle.get("price")
+            change = bundle.get("change")
+            change_pct = bundle.get("change_pct")
+            source = "yahoo"
+        else:
+            nd = None
+            try:
+                nd = await nd_task
+            except Exception:  # noqa: BLE001
+                nd = None
+            if nd and len(nd.get("points") or []) >= 2:
+                raw_pts = [
+                    {"t": int(p["t"]), "v": float(p["v"])}
+                    for p in (nd.get("points") or [])
+                    if p.get("t") and p.get("v") is not None
+                ]
+                series_row = _annotate_intraday_sessions(
+                    {
+                        "tf": "intraday",
+                        "label": "分时",
+                        "blurb": "Yahoo 1D 分时 · 含盘前/盘后（Nasdaq 回退）",
+                        "range": "1d",
+                        "interval": "1m",
+                        "chart": "line",
+                        "points": raw_pts,
+                        "change": nd.get("change"),
+                        "change_pct": nd.get("change_pct"),
+                        "previous_close": nd.get("previous_close"),
+                    }
+                )
+                price = nd.get("price")
+                change = nd.get("change")
+                change_pct = nd.get("change_pct")
+                source = "nasdaq"
+
+    if not series_row or len(series_row.get("points") or []) < 2:
+        return None
+
+    if series_row.get("previous_close") is None and price is not None:
+        # keep prior close from series when available
+        pass
+    data = {
+        "symbol": sym,
+        "price": price,
+        "change": change,
+        "change_pct": change_pct,
+        "previous_close": series_row.get("previous_close"),
+        "series": {"intraday": series_row},
+        "source": source,
+        "fetched_at": time.time(),
+    }
+    _INTRADAY_SNAP_CACHE[cache_key] = {"at": time.time(), "data": data}
+    return dict(data)
 
 
 def _spark_points_from_row(row: dict[str, Any] | None) -> list[dict[str, Any]]:
