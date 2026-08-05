@@ -46,6 +46,7 @@ from us_market_pulse.sectors import build_sector_desk
 from us_market_pulse.symbol_lookup import resolve_holding_query, suggest_holdings
 from us_market_pulse.topics import build_war_desk
 from us_market_pulse.portfolio import (
+    MAX_HOLDINGS,
     add_holding,
     build_portfolio_view,
     load_portfolio,
@@ -489,6 +490,58 @@ async def api_portfolio(
     return view
 
 
+def _portfolio_stub_view(username: str, *, selected: str = "") -> dict[str, Any]:
+    """Return holdings immediately without waiting on quote/earnings fetches."""
+    data = load_portfolio(username)
+    holdings = data.get("holdings") or []
+    pick = selected or data.get("selected") or (
+        holdings[0]["symbol"] if holdings else ""
+    )
+    cards: list[dict[str, Any]] = []
+    for h in holdings:
+        sym = h.get("symbol") or ""
+        cards.append(
+            {
+                **h,
+                "price": None,
+                "change": None,
+                "change_pct": None,
+                "as_of": None,
+                "points": [],
+                "series": {},
+                "label": h.get("name") or sym,
+                "url": f"https://finance.yahoo.com/quote/{sym}" if sym else "",
+            }
+        )
+    selected_card = next((c for c in cards if c.get("symbol") == pick), None)
+    if selected_card is None and cards:
+        selected_card = cards[0]
+        pick = selected_card.get("symbol") or ""
+    return {
+        "updated_at": data.get("updated_at") or 0,
+        "selected": pick,
+        "selected_symbol": pick,
+        "holdings": cards,
+        "selected_board": selected_card,
+        "board": selected_card,
+        "selected_earnings": None,
+        "value_chain": None,
+        "earnings_calendar": [],
+        "timeframes": [
+            {"id": "intraday", "label": "分时", "blurb": "", "chart": "line"},
+            {"id": "day", "label": "日图", "blurb": "", "chart": "candle"},
+            {"id": "month", "label": "月图", "blurb": "", "chart": "candle"},
+            {"id": "quarter", "label": "季图", "blurb": "", "chart": "candle"},
+        ],
+        "default_tf": "intraday",
+        "max_holdings": MAX_HOLDINGS,
+        "owner": str(username).strip().lower(),
+        "errors": [],
+        "note": "持仓已保存；行情稍后自动刷新。",
+        "style": {"up": "red", "down": "green"},
+    }
+
+
 @app.post("/api/portfolio/add")
 async def api_portfolio_add(request: Request, body: HoldingIn) -> dict[str, Any]:
     username = require_user(request)
@@ -506,7 +559,14 @@ async def api_portfolio_add(request: Request, body: HoldingIn) -> dict[str, Any]
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
-    view = await build_portfolio_view(username, force_refresh=True)
+    # Save first, then try a short quote enrich. Never block "add" on Yahoo/Nasdaq.
+    try:
+        view = await asyncio.wait_for(
+            build_portfolio_view(username, force_refresh=False),
+            timeout=8.0,
+        )
+    except Exception:  # noqa: BLE001
+        view = _portfolio_stub_view(username, selected=symbol)
     view["user"] = current_user(request)
     return {
         "ok": True,
@@ -522,7 +582,13 @@ async def api_portfolio_remove(request: Request, body: HoldingIn) -> dict[str, A
         remove_holding(username, body.symbol)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
-    view = await build_portfolio_view(username, force_refresh=False)
+    try:
+        view = await asyncio.wait_for(
+            build_portfolio_view(username, force_refresh=False),
+            timeout=8.0,
+        )
+    except Exception:  # noqa: BLE001
+        view = _portfolio_stub_view(username)
     view["user"] = current_user(request)
     return {"ok": True, "portfolio": view}
 
