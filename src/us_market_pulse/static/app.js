@@ -49,7 +49,9 @@ const state = {
   usMarketsPollBusy: false,
   sectorsLoadBusy: false,
   sectorsLoadSeq: 0,
+  sectorsLoadPending: null,
   chartUpgradeSym: "",
+  symbolNewsRetrySym: "",
   earnings: null,
   earningsDate: "",
   earningsSession: "all",
@@ -5907,20 +5909,31 @@ function renderSectorPickChart() {
     const tfLabel =
       { intraday: "分时", day: "日图", month: "月图", quarter: "季图" }[tf] ||
       "走势";
+    const loading =
+      Boolean(pick.lite) ||
+      state.sectorsLoadBusy ||
+      state.chartUpgradeSym === String(pick.symbol || "").toUpperCase();
+    const stats = seriesStats(
+      toLineSparkPoints(pick.series?.intraday?.points || pick.points || []),
+      "line"
+    );
     els.sectorPickChart.innerHTML = `
       <div class="chart-head">
         <h3>${escapeHtml(pick.name || pick.label || "")} · ${escapeHtml(
           pick.symbol || ""
         )}</h3>
       </div>
-      ${deskStatsBlockHtml(pick, { open: null, high: null, low: null })}
-      <p class="chart-placeholder">暂无${escapeHtml(
-        tfLabel
-      )}数据 · 点右上角刷新重试</p>
+      ${deskStatsBlockHtml(pick, stats)}
+      <p class="chart-placeholder">${
+        loading
+          ? `正在加载${escapeHtml(tfLabel)}…`
+          : `暂无${escapeHtml(tfLabel)}数据 · 点右上角刷新重试`
+      }</p>
     `;
     renderMonthPanel(pick);
     renderStockEarnings(data.selected_earnings || pick.earnings, pick);
     renderMoveAnalysis(pick);
+    renderSymbolNewsFeed(data);
     return;
   }
   const zoomWin = defaultChartZoom(points.length, tf, kind);
@@ -6210,30 +6223,49 @@ function selectSectorSymbol(sym) {
   if (!data || !pick) {
     state.sectorSymbol = symbol;
     syncSectorQuery();
-    loadSectorDesk();
+    loadSectorDesk({ force: true });
     return;
   }
+  const prevSelected = data.selected_pick;
   const already =
     symbol === state.sectorSymbol && pickHasChart(data.selected_pick);
   // Always paint locally first — never wait on network / rebuild the whole list.
   state.sectorSymbol = symbol;
   data.selected_symbol = symbol;
-  data.selected_pick = pick;
-  data.selected_earnings = pick.earnings || null;
-  data.value_chain = pick.value_chain || data.value_chain;
-  data.symbol_news = pick.symbol_news || [];
+  // List rows are slim (spark only). Keep prior full multi-TF chart when
+  // re-selecting the same symbol so 日/月/季 don't flash "暂无".
+  if (
+    pickHasChart(pick) ||
+    (prevSelected?.symbol === symbol && pickHasChart(prevSelected))
+  ) {
+    data.selected_pick =
+      pickHasChart(pick)
+        ? pick
+        : mergePickPreserveIntraday(
+            { ...pick, series: { ...(pick.series || {}), ...prevSelected.series }, lite: false },
+            prevSelected
+          );
+  } else {
+    data.selected_pick = pick;
+  }
+  data.selected_earnings =
+    data.selected_pick?.earnings || pick.earnings || null;
+  data.value_chain =
+    data.selected_pick?.value_chain || pick.value_chain || data.value_chain;
+  data.symbol_news =
+    data.selected_pick?.symbol_news || pick.symbol_news || [];
   syncSectorQuery();
   paintSectorSelection();
-  refreshActiveRowQuote(els.sectorPickList, pick, "data-symbol");
+  refreshActiveRowQuote(els.sectorPickList, data.selected_pick || pick, "data-symbol");
   setStatus(`已切换 ${pick.name || symbol} · ${pick.sector_label || ""}`);
   persistPageDataCache();
-  if (already || pickHasChart(pick)) {
+  if (already || pickHasChart(data.selected_pick)) {
     if (state.sectorTf === "intraday") refreshActiveIntraday({ force: false });
     return;
   }
   // Has 分时 but missing 日/月/季 — still upgrade in background.
   if (state.sectorTf === "intraday") refreshActiveIntraday({ force: false });
-  loadSectorDesk();
+  loadSectorDesk({ force: true });
 }
 
 function renderSectorDesk(data) {
@@ -6269,9 +6301,19 @@ function paintSectorDeskError(message) {
 
 async function loadSectorDesk({ force = false } = {}) {
   if (PAGE !== "sectors") return null;
-  if (state.sectorsLoadBusy && !force) return state.sectors;
+  if (state.sectorsLoadBusy) {
+    // Queue the latest sector/symbol so a click during an in-flight load
+    // still upgrades the selected desk chart after the current request.
+    state.sectorsLoadPending = {
+      force: Boolean(force || state.sectorsLoadPending?.force),
+      sectorId: state.sectorId,
+      sectorSymbol: state.sectorSymbol,
+    };
+    return state.sectors;
+  }
   const seq = ++state.sectorsLoadSeq;
   state.sectorsLoadBusy = true;
+  state.sectorsLoadPending = null;
   const params = new URLSearchParams();
   if (state.sectorId) params.set("sector", state.sectorId);
   if (state.sectorSymbol) params.set("symbol", state.sectorSymbol);
@@ -6323,7 +6365,10 @@ async function loadSectorDesk({ force = false } = {}) {
             ? prevSelected
             : prevBySym[data.selected_symbol];
         const merged = mergeListQuoteFields(
-          mergePickPreserveIntraday(fromList || data.selected_pick, prevSel),
+          mergePickPreserveIntraday(
+            data.selected_pick || fromList,
+            prevSel
+          ),
           prevSel
         );
         if (merged) data.selected_pick = merged;
@@ -6357,6 +6402,19 @@ async function loadSectorDesk({ force = false } = {}) {
         }
       }, 700);
     }
+    // GN news warms in background — soft re-fetch once if still empty.
+    const newsEmpty = !(data.symbol_news || []).length;
+    if (sel && newsEmpty && state.symbolNewsRetrySym !== sel) {
+      state.symbolNewsRetrySym = sel;
+      window.setTimeout(() => {
+        if (
+          state.sectorSymbol === sel &&
+          !(state.sectors?.symbol_news || []).length
+        ) {
+          void loadSectorDesk({ force: false });
+        }
+      }, 2800);
+    }
     return data;
   } catch (err) {
     if (seq === state.sectorsLoadSeq) {
@@ -6369,6 +6427,13 @@ async function loadSectorDesk({ force = false } = {}) {
   } finally {
     if (seq === state.sectorsLoadSeq) state.sectorsLoadBusy = false;
     if (els.sectorsRefresh) els.sectorsRefresh.disabled = false;
+    const pending = state.sectorsLoadPending;
+    if (pending && seq === state.sectorsLoadSeq) {
+      state.sectorsLoadPending = null;
+      if (pending.sectorId) state.sectorId = pending.sectorId;
+      if (pending.sectorSymbol) state.sectorSymbol = pending.sectorSymbol;
+      void loadSectorDesk({ force: Boolean(pending.force) });
+    }
   }
 }
 
@@ -7541,7 +7606,25 @@ function bootPage() {
     if (qSector) state.sectorId = qSector;
     if (qSymbol) state.sectorSymbol = qSymbol;
     const painted = paintFromPageDataCache("sectors");
+    // Deep-link query wins over stale localStorage (e.g. ?sector=health).
+    if (qSector) state.sectorId = qSector;
+    if (qSymbol) state.sectorSymbol = qSymbol;
     if (painted) {
+      const cachedDesk = qSector ? sectorCacheGet(qSector) : null;
+      if (cachedDesk) {
+        renderSectorDesk(cachedDesk);
+      } else if (
+        qSector &&
+        state.sectors?.active_sector_id &&
+        state.sectors.active_sector_id !== qSector
+      ) {
+        // Avoid flashing the wrong sector while the network refresh runs.
+        if (els.sectorPickList) {
+          els.sectorPickList.innerHTML = '<p class="empty">加载成分股…</p>';
+        }
+      } else if (state.sectors) {
+        renderSectorDesk(state.sectors);
+      }
       restoreScrollPosition();
       setStatus("已恢复板块缓存 · 后台刷新中…");
     }
