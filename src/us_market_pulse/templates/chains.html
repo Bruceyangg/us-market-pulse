@@ -1,13 +1,13 @@
 {% extends "base.html" %}
 {% block title %}Pulse Desk · 产业链{% endblock %}
-{% block status_default %}加载产业链全景…{% endblock %}
+{% block status_default %}输入行业关键词生成产业链…{% endblock %}
 {% block content %}
       <section class="page-intro chains-intro">
         <div class="chains-intro-main">
           <p class="page-kicker">产业链</p>
-          <h1>半导体全景定位</h1>
+          <h1>全产业链逻辑图</h1>
           <p class="lede compact" id="chains-blurb">
-            搜索环节、公司或应用场景，定位上下游关系。
+            输入行业关键词，生成上下游逻辑图，并标注美股代码；可一键加入持仓。
           </p>
         </div>
         <form class="chains-search" id="chains-search" role="search" aria-label="搜索产业链">
@@ -15,41 +15,29 @@
             id="chains-q"
             type="search"
             name="q"
-            placeholder="搜索产业链 / 公司 / 环节，例如 光刻胶、ASML、台积电"
+            placeholder="输入行业关键词，例如：半导体、AI、新能源车"
             autocomplete="off"
             enterkeyhint="search"
           />
-          <button class="btn primary btn-compact" type="submit">搜索</button>
+          <button class="btn primary btn-compact" type="submit">生成</button>
         </form>
+        <div class="chains-suggest" id="chains-suggest" aria-label="热门产业链"></div>
       </section>
 
-      <section class="chains-flow-wrap" aria-label="产业链流程">
-        <div class="chains-flow" id="chains-flow"></div>
-      </section>
-
-      <div class="chains-hits is-hidden" id="chains-hits" aria-label="搜索结果"></div>
-
-      <div class="chains-board" id="chains-board">
-        <section class="chains-main" aria-label="当前环节">
-          <div class="chains-pane-head">
-            <div>
-              <h2 id="chains-node-title">IC 设计</h2>
-              <p id="chains-node-blurb">选择上方环节查看相关公司</p>
-            </div>
-            <span class="chains-tone-pill" id="chains-tone-pill">核心</span>
-          </div>
-          <div class="chains-company-grid" id="chains-companies"></div>
-        </section>
-
-        <aside class="chains-side" aria-label="链路定位">
-          <div class="chains-pane-head">
-            <div>
-              <h2>链路定位</h2>
-              <p id="chains-side-blurb">当前节点与上下游快捷跳转</p>
-            </div>
-          </div>
-          <div class="chains-trail" id="chains-trail"></div>
-          <div class="chains-related" id="chains-related"></div>
-        </aside>
+      <div class="chains-empty" id="chains-empty" aria-live="polite">
+        <p class="chains-empty-title">从搜索开始</p>
+        <p class="chains-empty-text">输入行业关键词后，将生成类似全景图的产业链逻辑结构，并列出对应美股。</p>
       </div>
+
+      <section class="chains-map is-hidden" id="chains-map" aria-label="产业链逻辑图">
+        <header class="chains-map-head">
+          <div>
+            <h2 id="chains-map-title">产业链</h2>
+            <p id="chains-map-blurb"></p>
+          </div>
+        </header>
+        <div class="chains-top-flow" id="chains-top-flow"></div>
+        <div class="chains-branches" id="chains-branches"></div>
+        <div class="chains-panels" id="chains-panels"></div>
+      </section>
 {% endblock %}
