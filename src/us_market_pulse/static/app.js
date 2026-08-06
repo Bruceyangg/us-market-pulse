@@ -420,12 +420,36 @@ function panChartWindow(key, deltaBars) {
   paintZoomableChart(key);
 }
 
+function chartLiveRefreshIconHtml() {
+  // Clockwise circular arrow (matches the desk refresh glyph).
+  return `
+    <svg class="chart-live-refresh-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+      <path
+        fill="none"
+        stroke="currentColor"
+        stroke-width="2.4"
+        stroke-linecap="round"
+        stroke-linejoin="round"
+        d="M20.5 12a8.5 8.5 0 1 1-2.4-5.9"
+      />
+      <path
+        fill="none"
+        stroke="currentColor"
+        stroke-width="2.4"
+        stroke-linecap="round"
+        stroke-linejoin="round"
+        d="M20.5 4.2v4.6h-4.6"
+      />
+    </svg>
+  `;
+}
+
 function chartZoomControlsHtml(zoomed, { showLiveRefresh = false } = {}) {
   return `
     <div class="chart-zoom-bar">
       <button type="button" class="chart-live-refresh${
         showLiveRefresh ? "" : " is-hidden"
-      }" data-zoom-act="live-refresh" title="实时刷新分时" aria-label="实时刷新分时">刷新</button>
+      }" data-zoom-act="live-refresh" title="实时刷新分时" aria-label="实时刷新分时">${chartLiveRefreshIconHtml()}</button>
       <span class="chart-zoom-hint">缩放</span>
       <div class="chart-zoom-controls" role="group" aria-label="图表缩放">
         <button type="button" class="chart-zoom-btn" data-zoom-act="out" title="缩小" aria-label="缩小">−</button>
