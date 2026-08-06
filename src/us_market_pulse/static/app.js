@@ -4704,6 +4704,7 @@ function renderSymbolNewsFeed(data) {
     : `<p class="empty">暂无 ${escapeHtml(
         sym
       )} 最新消息 · <a href="/intel?q=${encodeURIComponent(sym)}">去情报流搜索</a></p>`;
+  requestAnimationFrame(() => syncSectorsDeskHeights());
 }
 
 function heatColor(pct) {
