@@ -936,15 +936,21 @@ async def fetch_day_quotes(
                 for x in overnight_priority
                 if str(x).strip()
             ]
-        need_on = [
-            s
-            for s in candidates
-            if s in quotes
-            and not (quotes[s].get("overnight") and quotes[s].get("rt_price") is not None)
-        ][:1]
-        # Single-flight background scrape (selected only). Never await here.
-        if need_on and not _OVERNIGHT_REFRESH_INFLIGHT:
-            _schedule_overnight_refresh(need_on)
+        # Apply cached Overnight only. Network scrape is opt-in via
+        # PULSE_OVERNIGHT_FETCH=1 — jina/Yahoo page fetches can stall Render.
+        import os
+
+        if os.environ.get("PULSE_OVERNIGHT_FETCH", "").strip() in {"1", "true", "yes"}:
+            need_on = [
+                s
+                for s in candidates
+                if s in quotes
+                and not (
+                    quotes[s].get("overnight") and quotes[s].get("rt_price") is not None
+                )
+            ][:1]
+            if need_on and not _OVERNIGHT_REFRESH_INFLIGHT:
+                _schedule_overnight_refresh(need_on)
         stamped_at = time.time()
         for sym, row in quotes.items():
             _DAY_QUOTE_CACHE[sym] = {"at": stamped_at, "quote": dict(row)}
