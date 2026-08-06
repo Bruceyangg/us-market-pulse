@@ -501,6 +501,24 @@ async def api_portfolio_lookup(
     }
 
 
+@app.get("/api/portfolio/symbols")
+async def api_portfolio_symbols(request: Request) -> dict[str, Any]:
+    """Lightweight holdings symbols for cross-page +/- tags (no quotes)."""
+    username = require_user(request)
+    data = load_portfolio(username)
+    symbols = [
+        str(h.get("symbol") or "").upper()
+        for h in (data.get("holdings") or [])
+        if str(h.get("symbol") or "").strip()
+    ]
+    return {
+        "symbols": symbols,
+        "selected": str(data.get("selected") or "").upper(),
+        "count": len(symbols),
+        "updated_at": data.get("updated_at") or 0,
+    }
+
+
 @app.get("/api/portfolio")
 async def api_portfolio(
     request: Request, refresh: bool = Query(default=False)
