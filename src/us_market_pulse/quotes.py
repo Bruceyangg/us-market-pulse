@@ -189,17 +189,38 @@ def derive_list_realtime(
     elif sid == "pre":
         if out_price is None and pre_pts:
             out_price = _point_price(pre_pts[-1])
+        # Yahoo 盘前 % is vs last regular close (At close), NOT prior-day close.
         if out_price is not None and (out_pct is None or out_change is None):
-            chg, pct = _change_vs_basis(out_price, previous_close)
+            basis = regular_close if regular_close not in (None, 0) else None
+            if basis is None and day_price not in (None, 0):
+                # day_price is regular close when quote row is CNBC/Yahoo day line.
+                # Reject when day_price ≈ rt (Nasdaq lastSale during pre is the pre print).
+                if abs(float(out_price) - float(day_price)) >= 1e-4:
+                    basis = day_price
+            if basis is None:
+                basis = previous_close
+            chg, pct = _change_vs_basis(out_price, basis)
             if out_change is None:
                 out_change = chg
             if out_pct is None:
                 out_pct = pct
+        # Drop clone of the full-day line mislabeled as 盘前.
+        if (
+            out_price is not None
+            and day_price is not None
+            and abs(float(out_price) - float(day_price)) < 1e-6
+            and out_pct is not None
+            and day_change_pct is not None
+            and abs(float(out_pct) - float(day_change_pct)) < 1e-6
+        ):
+            out_price = out_change = out_pct = None
     elif sid == "post":
         if out_price is None and post_pts:
             out_price = _point_price(post_pts[-1])
         if out_price is not None and (out_pct is None or out_change is None):
             basis = regular_close if regular_close not in (None, 0) else previous_close
+            if basis is None:
+                basis = day_price
             chg, pct = _change_vs_basis(out_price, basis)
             if out_change is None:
                 out_change = chg
@@ -675,17 +696,19 @@ def _with_session_and_realtime(
     rt_change = _parse_number(extended.get("change")) if use_extended else None
     rt_pct = _parse_pct(extended.get("change_pct")) if use_extended else None
 
-    if rt_price is not None:
-        if sid == "pre":
-            chg, pct = _change_vs_basis(rt_price, base.get("previous_close"))
-        elif sid == "post":
-            chg, pct = _change_vs_basis(rt_price, base.get("price"))
-        else:
-            chg, pct = None, None
-        if chg is not None:
-            rt_change = chg
-        if pct is not None:
-            rt_pct = pct
+    # Prefer vendor extended % (Yahoo/CNBC: vs last regular close). Only
+    # recompute when the vendor omits change fields.
+    if rt_price is not None and (rt_pct is None or rt_change is None):
+        if sid in {"pre", "post"}:
+            # Last regular close lives in `price` on the day-quote row.
+            basis = base.get("price")
+            if basis in (None, 0):
+                basis = base.get("previous_close")
+            chg, pct = _change_vs_basis(rt_price, basis)
+            if rt_change is None:
+                rt_change = chg
+            if rt_pct is None:
+                rt_pct = pct
 
     rt_fields = derive_list_realtime(
         session=sid,
@@ -766,6 +789,13 @@ async def fetch_cnbc_quotes(
                 change = _parse_number(row.get("change"))
                 change_pct = _parse_pct(row.get("change_pct"))
                 prev = _parse_number(row.get("previous_day_closing"))
+                # CNBC often mirrors `last` into previous_day_closing in 盘前/盘后.
+                if (
+                    price is not None
+                    and change is not None
+                    and (prev is None or abs(float(prev) - float(price)) < 1e-6)
+                ):
+                    prev = float(price) - float(change)
                 if change_pct is None and price is not None and prev not in (None, 0):
                     change = price - prev
                     change_pct = (change / prev) * 100.0
