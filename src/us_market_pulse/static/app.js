@@ -54,8 +54,7 @@ const state = {
   chartZoom: {},
   chartZoomScope: {},
   chains: null,
-  chainId: "semiconductor",
-  chainNode: "",
+  chainId: "",
   chainQ: "",
   chainsBound: false,
 };
@@ -173,15 +172,14 @@ const els = {
   chainsBlurb: document.getElementById("chains-blurb"),
   chainsSearch: document.getElementById("chains-search"),
   chainsQ: document.getElementById("chains-q"),
-  chainsFlow: document.getElementById("chains-flow"),
-  chainsHits: document.getElementById("chains-hits"),
-  chainsNodeTitle: document.getElementById("chains-node-title"),
-  chainsNodeBlurb: document.getElementById("chains-node-blurb"),
-  chainsTonePill: document.getElementById("chains-tone-pill"),
-  chainsCompanies: document.getElementById("chains-companies"),
-  chainsSideBlurb: document.getElementById("chains-side-blurb"),
-  chainsTrail: document.getElementById("chains-trail"),
-  chainsRelated: document.getElementById("chains-related"),
+  chainsSuggest: document.getElementById("chains-suggest"),
+  chainsEmpty: document.getElementById("chains-empty"),
+  chainsMap: document.getElementById("chains-map"),
+  chainsMapTitle: document.getElementById("chains-map-title"),
+  chainsMapBlurb: document.getElementById("chains-map-blurb"),
+  chainsTopFlow: document.getElementById("chains-top-flow"),
+  chainsBranches: document.getElementById("chains-branches"),
+  chainsPanels: document.getElementById("chains-panels"),
   briefGrid: document.getElementById("brief-grid"),
   briefBlurb: document.getElementById("brief-blurb"),
   eventRail: document.getElementById("event-rail"),
@@ -2562,7 +2560,7 @@ function paintHoldingToggle(sym, held) {
     });
   document
     .querySelectorAll(
-      `.sector-pick-row[data-symbol="${symbol}"], .holding-row[data-holding="${symbol}"]`
+      `.sector-pick-row[data-symbol="${symbol}"], .holding-row[data-holding="${symbol}"], .chains-co-row[data-symbol="${symbol}"]`
     )
     .forEach((row) => {
       row.classList.toggle("in-holding", held);
@@ -6896,16 +6894,10 @@ function paintFromPageDataCache(page = PAGE) {
   return false;
 }
 
-const CHAIN_TONE_LABEL = {
-  support: "支撑",
-  core: "核心",
-  app: "下游",
-};
-
 function syncChainsQuery() {
   const params = new URLSearchParams();
-  if (state.chainNode) params.set("node", state.chainNode);
   if (state.chainQ) params.set("q", state.chainQ);
+  if (state.chainId) params.set("chain", state.chainId);
   const qs = params.toString();
   const next = qs ? `/chains?${qs}` : "/chains";
   if (`${location.pathname}${location.search}` !== next) {
@@ -6913,182 +6905,189 @@ function syncChainsQuery() {
   }
 }
 
-function renderChainsFlow(data) {
-  if (!els.chainsFlow) return;
-  const flow = data?.chain?.flow || [];
-  const selected = data?.selected_node || "";
-  const nodeMeta = Object.fromEntries(
-    (data?.chain?.nodes || []).map((n) => [n.id, n])
-  );
-  els.chainsFlow.innerHTML = flow
-    .map((stage, idx) => {
-      const nodes = (stage.nodes || [])
-        .map((id) => {
-          const n = nodeMeta[id] || { id, label: id, short: id };
-          const active = id === selected ? " is-active" : "";
-          return `<button type="button" class="chains-node-btn tone-${escapeHtml(
-            n.tone || stage.tone || "core"
-          )}${active}" data-chain-node="${escapeHtml(id)}">${escapeHtml(
-            n.short || n.label
-          )}</button>`;
-        })
-        .join("");
-      const pipe =
-        Array.isArray(stage.pipeline) && stage.pipeline.length
-          ? `<div class="chains-pipeline">${stage.pipeline
-              .map((id) => {
-                const n = nodeMeta[id] || { id, short: id };
-                const active = id === selected ? " is-active" : "";
-                return `<button type="button" class="chains-pipe-btn${active}" data-chain-node="${escapeHtml(
-                  id
-                )}">${escapeHtml(n.short || n.label)}</button>`;
-              })
-              .join('<span class="chains-pipe-arrow" aria-hidden="true">→</span>')}</div>`
-          : "";
-      return `
-        <div class="chains-stage tone-${escapeHtml(stage.tone || "core")}">
-          <div class="chains-stage-label">${escapeHtml(stage.label || "")}</div>
-          <div class="chains-stage-nodes">${nodes}</div>
-          ${pipe}
-        </div>
-        ${idx < flow.length - 1 ? '<div class="chains-stage-sep" aria-hidden="true">→</div>' : ""}
-      `;
-    })
+function renderChainsSuggest(catalog) {
+  if (!els.chainsSuggest) return;
+  const list = catalog || [];
+  els.chainsSuggest.innerHTML = list
+    .map(
+      (c) =>
+        `<button type="button" class="chains-suggest-chip" data-chain-id="${escapeHtml(
+          c.id
+        )}" data-chain-q="${escapeHtml(c.label)}">${escapeHtml(
+          c.label
+        )}</button>`
+    )
     .join("");
 }
 
-function renderChainsHits(hits, q) {
-  if (!els.chainsHits) return;
-  if (!q) {
-    els.chainsHits.classList.add("is-hidden");
-    els.chainsHits.innerHTML = "";
-    return;
-  }
-  if (!hits?.length) {
-    els.chainsHits.classList.remove("is-hidden");
-    els.chainsHits.innerHTML = `<p class="empty">未找到与「${escapeHtml(
-      q
-    )}」匹配的环节或公司</p>`;
-    return;
-  }
-  els.chainsHits.classList.remove("is-hidden");
-  els.chainsHits.innerHTML = `
-    <div class="chains-hits-head">搜索「${escapeHtml(q)}」· ${hits.length} 条</div>
-    <div class="chains-hits-list">
-      ${hits
-        .map((h) => {
-          if (h.kind === "node") {
-            return `<button type="button" class="chains-hit" data-chain-node="${escapeHtml(
-              h.node_id
-            )}"><span class="chains-hit-kind">环节</span><strong>${escapeHtml(
-              h.label
-            )}</strong><em>${escapeHtml(h.blurb || "")}</em></button>`;
-          }
-          return `<button type="button" class="chains-hit" data-chain-node="${escapeHtml(
-            h.node_id
-          )}" data-chain-symbol="${escapeHtml(h.symbol || "")}" data-chain-sector="${escapeHtml(
-            h.sector || "technology"
-          )}"><span class="chains-hit-kind">公司</span><strong>${escapeHtml(
-            h.name
-          )} · ${escapeHtml(h.symbol)}</strong><em>${escapeHtml(
-            h.node_label || ""
-          )}${h.note ? ` · ${escapeHtml(h.note)}` : ""}</em></button>`;
-        })
-        .join("")}
+function chainsCompanyRowHtml(c) {
+  const sym = String(c.symbol || "").toUpperCase();
+  const held = isInHoldings(sym);
+  const sector = c.sector || "technology";
+  return `
+    <div class="chains-co-row ${held ? "in-holding" : ""}" data-symbol="${escapeHtml(
+      sym
+    )}">
+      <a class="chains-co-main" href="/sectors?sector=${encodeURIComponent(
+        sector
+      )}&symbol=${encodeURIComponent(sym)}">
+        <span class="chains-co-name">${escapeHtml(c.name || sym)}</span>
+        <span class="chains-co-sym">${escapeHtml(sym)}</span>
+        ${
+          c.note
+            ? `<span class="chains-co-note">${escapeHtml(c.note)}</span>`
+            : ""
+        }
+      </a>
+      <button
+        type="button"
+        class="sector-hold-btn ${held ? "is-held" : ""}"
+        data-hold-symbol="${escapeHtml(sym)}"
+        data-hold-name="${escapeHtml(c.name || "")}"
+        data-hold-action="${held ? "remove" : "add"}"
+        title="${held ? `从持仓移除 ${sym}` : `加入持仓 ${sym}`}"
+        aria-label="${held ? `从持仓移除 ${sym}` : `加入持仓 ${sym}`}"
+      >${held ? "−" : "+"}</button>
     </div>
   `;
+}
+
+function renderChainsPanorama(chain) {
+  if (!els.chainsTopFlow || !els.chainsBranches || !els.chainsPanels) return;
+  const flow = chain.top_flow || [];
+  els.chainsTopFlow.innerHTML = flow
+    .map(
+      (stage, idx) => `
+      <div class="chains-top-box tone-${escapeHtml(stage.tone || "core")}">
+        ${escapeHtml(stage.label || "")}
+      </div>
+      ${
+        idx < flow.length - 1
+          ? '<div class="chains-top-arrow" aria-hidden="true">→</div>'
+          : ""
+      }`
+    )
+    .join("");
+
+  els.chainsBranches.innerHTML = (chain.branches || [])
+    .map((branch) => {
+      const nodes = (branch.nodes || [])
+        .map(
+          (n) =>
+            `<span class="chains-branch-pill tone-${escapeHtml(
+              branch.tone || "core"
+            )}">${escapeHtml(n.label || n.id)}</span>`
+        )
+        .join("");
+      const pipe = Array.isArray(branch.pipeline) && branch.pipeline.length
+        ? `<div class="chains-branch-pipe">${branch.pipeline
+            .map((p) => `<span>${escapeHtml(p.label || p.id)}</span>`)
+            .join('<span class="chains-pipe-arrow" aria-hidden="true">→</span>')}</div>`
+        : "";
+      return `
+        <div class="chains-branch-col tone-${escapeHtml(branch.tone || "core")}">
+          <div class="chains-branch-nodes">${nodes}</div>
+          ${pipe}
+        </div>`;
+    })
+    .join("");
+
+  els.chainsPanels.innerHTML = (chain.panels || [])
+    .map((panel) => {
+      const cos = panel.companies || [];
+      return `
+        <article class="chains-panel tone-${escapeHtml(panel.tone || "core")}" id="chain-panel-${escapeHtml(
+          panel.id
+        )}">
+          <header class="chains-panel-head">
+            <h3>${escapeHtml(panel.label || "")}</h3>
+            ${
+              panel.blurb
+                ? `<p>${escapeHtml(panel.blurb)}</p>`
+                : ""
+            }
+          </header>
+          <div class="chains-panel-list">
+            ${
+              cos.length
+                ? cos.map(chainsCompanyRowHtml).join("")
+                : '<p class="empty">暂无美股映射</p>'
+            }
+          </div>
+        </article>`;
+    })
+    .join("");
+
+  els.chainsPanels.querySelectorAll(".sector-hold-btn").forEach((btn) => {
+    btn.addEventListener("click", (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      const sym = btn.getAttribute("data-hold-symbol") || "";
+      const name = btn.getAttribute("data-hold-name") || "";
+      const action = btn.getAttribute("data-hold-action") || "add";
+      if (action === "remove") {
+        if (!confirm(`确定从持仓移除 ${sym}？`)) return;
+      }
+      toggleSectorHolding(sym, name);
+    });
+  });
 }
 
 function renderChainsDesk(data) {
   if (!data) return;
   state.chains = data;
-  state.chainNode = data.selected_node || "";
   state.chainQ = data.q || state.chainQ || "";
-  const node = data.node || {};
-  const tone = node.tone || "core";
-  if (els.chainsBlurb) {
-    els.chainsBlurb.textContent =
-      data.chain?.blurb || "搜索环节、公司或应用场景，定位上下游关系。";
+  state.chainId = data.matched ? data.chain?.id || "" : "";
+  if (els.chainsQ && state.chainQ && els.chainsQ.value !== state.chainQ) {
+    els.chainsQ.value = state.chainQ;
   }
-  if (els.chainsNodeTitle) els.chainsNodeTitle.textContent = node.label || "环节";
-  if (els.chainsNodeBlurb) {
-    els.chainsNodeBlurb.textContent = node.blurb || "选择上方环节查看相关公司";
+  renderChainsSuggest(data.catalog || []);
+
+  const matched = Boolean(data.matched && data.chain);
+  if (els.chainsEmpty) {
+    els.chainsEmpty.classList.toggle("is-hidden", matched);
+    if (!matched) {
+      const title = els.chainsEmpty.querySelector(".chains-empty-title");
+      const text = els.chainsEmpty.querySelector(".chains-empty-text");
+      if (title) {
+        title.textContent = data.q ? "未匹配到产业链" : "从搜索开始";
+      }
+      if (text) {
+        text.textContent =
+          data.message ||
+          "输入行业关键词后，将生成全产业链逻辑图，并列出对应美股。";
+      }
+    }
   }
-  if (els.chainsTonePill) {
-    els.chainsTonePill.textContent = CHAIN_TONE_LABEL[tone] || "环节";
-    els.chainsTonePill.className = `chains-tone-pill tone-${tone}`;
+  if (els.chainsMap) els.chainsMap.classList.toggle("is-hidden", !matched);
+
+  if (matched) {
+    const chain = data.chain;
+    if (els.chainsMapTitle) els.chainsMapTitle.textContent = chain.label || "产业链";
+    if (els.chainsMapBlurb) {
+      els.chainsMapBlurb.textContent = chain.blurb || "";
+    }
+    if (els.chainsBlurb) {
+      els.chainsBlurb.textContent =
+        chain.blurb ||
+        "输入行业关键词，生成上下游逻辑图，并标注美股代码；可一键加入持仓。";
+    }
+    renderChainsPanorama(chain);
+    setStatus(`${chain.label} · 全景逻辑图已生成`);
+  } else {
+    setStatus(data.message || "输入行业关键词生成产业链");
   }
-  if (els.chainsCompanies) {
-    const cos = node.companies || [];
-    els.chainsCompanies.innerHTML = cos.length
-      ? cos
-          .map((c) => {
-            const href = `/sectors?sector=${encodeURIComponent(
-              c.sector || "technology"
-            )}&symbol=${encodeURIComponent(c.symbol || "")}`;
-            return `<a class="chains-co" href="${href}">
-              <span class="chains-co-sym">${escapeHtml(c.symbol || "")}</span>
-              <span class="chains-co-name">${escapeHtml(c.name || "")}</span>
-              <span class="chains-co-note">${escapeHtml(c.note || "")}</span>
-            </a>`;
-          })
-          .join("")
-      : '<p class="empty">该环节暂无美股映射公司</p>';
-  }
-  if (els.chainsTrail) {
-    const stageLabel =
-      tone === "support" ? "支撑产业" : tone === "app" ? "下游应用" : "半导体行业";
-    els.chainsTrail.innerHTML = `
-      <div class="chains-crumb">
-        <span>${escapeHtml(stageLabel)}</span>
-        <span aria-hidden="true">→</span>
-        <strong>${escapeHtml(node.label || "")}</strong>
-      </div>
-    `;
-  }
-  if (els.chainsRelated) {
-    const up = node.upstream || [];
-    const down = node.downstream || [];
-    const block = (title, list) =>
-      list.length
-        ? `<div class="chains-rel-block"><h3>${escapeHtml(
-            title
-          )}</h3><div class="chains-rel-pills">${list
-            .map(
-              (x) =>
-                `<button type="button" class="chains-rel-pill tone-${escapeHtml(
-                  x.tone || "core"
-                )}" data-chain-node="${escapeHtml(x.id)}">${escapeHtml(
-                  x.label
-                )}</button>`
-            )
-            .join("")}</div></div>`
-        : "";
-    els.chainsRelated.innerHTML =
-      block("上游", up) +
-      block("下游", down) +
-      (!up.length && !down.length
-        ? '<p class="empty">该节点暂无上下游跳转</p>'
-        : "");
-  }
-  if (els.chainsSideBlurb) {
-    els.chainsSideBlurb.textContent = `${node.label || "当前节点"} · 上下游快捷跳转`;
-  }
-  renderChainsFlow(data);
-  renderChainsHits(data.hits || [], data.q || "");
   syncChainsQuery();
-  setStatus(`${data.chain?.label || "产业链"} · ${node.label || ""}`);
 }
 
-async function loadChainsDesk({ node, q } = {}) {
+async function loadChainsDesk({ q, chain } = {}) {
   if (PAGE !== "chains") return null;
-  const nodeId = node ?? state.chainNode;
   const query = q ?? state.chainQ;
+  const chainId = chain ?? state.chainId;
   try {
     const params = new URLSearchParams();
-    if (state.chainId) params.set("chain", state.chainId);
-    if (nodeId) params.set("node", nodeId);
     if (query) params.set("q", query);
+    if (chainId) params.set("chain", chainId);
     const res = await fetch(`/api/chains?${params.toString()}`);
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     const data = await res.json();
@@ -7096,11 +7095,12 @@ async function loadChainsDesk({ node, q } = {}) {
     return data;
   } catch (err) {
     setStatus(`产业链加载失败：${err.message || err}`);
-    if (els.chainsCompanies) {
-      els.chainsCompanies.innerHTML = `<p class="empty">加载失败：${escapeHtml(
-        String(err.message || err)
-      )}</p>`;
+    if (els.chainsEmpty) {
+      els.chainsEmpty.classList.remove("is-hidden");
+      const text = els.chainsEmpty.querySelector(".chains-empty-text");
+      if (text) text.textContent = `加载失败：${err.message || err}`;
     }
+    if (els.chainsMap) els.chainsMap.classList.add("is-hidden");
     return null;
   }
 }
@@ -7111,29 +7111,18 @@ function bindChainsDesk() {
   els.chainsSearch?.addEventListener("submit", (event) => {
     event.preventDefault();
     state.chainQ = (els.chainsQ?.value || "").trim();
-    // Let search pick the best matching node when query changes.
-    state.chainNode = "";
-    void loadChainsDesk({ node: "", q: state.chainQ });
+    state.chainId = "";
+    void loadChainsDesk({ q: state.chainQ, chain: "" });
   });
-  document.addEventListener("click", (event) => {
-    if (PAGE !== "chains") return;
-    const btn = event.target.closest("[data-chain-node]");
-    if (!btn) return;
-    const node = btn.getAttribute("data-chain-node") || "";
-    if (!node) return;
-    const symbol = btn.getAttribute("data-chain-symbol") || "";
-    const sector = btn.getAttribute("data-chain-sector") || "technology";
-    if (symbol && btn.classList.contains("chains-hit")) {
-      // Jump to sectors desk for company hits after focusing the node.
-      state.chainNode = node;
-      state.chainQ = (els.chainsQ?.value || state.chainQ || "").trim();
-      location.href = `/sectors?sector=${encodeURIComponent(
-        sector
-      )}&symbol=${encodeURIComponent(symbol)}`;
-      return;
-    }
-    state.chainNode = node;
-    void loadChainsDesk({ node });
+  els.chainsSuggest?.addEventListener("click", (event) => {
+    const chip = event.target.closest("[data-chain-id]");
+    if (!chip) return;
+    const id = chip.getAttribute("data-chain-id") || "";
+    const label = chip.getAttribute("data-chain-q") || "";
+    state.chainId = id;
+    state.chainQ = label;
+    if (els.chainsQ) els.chainsQ.value = label;
+    void loadChainsDesk({ q: label, chain: id });
   });
 }
 
@@ -7228,13 +7217,13 @@ function bootPage() {
     trackPageInterval(() => loadIntel(), 5 * 60 * 1000);
   } else if (PAGE === "chains") {
     const params = new URLSearchParams(location.search);
-    const qNode = (params.get("node") || "").trim();
     const qText = (params.get("q") || "").trim();
-    if (qNode) state.chainNode = qNode;
+    const qChain = (params.get("chain") || "").trim();
     if (qText) state.chainQ = qText;
+    if (qChain) state.chainId = qChain;
     if (els.chainsQ && qText) els.chainsQ.value = qText;
     bindChainsDesk();
-    loadChainsDesk();
+    void refreshHoldingSymbols().then(() => loadChainsDesk());
   } else if (PAGE === "settings") {
     loadSettingsPage();
     loadAccessTip();
