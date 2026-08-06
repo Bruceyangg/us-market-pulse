@@ -7012,47 +7012,65 @@ function chainsMindmapStages(chain) {
   return stages.filter((s) => s.panels.length);
 }
 
+function chainsMmLeafHtml(panel, tone) {
+  const id = panel.id || "";
+  const tag = panel._virtual ? "span" : "button";
+  const attrs = panel._virtual
+    ? ""
+    : ` type="button" data-panel-id="${escapeHtml(id)}"`;
+  return `<${tag} class="chains-mm-leaf tone-${escapeHtml(tone)}"${attrs}>${escapeHtml(
+    panel.label || id
+  )}</${tag}>`;
+}
+
+function chainsMmStageBlock(stage, side) {
+  if (!stage) return '<div class="chains-mm-stage is-empty"></div>';
+  const leaves = (stage.panels || [])
+    .map((p) => chainsMmLeafHtml(p, stage.tone))
+    .join("");
+  return `
+    <div class="chains-mm-stage side-${escapeHtml(side)} tone-${escapeHtml(
+      stage.tone
+    )}" data-tone="${escapeHtml(stage.tone)}" data-side="${escapeHtml(side)}">
+      <div class="chains-mm-stage-label">${escapeHtml(stage.label)}</div>
+      <div class="chains-mm-leaves">${leaves}</div>
+    </div>`;
+}
+
 function renderChainsMindmap(chain) {
   if (!els.chainsMindmap) return;
   const stages = chainsMindmapStages(chain);
   const rootLabel = (chain.label || "产业链").replace(/产业链$/, "") || "产业链";
-  const stageHtml = stages
-    .map((stage) => {
-      const leaves = stage.panels
-        .map((panel) => {
-          const id = panel.id || "";
-          const tag = panel._virtual
-            ? "span"
-            : "button";
-          const attrs = panel._virtual
-            ? ""
-            : ` type="button" data-panel-id="${escapeHtml(id)}"`;
-          return `<${tag} class="chains-mm-leaf tone-${escapeHtml(
-            stage.tone
-          )}"${attrs}>${escapeHtml(panel.label || id)}</${tag}>`;
-        })
-        .join("");
-      return `
-        <div class="chains-mm-stage tone-${escapeHtml(stage.tone)}" data-tone="${escapeHtml(
-          stage.tone
-        )}">
-          <div class="chains-mm-stage-label">${escapeHtml(stage.label)}</div>
-          <div class="chains-mm-leaves">${leaves}</div>
-        </div>`;
-    })
-    .join("");
+  const left =
+    stages.find((s) => s.tone === "support") ||
+    stages.find((s) => /support|upstream|上游|材料/.test(`${s.id}${s.label}`));
+  const right =
+    stages.find((s) => s.tone === "app") ||
+    stages.find((s) => /app|downstream|下游|应用|补能|出行/.test(`${s.id}${s.label}`));
+  const bottom =
+    stages.find((s) => s.tone === "core") ||
+    stages.find((s) => s !== left && s !== right) ||
+    stages[0];
+  // Any leftover stages append under bottom so nothing is dropped.
+  const extras = stages.filter(
+    (s) => s && s !== left && s !== right && s !== bottom
+  );
 
   els.chainsMindmap.innerHTML = `
-    <div class="chains-mm-shell">
+    <div class="chains-mm-shell is-lr">
       <svg class="chains-mm-links" aria-hidden="true"></svg>
-      <div class="chains-mm-root">
-        <span class="chains-mm-root-kicker">产业逻辑脑图</span>
-        <strong>${escapeHtml(rootLabel)}</strong>
+      <div class="chains-mm-lr">
+        <div class="chains-mm-rail left">${chainsMmStageBlock(left, "left")}</div>
+        <div class="chains-mm-center">
+          <div class="chains-mm-root">
+            <span class="chains-mm-root-kicker">产业逻辑脑图</span>
+            <strong>${escapeHtml(rootLabel)}</strong>
+          </div>
+          ${chainsMmStageBlock(bottom, "bottom")}
+          ${extras.map((s) => chainsMmStageBlock(s, "bottom")).join("")}
+        </div>
+        <div class="chains-mm-rail right">${chainsMmStageBlock(right, "right")}</div>
       </div>
-      <div class="chains-mm-stages" style="grid-template-columns: repeat(${Math.max(
-        1,
-        Math.min(stages.length, 3)
-      )}, minmax(0, 1fr))">${stageHtml}</div>
     </div>`;
 
   els.chainsMindmap.querySelectorAll("[data-panel-id]").forEach((btn) => {
@@ -7066,7 +7084,10 @@ function renderChainsMindmap(chain) {
     });
   });
 
-  requestAnimationFrame(() => drawChainsMindmapLinks());
+  requestAnimationFrame(() => {
+    drawChainsMindmapLinks();
+    requestAnimationFrame(() => drawChainsMindmapLinks());
+  });
 }
 
 function drawChainsMindmapLinks() {
@@ -7074,6 +7095,10 @@ function drawChainsMindmapLinks() {
   const svg = els.chainsMindmap?.querySelector(".chains-mm-links");
   const root = els.chainsMindmap?.querySelector(".chains-mm-root");
   if (!shell || !svg || !root) return;
+  if (window.matchMedia("(max-width: 900px)").matches) {
+    svg.innerHTML = "";
+    return;
+  }
   const shellBox = shell.getBoundingClientRect();
   const rootBox = root.getBoundingClientRect();
   const w = Math.max(1, shell.clientWidth);
@@ -7082,30 +7107,62 @@ function drawChainsMindmapLinks() {
   svg.setAttribute("width", String(w));
   svg.setAttribute("height", String(h));
 
-  const x0 = rootBox.left + rootBox.width / 2 - shellBox.left;
-  const y0 = rootBox.bottom - shellBox.top + 2;
+  const rx = rootBox.left + rootBox.width / 2 - shellBox.left;
+  const ry = rootBox.top + rootBox.height / 2 - shellBox.top;
   const paths = [];
 
-  els.chainsMindmap.querySelectorAll(".chains-mm-stage").forEach((stage) => {
+  els.chainsMindmap.querySelectorAll(".chains-mm-stage:not(.is-empty)").forEach((stage) => {
+    const side = stage.dataset.side || "bottom";
     const label = stage.querySelector(".chains-mm-stage-label");
     if (!label) return;
     const lb = label.getBoundingClientRect();
-    const x1 = lb.left + lb.width / 2 - shellBox.left;
-    const y1 = lb.top - shellBox.top;
-    const midY = (y0 + y1) / 2;
+    const lx = lb.left + lb.width / 2 - shellBox.left;
+    const ly = lb.top + lb.height / 2 - shellBox.top;
+    const tone = stage.dataset.tone || "core";
+
+    let x0 = rx;
+    let y0 = ry;
+    if (side === "left") {
+      x0 = rootBox.left - shellBox.left;
+      y0 = ry;
+    } else if (side === "right") {
+      x0 = rootBox.right - shellBox.left;
+      y0 = ry;
+    } else {
+      x0 = rx;
+      y0 = rootBox.bottom - shellBox.top;
+    }
+
+    const c1x =
+      side === "left" ? x0 - Math.abs(x0 - lx) * 0.35 : side === "right" ? x0 + Math.abs(lx - x0) * 0.35 : x0;
+    const c1y = side === "bottom" ? y0 + Math.abs(ly - y0) * 0.35 : y0;
+    const c2x =
+      side === "left" ? lx + Math.abs(x0 - lx) * 0.35 : side === "right" ? lx - Math.abs(lx - x0) * 0.35 : lx;
+    const c2y = side === "bottom" ? ly - Math.abs(ly - y0) * 0.35 : ly;
     paths.push(
-      `<path class="chains-mm-link tone-${stage.dataset.tone || "core"}" d="M ${x0} ${y0} C ${x0} ${midY}, ${x1} ${midY}, ${x1} ${y1}" fill="none" />`
+      `<path class="chains-mm-link tone-${tone}" d="M ${x0} ${y0} C ${c1x} ${c1y}, ${c2x} ${c2y}, ${lx} ${ly}" fill="none" />`
     );
-    const leaves = stage.querySelectorAll(".chains-mm-leaf");
-    leaves.forEach((leaf) => {
+
+    stage.querySelectorAll(".chains-mm-leaf").forEach((leaf) => {
       const fb = leaf.getBoundingClientRect();
-      const x2 = fb.left + fb.width / 2 - shellBox.left;
-      const y2 = fb.top - shellBox.top;
-      const yStem = lb.bottom - shellBox.top;
+      const fx = fb.left + fb.width / 2 - shellBox.left;
+      const fy = fb.top + fb.height / 2 - shellBox.top;
+      let sx = lx;
+      let sy = ly;
+      if (side === "left") {
+        sx = lb.left - shellBox.left;
+        sy = ly;
+      } else if (side === "right") {
+        sx = lb.right - shellBox.left;
+        sy = ly;
+      } else {
+        sx = lx;
+        sy = lb.bottom - shellBox.top;
+      }
+      const mx = (sx + fx) / 2;
+      const my = (sy + fy) / 2;
       paths.push(
-        `<path class="chains-mm-link soft tone-${
-          stage.dataset.tone || "core"
-        }" d="M ${x1} ${yStem} C ${x1} ${(yStem + y2) / 2}, ${x2} ${(yStem + y2) / 2}, ${x2} ${y2}" fill="none" />`
+        `<path class="chains-mm-link soft tone-${tone}" d="M ${sx} ${sy} Q ${mx} ${my}, ${fx} ${fy}" fill="none" />`
       );
     });
   });
