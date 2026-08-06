@@ -1727,23 +1727,8 @@ function renderPortfolioChart() {
         <h3>${escapeHtml(pick.name || "")} · ${escapeHtml(
           pick.symbol || ""
         )}${preview ? '<span class="preview-tag">预览</span>' : ""}</h3>
-        <span class="range chg ${pctClass(pick.change_pct)}">${escapeHtml(
-          pctText(pick.change_pct)
-        )}</span>
       </div>
-      <div class="portfolio-stats" aria-label="区间读数">
-        <span><span class="k">现价</span><span class="v ${pctClass(
-          pick.change_pct
-        )}">${escapeHtml(
-          pick.price == null ? "—" : formatNumber(pick.price, "")
-        )}</span></span>
-        <span><span class="k">开</span><span class="v">—</span></span>
-        <span><span class="k">高</span><span class="v">—</span></span>
-        <span><span class="k">低</span><span class="v">—</span></span>
-        <span><span class="k">月涨幅</span><span class="v ${pctClass(
-          pick.month_change_pct
-        )}">${escapeHtml(pctText(pick.month_change_pct))}</span></span>
-      </div>
+      ${deskStatsBlockHtml(pick, { open: null, high: null, low: null })}
       <p class="chart-placeholder">暂无${escapeHtml(
         tfLabel
       )}数据 · 点右上角刷新重试</p>
@@ -1785,29 +1770,8 @@ function renderPortfolioChart() {
       <h3>${escapeHtml(pick.name || "")} · ${escapeHtml(pick.symbol || "")}${
         pick.is_wave ? '<span class="hot-tag">涨势</span>' : ""
       }${preview ? '<span class="preview-tag">预览</span>' : ""}</h3>
-      <span class="range chg ${up ? "up" : "down"}">${escapeHtml(
-        pctText(pct)
-      )}</span>
     </div>
-    <div class="portfolio-stats" aria-label="区间读数">
-      <span><span class="k">现价</span><span class="v ${
-        up ? "up" : "down"
-      }">${escapeHtml(
-        pick.price == null ? "—" : formatNumber(pick.price, "")
-      )}</span></span>
-      <span><span class="k">开</span><span class="v">${escapeHtml(
-        stats.open == null ? "—" : formatNumber(stats.open, "")
-      )}</span></span>
-      <span><span class="k">高</span><span class="v up">${escapeHtml(
-        stats.high == null ? "—" : formatNumber(stats.high, "")
-      )}</span></span>
-      <span><span class="k">低</span><span class="v down">${escapeHtml(
-        stats.low == null ? "—" : formatNumber(stats.low, "")
-      )}</span></span>
-      <span><span class="k">月涨幅</span><span class="v ${pctClass(
-        pick.month_change_pct
-      )}">${escapeHtml(pctText(pick.month_change_pct))}</span></span>
-    </div>
+    ${deskStatsBlockHtml(pick, stats)}
     <div class="chart-canvas" data-zoom-host="portfolio"></div>
     <div class="chart-foot">红涨绿跌${maNote}${sessionNote} · ${escapeHtml(
       pick.sector_label || "持仓"
@@ -4170,6 +4134,56 @@ function pctText(pct) {
   return `${n >= 0 ? "+" : ""}${n.toFixed(2)}%`;
 }
 
+/** Shared desk stats: 现价/开高低/月涨幅 + 收盘% + 时段实时% (holdings + sectors). */
+function deskStatsBlockHtml(pick, stats) {
+  const closePct = pick?.change_pct;
+  const sessionLabel = String(pick?.session_label || "").trim() || "实时";
+  const rtPct = pick?.rt_change_pct;
+  const priceCls = pctClass(closePct);
+  return `
+    <div class="portfolio-stats" aria-label="区间读数">
+      <span class="stat-cell">
+        <span class="k">现价</span>
+        <span class="v ${priceCls}" data-desk-price>${escapeHtml(
+          pick?.price == null ? "—" : formatNumber(pick.price, "")
+        )}</span>
+      </span>
+      <span class="stat-cell">
+        <span class="k">开</span>
+        <span class="v">${escapeHtml(
+          stats?.open == null ? "—" : formatNumber(stats.open, "")
+        )}</span>
+      </span>
+      <span class="stat-cell">
+        <span class="k">高</span>
+        <span class="v up">${escapeHtml(
+          stats?.high == null ? "—" : formatNumber(stats.high, "")
+        )}</span>
+      </span>
+      <span class="stat-cell">
+        <span class="k">低</span>
+        <span class="v down">${escapeHtml(
+          stats?.low == null ? "—" : formatNumber(stats.low, "")
+        )}</span>
+      </span>
+      <span class="stat-cell">
+        <span class="k">月涨幅</span>
+        <span class="v ${pctClass(pick?.month_change_pct)}">${escapeHtml(
+          pctText(pick?.month_change_pct)
+        )}</span>
+      </span>
+    </div>
+    <div class="desk-chg-row" aria-label="收盘与时段涨跌">
+      <span class="desk-close-chg ${pctClass(closePct)}" data-desk-close-chg>收盘: ${escapeHtml(
+        pctText(closePct)
+      )}</span>
+      <span class="desk-session-chg ${pctClass(rtPct)}" data-desk-session-chg data-session-label="${escapeHtml(
+        sessionLabel
+      )}">${escapeHtml(sessionLabel)}: ${escapeHtml(pctText(rtPct))}</span>
+    </div>
+  `;
+}
+
 /** Shared holdings/sectors list quote: 收盘涨跌幅 + 实时涨跌幅 + 时段. */
 function listQuoteHtml(pick) {
   const closePct = pick?.change_pct;
@@ -4757,17 +4771,33 @@ function paintSectorSelection() {
   scheduleSectorsDeskHeightSync();
 }
 
-function updateDeskChartQuote(root, { pct, price } = {}) {
+function updateDeskChartQuote(
+  root,
+  { pct, price, rtPct, sessionLabel } = {}
+) {
   if (!root) return;
+  // Legacy top-right badge (removed from markup; keep safe if cached HTML remains).
   const range = root.querySelector(".chart-head .range");
-  if (range && pct != null) {
-    range.className = `range chg ${pctClass(pct)}`;
-    range.textContent = pctText(pct);
-  }
-  const priceV = root.querySelector(".portfolio-stats > span .v");
+  if (range) range.hidden = true;
+  const priceV = root.querySelector("[data-desk-price]");
   if (priceV && price != null) {
     priceV.className = `v ${pctClass(pct)}`;
     priceV.textContent = formatNumber(price, "");
+  }
+  const closeEl = root.querySelector("[data-desk-close-chg]");
+  if (closeEl && pct != null) {
+    closeEl.className = `desk-close-chg ${pctClass(pct)}`;
+    closeEl.textContent = `收盘: ${pctText(pct)}`;
+  }
+  const sessEl = root.querySelector("[data-desk-session-chg]");
+  if (sessEl) {
+    const label =
+      String(sessionLabel || sessEl.getAttribute("data-session-label") || "").trim() ||
+      "实时";
+    sessEl.setAttribute("data-session-label", label);
+    const hasRt = rtPct != null && Number.isFinite(Number(rtPct));
+    sessEl.className = `desk-session-chg ${hasRt ? pctClass(rtPct) : ""}`;
+    sessEl.textContent = `${label}: ${hasRt ? pctText(rtPct) : "—"}`;
   }
 }
 
@@ -4873,8 +4903,10 @@ function applyIntradaySnapshot(sym, snap) {
           renderPortfolioChart();
         } else {
           updateDeskChartQuote(els.portfolioChart, {
-            pct: snap.change_pct ?? nextBoard.change_pct,
-            price: snap.price ?? nextBoard.price,
+            pct: nextBoard.change_pct,
+            price: nextBoard.price,
+            rtPct: nextBoard.rt_change_pct,
+            sessionLabel: nextBoard.session_label,
           });
         }
       }
@@ -4905,8 +4937,10 @@ function applyIntradaySnapshot(sym, snap) {
           renderSectorPickChart();
         } else {
           updateDeskChartQuote(els.sectorPickChart, {
-            pct: snap.change_pct ?? nextPick.change_pct,
-            price: snap.price ?? nextPick.price,
+            pct: nextPick.change_pct,
+            price: nextPick.price,
+            rtPct: nextPick.rt_change_pct,
+            sessionLabel: nextPick.session_label,
           });
         }
       }
@@ -5485,6 +5519,7 @@ function renderSectorPickChart() {
           pick.symbol || ""
         )}</h3>
       </div>
+      ${deskStatsBlockHtml(pick, { open: null, high: null, low: null })}
       <p class="chart-placeholder">暂无${escapeHtml(
         tfLabel
       )}数据 · 点右上角刷新重试</p>
@@ -5533,27 +5568,8 @@ function renderSectorPickChart() {
       <h3>${escapeHtml(pick.name || pick.label || "")} · ${escapeHtml(
         pick.symbol || ""
       )}${pick.is_wave ? '<span class="hot-tag">涨势</span>' : ""}</h3>
-      <span class="range chg ${up ? "up" : "down"}">${escapeHtml(
-        pctText(pct)
-      )}</span>
     </div>
-    <div class="portfolio-stats" aria-label="区间读数">
-      <span><span class="k">现价</span><span class="v ${up ? "up" : "down"}">${escapeHtml(
-        pick.price == null ? "—" : formatNumber(pick.price, "")
-      )}</span></span>
-      <span><span class="k">开</span><span class="v">${escapeHtml(
-        stats.open == null ? "—" : formatNumber(stats.open, "")
-      )}</span></span>
-      <span><span class="k">高</span><span class="v up">${escapeHtml(
-        stats.high == null ? "—" : formatNumber(stats.high, "")
-      )}</span></span>
-      <span><span class="k">低</span><span class="v down">${escapeHtml(
-        stats.low == null ? "—" : formatNumber(stats.low, "")
-      )}</span></span>
-      <span><span class="k">月涨幅</span><span class="v ${pctClass(
-        pick.month_change_pct
-      )}">${escapeHtml(pctText(pick.month_change_pct))}</span></span>
-    </div>
+    ${deskStatsBlockHtml(pick, stats)}
     <div class="chart-canvas" data-zoom-host="sector"></div>
     <div class="chart-foot">红涨绿跌${maNote}${sessionNote} · 所属 ${escapeHtml(
       pick.sector_label || "板块"
