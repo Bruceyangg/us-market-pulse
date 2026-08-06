@@ -941,8 +941,9 @@ async def fetch_day_quotes(
             for s in candidates
             if s in quotes
             and not (quotes[s].get("overnight") and quotes[s].get("rt_price") is not None)
-        ][:3]
-        if need_on:
+        ][:1]
+        # Single-flight background scrape (selected only). Never await here.
+        if need_on and not _OVERNIGHT_REFRESH_INFLIGHT:
             _schedule_overnight_refresh(need_on)
         stamped_at = time.time()
         for sym, row in quotes.items():
@@ -975,36 +976,44 @@ def _apply_overnight_cache(quotes: dict[str, dict[str, Any]]) -> None:
 
 
 _OVERNIGHT_REFRESH_INFLIGHT: set[str] = set()
+# Cap concurrent background Overnight scrapes (Render free tier = 1 worker).
+_OVERNIGHT_BG_LOCK = False
 
 
 def _schedule_overnight_refresh(symbols: list[str]) -> None:
     """Fire-and-forget Overnight scrape; never block the request path."""
     import asyncio
 
+    global _OVERNIGHT_BG_LOCK
+    if _OVERNIGHT_BG_LOCK:
+        return
     try:
         loop = asyncio.get_running_loop()
     except RuntimeError:
         return
 
-    pending = [
-        s
-        for s in symbols
-        if s and s not in _OVERNIGHT_REFRESH_INFLIGHT
-    ]
+    pending: list[str] = []
+    for raw in symbols:
+        s = str(raw or "").upper().strip()
+        if s and s not in _OVERNIGHT_REFRESH_INFLIGHT and s not in pending:
+            pending.append(s)
+        if len(pending) >= 1:
+            break
     if not pending:
         return
     for s in pending:
         _OVERNIGHT_REFRESH_INFLIGHT.add(s)
+    _OVERNIGHT_BG_LOCK = True
 
     async def _run() -> None:
+        global _OVERNIGHT_BG_LOCK
         try:
             async with httpx.AsyncClient(
                 follow_redirects=True,
                 trust_env=False,
                 headers=_yahoo_chart_headers(),
-                timeout=httpx.Timeout(12.0, connect=4.0),
+                timeout=httpx.Timeout(8.0, connect=3.0),
             ) as client:
-                # Empty shell so overlay can write Overnight stamps into cache.
                 shell = {
                     s: {
                         "symbol": s,
@@ -1013,19 +1022,21 @@ def _schedule_overnight_refresh(symbols: list[str]) -> None:
                     }
                     for s in pending
                 }
-                await overlay_yahoo_overnight_quotes(
-                    client,
-                    shell,
-                    pending,
-                    concurrency=1,
-                    limit=min(3, len(pending)),
-                    deadline_s=12.0,
-                    allow_page=True,
+                await asyncio.wait_for(
+                    overlay_yahoo_overnight_quotes(
+                        client,
+                        shell,
+                        pending,
+                        concurrency=1,
+                        limit=1,
+                        deadline_s=8.0,
+                        allow_page=True,
+                    ),
+                    timeout=9.0,
                 )
                 now = time.time()
                 for s, row in shell.items():
                     if row.get("overnight") and row.get("rt_price") is not None:
-                        # Keep day quote fields if present in day cache.
                         day_hit = _DAY_QUOTE_CACHE.get(s)
                         if isinstance(day_hit, dict) and isinstance(
                             day_hit.get("quote"), dict
@@ -1051,6 +1062,7 @@ def _schedule_overnight_refresh(symbols: list[str]) -> None:
         finally:
             for s in pending:
                 _OVERNIGHT_REFRESH_INFLIGHT.discard(s)
+            _OVERNIGHT_BG_LOCK = False
 
     loop.create_task(_run())
 
