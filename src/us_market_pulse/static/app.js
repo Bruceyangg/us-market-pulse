@@ -415,12 +415,15 @@ function panChartWindow(key, deltaBars) {
 
 function chartZoomControlsHtml(zoomed) {
   return `
-    <div class="chart-zoom-controls" role="group" aria-label="图表缩放">
-      <button type="button" class="chart-zoom-btn" data-zoom-act="out" title="缩小" aria-label="缩小">−</button>
-      <button type="button" class="chart-zoom-btn" data-zoom-act="in" title="放大" aria-label="放大">+</button>
-      <button type="button" class="chart-zoom-btn chart-zoom-reset${
-        zoomed ? "" : " is-hidden"
-      }" data-zoom-act="reset" title="重置" aria-label="重置缩放">1×</button>
+    <div class="chart-zoom-bar">
+      <span class="chart-zoom-hint">缩放</span>
+      <div class="chart-zoom-controls" role="group" aria-label="图表缩放">
+        <button type="button" class="chart-zoom-btn" data-zoom-act="out" title="缩小" aria-label="缩小">−</button>
+        <button type="button" class="chart-zoom-btn" data-zoom-act="in" title="放大" aria-label="放大">+</button>
+        <button type="button" class="chart-zoom-btn chart-zoom-reset${
+          zoomed ? "" : " is-hidden"
+        }" data-zoom-act="reset" title="重置" aria-label="重置缩放">重置</button>
+      </div>
     </div>
   `;
 }
@@ -1193,7 +1196,7 @@ function bindZoomableChart(
   const full = defaultChartZoom(len, tf, kind);
   const zoomed = z.count < len || z.start !== full.start;
   canvasEl.innerHTML = `
-    <div class="chart-zoom" data-zoom-key="${escapeHtml(key)}" tabindex="0" aria-label="可缩放图表：触控板捏合或使用角落按钮">
+    <div class="chart-zoom" data-zoom-key="${escapeHtml(key)}" tabindex="0" aria-label="可缩放图表：触控板捏合或使用上方缩放按钮">
       ${chartZoomControlsHtml(zoomed)}
       <div class="chart-zoom-stage"></div>
       <div class="chart-crosshair-tip is-hidden" aria-live="polite"></div>
@@ -1786,7 +1789,7 @@ function renderPortfolioChart() {
     <div class="chart-canvas" data-zoom-host="portfolio"></div>
     <div class="chart-foot">红涨绿跌${maNote}${sessionNote} · ${escapeHtml(
       pick.sector_label || "持仓"
-    )} · 捏合缩放</div>
+    )}</div>
   `;
   bindZoomableChart(els.portfolioChart.querySelector("[data-zoom-host]"), {
     key: "portfolio",
@@ -5532,7 +5535,7 @@ function renderSectorPickChart() {
     <div class="chart-canvas" data-zoom-host="sector"></div>
     <div class="chart-foot">红涨绿跌${maNote}${sessionNote} · 所属 ${escapeHtml(
       pick.sector_label || "板块"
-    )}${escapeHtml(earnNote)} · 捏合缩放</div>
+    )}${escapeHtml(earnNote)}</div>
   `;
   bindZoomableChart(els.sectorPickChart.querySelector("[data-zoom-host]"), {
     key: "sector",
