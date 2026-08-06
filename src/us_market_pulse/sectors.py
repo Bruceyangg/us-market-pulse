@@ -26,6 +26,8 @@ from us_market_pulse.markets import (
 from us_market_pulse.feeds import fetch_google_news
 from us_market_pulse.feeds import fetch_google_news
 from us_market_pulse.portfolio_intel import match_portfolio_intel
+from us_market_pulse.sentiment import enrich_sentiment
+from us_market_pulse.translate import enrich_titles
 from us_market_pulse.quotes import (
     apply_list_quote_fields,
     build_nasdaq_ohlc_series,
@@ -1474,7 +1476,25 @@ async def _hydrate_sector_symbol_news(
     symbol_news = (
         _merge_news_latest(symbol_gn, symbol_matched, limit=8) if symbol_q else []
     )
+    sector_news, symbol_news = await asyncio.gather(
+        _polish_desk_news(sector_news, online_limit=12),
+        _polish_desk_news(symbol_news, online_limit=10),
+    )
     return sector_news, symbol_news
+
+
+async def _polish_desk_news(
+    rows: list[dict[str, Any]] | None,
+    *,
+    online_limit: int = 12,
+) -> list[dict[str, Any]]:
+    """Translate headlines to Chinese + score 多/空 for sector desk cards."""
+    items = [dict(r) for r in (rows or []) if isinstance(r, dict)]
+    if not items:
+        return []
+    titled = await enrich_titles(items, online=True, online_limit=online_limit)
+    scored = enrich_sentiment(titled)
+    return [_slim_news_item(dict(r)) for r in scored]
 
 
 async def _fetch_quote(
