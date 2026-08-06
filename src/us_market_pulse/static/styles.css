@@ -3862,10 +3862,66 @@ html[data-theme="dark"] .sector-pick-list .sector-hold-btn.is-held:hover {
   margin-bottom: 0;
 }
 
+.symbol-news-block .sectors-pane-head h2 {
+  font-size: 0.92rem;
+}
+
+.symbol-news-block .sectors-pane-head p {
+  font-size: 0.72rem;
+}
+
 .symbol-news-block .spotlight-list.compact {
-  max-height: 11rem;
+  max-height: 22rem;
   overflow: auto;
   flex: 0 0 auto;
+  gap: 0.35rem;
+}
+
+/* 个股信息流：字号统一偏小，标题中英文完整显示（不截断） */
+.symbol-news-block .spotlight-list.compact .spotlight-card {
+  gap: 0.15rem;
+  min-height: 0;
+  padding: 0.45rem 0.55rem;
+  padding-right: 2.9rem;
+  overflow: visible;
+}
+
+.symbol-news-block .spotlight-list.compact .spotlight-card h3,
+.symbol-news-block .spotlight-list.compact .spotlight-card .news-title-en {
+  font-size: 0.72rem;
+  line-height: 1.35;
+  max-height: none;
+  overflow: visible;
+  display: block;
+  -webkit-line-clamp: unset;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+
+.symbol-news-block .spotlight-list.compact .spotlight-card .news-title-zh {
+  font-size: 0.66rem;
+  line-height: 1.35;
+  max-height: none;
+  overflow: visible;
+  display: block;
+  -webkit-line-clamp: unset;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+
+.symbol-news-block .spotlight-list.compact .spotlight-card .war-card-meta {
+  display: block;
+  max-height: none;
+  overflow: visible;
+  font-size: 0.62rem;
+  line-height: 1.3;
+  color: var(--ink-soft);
+}
+
+.symbol-news-block .spotlight-list.compact .spotlight-card .verdict-badge {
+  transform: scale(0.72);
+  top: 0.35rem;
+  right: 0.35rem;
 }
 
 .stock-earnings,
