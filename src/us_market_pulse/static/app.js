@@ -2774,22 +2774,52 @@ function renderPush(push) {
   }
 }
 
+/** English title primary; Chinese below at one smaller size. */
+function newsTitleParts(item) {
+  const en = String(item?.title || "").trim();
+  const zhRaw = String(item?.title_zh || "").trim();
+  const zh = zhRaw && zhRaw !== en ? zhRaw : "";
+  return { en: en || zhRaw, zh };
+}
+
+/** Card mood class — 红多 / 绿空 / 灰中性. */
+function newsMoodClass(item) {
+  const s = item?.sentiment;
+  if (s === "bullish") return "is-bullish";
+  if (s === "bearish") return "is-bearish";
+  return "is-neutral";
+}
+
+function newsTitleBlockHtml(item, { heading = "h3", href = null } = {}) {
+  const { en, zh } = newsTitleParts(item);
+  if (!en && !zh) return "";
+  const zhTag = heading === "span" ? "span" : "p";
+  const enBody = href
+    ? `<a href="${escapeHtml(href)}" target="_blank" rel="noopener noreferrer">${escapeHtml(
+        en
+      )}</a>`
+    : escapeHtml(en);
+  return `
+    <${heading} class="news-title-en">${enBody}</${heading}>
+    ${
+      zh
+        ? `<${zhTag} class="news-title-zh">${escapeHtml(zh)}</${zhTag}>`
+        : ""
+    }
+  `;
+}
+
 function holdingIntelCardHtml(item) {
-  const titleZh = item.title_zh || item.title || "";
-  const titleEn = item.title || "";
-  const showEn = titleEn && titleEn !== titleZh;
   const matches = (item.holding_matches || []).join(" · ");
-  const isBearish = item.sentiment === "bearish";
-  const isBullish = item.sentiment === "bullish";
   const logic =
     item.sentiment_logic ||
     item.brief_zh ||
     item.summary ||
     "";
   return `
-    <a class="holding-intel-card ${isBearish ? "is-bearish" : ""} ${
-      isBullish ? "is-bullish" : ""
-    }" href="${escapeHtml(item.url || "#")}" target="_blank" rel="noopener noreferrer">
+    <a class="holding-intel-card ${newsMoodClass(
+      item
+    )}" href="${escapeHtml(item.url || "#")}" target="_blank" rel="noopener noreferrer">
       <div class="holding-intel-meta">
         ${verdictBadge(item)}
         ${
@@ -2800,8 +2830,7 @@ function holdingIntelCardHtml(item) {
         <span>${escapeHtml(item.source || "")}</span>
         <span>${escapeHtml(relativeTime(item.published))}</span>
       </div>
-      <h3>${escapeHtml(titleZh)}</h3>
-      ${showEn ? `<p class="en">${escapeHtml(titleEn)}</p>` : ""}
+      ${newsTitleBlockHtml(item)}
       ${logic ? `<p class="logic">${escapeHtml(logic)}</p>` : ""}
     </a>
   `;
@@ -2927,19 +2956,17 @@ function renderWatchHits(hits) {
         .slice(0, 8)
         .map((item) => {
           const keys = (item.watch_matches || []).join(",");
-          const titleZh = item.title_zh || item.title || "";
-          const titleEn = item.title || "";
-          const showEn = titleEn && titleEn !== titleZh;
           return `
-            <a class="watch-hit-card" href="${item.url}" target="_blank" rel="noopener noreferrer">
+            <a class="watch-hit-card ${newsMoodClass(
+              item
+            )}" href="${item.url}" target="_blank" rel="noopener noreferrer">
               <div class="watch-hit-meta">
                 <span class="chip ${item.sentiment || "neutral"}">${escapeHtml(
                   item.sentiment_label || "中性"
                 )}</span>
                 <span class="chip watch">盯盘:${escapeHtml(keys)}</span>
               </div>
-              <p class="watch-hit-zh">${escapeHtml(titleZh)}</p>
-              ${showEn ? `<p class="watch-hit-en">${escapeHtml(titleEn)}</p>` : ""}
+              ${newsTitleBlockHtml(item, { heading: "p" })}
             </a>
           `;
         })
@@ -2959,21 +2986,21 @@ function verdictBadge(item) {
 }
 
 function spotlightCardHtml(item) {
-  const titleZh = item.title_zh || item.title || "";
-  const titleEn = item.title || "";
-  const showEn = titleEn && titleEn !== titleZh;
   const factors = (item.sentiment_factors || []).join("、");
   const metaBits = [
     item.source || "",
     item.published ? formatClock(item.published) : "",
   ].filter(Boolean);
+  const logic =
+    item.sentiment_logic || item.sentiment_reason || item.brief_zh || "";
   return `
-    <a class="spotlight-card" href="${item.url || "#"}" target="_blank" rel="noopener noreferrer">
+    <a class="spotlight-card ${newsMoodClass(item)}" href="${
+      item.url || "#"
+    }" target="_blank" rel="noopener noreferrer">
       ${verdictBadge(item)}
-      <h3>${escapeHtml(titleZh)}</h3>
-      ${showEn ? `<p class="story-title-en">${escapeHtml(titleEn)}</p>` : ""}
-      <p>${escapeHtml(item.sentiment_logic || item.sentiment_reason || item.brief_zh || "")}</p>
-      ${factors ? `<p>因子：${escapeHtml(factors)}</p>` : ""}
+      ${newsTitleBlockHtml(item)}
+      ${logic ? `<p class="news-logic">${escapeHtml(logic)}</p>` : ""}
+      ${factors ? `<p class="news-logic">因子：${escapeHtml(factors)}</p>` : ""}
       ${
         metaBits.length
           ? `<p class="war-card-meta">${escapeHtml(metaBits.join(" · "))}</p>`
@@ -3202,23 +3229,16 @@ function renderLiveBriefing(brief) {
       .join("");
     const drivers = (data.drivers || [])
       .map((d) => {
-        const titleZh = d.title_zh || d.title || "";
-        const titleEn = d.title || "";
-        const showEn = titleEn && titleEn !== titleZh;
         const href = d.url || "#";
+        const mood = newsMoodClass(d);
         return `
-          <li>
+          <li class="driver-item ${mood}">
             <a href="${escapeHtml(href)}" target="_blank" rel="noopener noreferrer">
-              <span class="driver-title">${escapeHtml(titleZh)}</span>
-              ${
-                showEn
-                  ? `<span class="driver-en">${escapeHtml(titleEn)}</span>`
-                  : ""
-              }
+              ${newsTitleBlockHtml(d, { heading: "span" })}
             </a>
             <div class="driver-meta">
-              <span class="chip bearish">${escapeHtml(
-                d.sentiment_label || "利空"
+              <span class="chip ${d.sentiment || "neutral"}">${escapeHtml(
+                d.sentiment_label || "中性"
               )}</span>
               <span>${escapeHtml(d.source || "")}</span>
               <span>${escapeHtml(formatClock(d.published))}</span>
@@ -3324,23 +3344,21 @@ function renderEventThreads(threads) {
   }
   els.eventRail.innerHTML = rows
     .map((event) => {
-      const titleZh = event.title_zh || event.title || "";
-      const titleEn = event.title || "";
-      const showEn = titleEn && titleEn !== titleZh;
       const keys = (event.keywords || [])
         .slice(0, 4)
         .map((k) => `<span class="key-chip">${escapeHtml(k)}</span>`)
         .join("");
       return `
-        <button type="button" class="event-card" data-open-event="${escapeHtml(event.id)}">
+        <button type="button" class="event-card ${newsMoodClass(
+          event
+        )}" data-open-event="${escapeHtml(event.id)}">
           <div class="event-card-top">
             <span class="chip ${event.sentiment || "neutral"}">${escapeHtml(
               event.sentiment_label || "中性"
             )}</span>
             <span>${event.count} 条报道</span>
           </div>
-          <h3>${escapeHtml(titleZh)}</h3>
-          ${showEn ? `<p class="event-en">${escapeHtml(titleEn)}</p>` : ""}
+          ${newsTitleBlockHtml(event)}
           <p class="event-en">${escapeHtml(formatClock(event.first_seen))} → ${escapeHtml(
             formatClock(event.last_seen)
           )}</p>
@@ -3369,9 +3387,6 @@ function renderDayTimeline(timeline) {
       const items = (day.items || [])
         .slice(0, 8)
         .map((item) => {
-          const titleZh = item.title_zh || item.title || "";
-          const titleEn = item.title || "";
-          const showEn = titleEn && titleEn !== titleZh;
           const eventBtn =
             item.event_id && item.event_count > 1
               ? `<button type="button" class="event-link" data-open-event="${escapeHtml(
@@ -3379,7 +3394,7 @@ function renderDayTimeline(timeline) {
                 )}">同事件 ${item.event_count}</button>`
               : "";
           return `
-            <div class="day-item">
+            <div class="day-item ${newsMoodClass(item)}">
               <div class="day-item-top">
                 <span class="chip ${item.sentiment || "neutral"}">${escapeHtml(
                   item.sentiment_label || "中性"
@@ -3388,10 +3403,7 @@ function renderDayTimeline(timeline) {
                 <time datetime="${item.published || ""}">${relativeTime(item.published)}</time>
                 ${eventBtn}
               </div>
-              <a href="${item.url}" target="_blank" rel="noopener noreferrer">${escapeHtml(
-                titleZh
-              )}</a>
-              ${showEn ? `<p class="en">${escapeHtml(titleEn)}</p>` : ""}
+              ${newsTitleBlockHtml(item, { heading: "p", href: item.url || "#" })}
             </div>
           `;
         })
@@ -3488,13 +3500,10 @@ function renderFeed(items) {
             (item.holding_matches || []).join(",")
           )}</span>`
         : "";
-      const isBearish = item.sentiment === "bearish";
-      const isBullish = item.sentiment === "bullish";
       const factors = (item.sentiment_factors || []).join("、") || "暂无强因子";
       const logic =
         item.sentiment_logic ||
         `结论：${item.sentiment_label || "中性"}（${Number(item.sentiment_score || 0).toFixed(2)}）`;
-      const titleZh = item.title_zh || item.title || "";
       const eventBtn =
         item.event_id && item.event_count > 1
           ? `<button type="button" class="event-link" data-open-event="${escapeHtml(
@@ -3502,7 +3511,7 @@ function renderFeed(items) {
             )}">同事件 ${item.event_count} 条</button>`
           : "";
       return `
-      <article class="story ${item.watch_hit ? "is-watch" : ""} ${item.holding_hit ? "is-holding" : ""} ${isBearish ? "is-bearish" : ""} ${isBullish ? "is-bullish" : ""}">
+      <article class="story ${item.watch_hit ? "is-watch" : ""} ${item.holding_hit ? "is-holding" : ""} ${newsMoodClass(item)}">
         <div class="story-top">
           <span class="chip ${item.category}">${categoryName(item.category)}</span>
           ${watchChip}
@@ -3515,10 +3524,7 @@ function renderFeed(items) {
         </div>
         <div class="story-title-block">
           ${verdictBadge(item)}
-          <h3>
-            <a href="${item.url}" target="_blank" rel="noopener noreferrer">${escapeHtml(titleZh)}</a>
-          </h3>
-          <p class="story-title-en">${escapeHtml(item.title || "")}</p>
+          ${newsTitleBlockHtml(item, { href: item.url || "#" })}
         </div>
         <div class="story-verdict ${item.sentiment || "neutral"}">
           <p class="story-verdict-label">
