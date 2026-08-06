@@ -355,13 +355,19 @@ def _overnight_from_yahoo_html(html: str) -> dict[str, float | None] | None:
 
 
 async def fetch_yahoo_overnight_quote(
-    client: httpx.AsyncClient, symbol: str
+    client: httpx.AsyncClient,
+    symbol: str,
+    *,
+    allow_page: bool = True,
+    page_timeout: float = 6.0,
+    chart_timeout: float = 3.5,
 ) -> dict[str, Any] | None:
     """
     Yahoo overnight is numeric only (no 夜盘 tape).
 
     Only accept true Overnight fields (page box / overnightMarket*).
     Never reuse postMarket* — that is 盘后 and mismatches Yahoo Overnight.
+    Page scrape is optional: batch list loads should keep allow_page=False.
     """
     sym = (symbol or "").strip().upper()
     if not sym:
@@ -375,32 +381,35 @@ async def fetch_yahoo_overnight_quote(
     price = change = change_pct = prev = None
     market_state = None
 
-    # Quote page — source of truth for Yahoo "Overnight" numbers.
-    page_urls = (
-        f"https://finance.yahoo.com/quote/{enc}/",
-        f"https://finance.yahoo.com/quote/{enc}",
-    )
-    for page_url in page_urls:
-        try:
-            page = await client.get(page_url, timeout=14.0, headers=headers)
-            if page.status_code >= 400 or not page.text:
+    # Quote page — source of truth for Yahoo "Overnight" numbers (selected only).
+    if allow_page:
+        page_urls = (
+            f"https://finance.yahoo.com/quote/{enc}/",
+            f"https://finance.yahoo.com/quote/{enc}",
+        )
+        for page_url in page_urls:
+            try:
+                page = await client.get(
+                    page_url, timeout=page_timeout, headers=headers
+                )
+                if page.status_code >= 400 or not page.text:
+                    continue
+                parsed = _overnight_from_yahoo_html(page.text)
+                if not parsed:
+                    continue
+                overnight_px = parsed.get("rt_price")
+                overnight_chg = parsed.get("rt_change")
+                overnight_pct = parsed.get("rt_change_pct")
+                price = parsed.get("price")
+                change = parsed.get("change")
+                change_pct = parsed.get("change_pct")
+                if overnight_px is not None:
+                    break
+            except Exception:  # noqa: BLE001
                 continue
-            parsed = _overnight_from_yahoo_html(page.text)
-            if not parsed:
-                continue
-            overnight_px = parsed.get("rt_price")
-            overnight_chg = parsed.get("rt_change")
-            overnight_pct = parsed.get("rt_change_pct")
-            price = parsed.get("price")
-            change = parsed.get("change")
-            change_pct = parsed.get("change_pct")
-            if overnight_px is not None:
-                break
-        except Exception:  # noqa: BLE001
-            continue
 
-    # Optional close/prev from chart meta (never take postMarket* as 夜盘).
-    if price is None or prev is None:
+    # Chart meta: close/prev + rare overnightMarket* (never postMarket*).
+    if overnight_px is None or price is None or prev is None:
         for host in ("query1", "query2"):
             url = (
                 f"https://{host}.finance.yahoo.com/v8/finance/chart/{enc}"
@@ -408,7 +417,7 @@ async def fetch_yahoo_overnight_quote(
             )
             try:
                 resp = await client.get(
-                    url, timeout=12.0, headers=_yahoo_chart_headers()
+                    url, timeout=chart_timeout, headers=_yahoo_chart_headers()
                 )
                 if resp.status_code >= 400:
                     continue
@@ -425,7 +434,6 @@ async def fetch_yahoo_overnight_quote(
                 change_pct = change_pct or _parse_pct(
                     meta.get("regularMarketChangePercent")
                 )
-                # overnightMarket* on meta when Yahoo exposes it (rare).
                 if overnight_px is None:
                     overnight_px = _parse_number(meta.get("overnightMarketPrice"))
                     overnight_chg = _parse_number(meta.get("overnightMarketChange"))
@@ -464,14 +472,33 @@ async def fetch_yahoo_overnight_quote(
     return out
 
 
+def _stamp_night_session(quotes: dict[str, dict[str, Any]]) -> None:
+    """Force 夜盘 badge and drop leftover 盘后 RT when Yahoo Overnight is absent."""
+    for sym, row in list(quotes.items()):
+        if not isinstance(row, dict):
+            continue
+        base = dict(row)
+        base["session"] = "night"
+        base["session_label"] = "夜盘"
+        # Keep only explicit Yahoo overnight stamps (source yahoo + rt_*).
+        if base.get("source") != "yahoo" or base.get("rt_price") is None:
+            base.pop("rt_price", None)
+            base.pop("rt_change", None)
+            base.pop("rt_change_pct", None)
+        quotes[sym] = base
+
+
 async def overlay_yahoo_overnight_quotes(
     client: httpx.AsyncClient,
     quotes: dict[str, dict[str, Any]],
     symbols: list[str],
     *,
     concurrency: int = 3,
+    limit: int | None = 2,
+    deadline_s: float = 5.0,
+    allow_page: bool = True,
 ) -> dict[str, dict[str, Any]]:
-    """Stamp Yahoo Overnight price/% onto list quotes (holdings + sectors)."""
+    """Stamp Yahoo Overnight onto a small priority set (never block the desk)."""
     import asyncio
 
     sem = asyncio.Semaphore(max(1, concurrency))
@@ -482,15 +509,22 @@ async def overlay_yahoo_overnight_quotes(
         if sym and sym not in seen:
             seen.add(sym)
             uniq.append(sym)
+    if limit is not None:
+        uniq = uniq[: max(0, int(limit))]
 
     async def one(sym: str) -> None:
         async with sem:
-            row = await fetch_yahoo_overnight_quote(client, sym)
+            row = await fetch_yahoo_overnight_quote(
+                client,
+                sym,
+                allow_page=allow_page,
+                page_timeout=min(6.0, max(2.0, deadline_s)),
+                chart_timeout=min(3.5, max(1.5, deadline_s / 2)),
+            )
             base = dict(quotes.get(sym) or {})
             base["session"] = "night"
             base["session_label"] = "夜盘"
             if not row or row.get("rt_price") is None:
-                # Never keep CNBC 盘后 as fake 夜盘 when Yahoo Overnight is missing.
                 base.pop("rt_price", None)
                 base.pop("rt_change", None)
                 base.pop("rt_change_pct", None)
@@ -507,7 +541,15 @@ async def overlay_yahoo_overnight_quotes(
             base["source"] = "yahoo"
             quotes[sym] = base
 
-    await asyncio.gather(*(one(s) for s in uniq))
+    if not uniq:
+        return quotes
+    try:
+        await asyncio.wait_for(
+            asyncio.gather(*(one(s) for s in uniq)),
+            timeout=max(1.0, float(deadline_s)),
+        )
+    except asyncio.TimeoutError:
+        pass
     return quotes
 
 
@@ -741,19 +783,49 @@ async def fetch_yahoo_light_quotes(
     return out
 
 
-async def fetch_day_quotes(symbols: list[str]) -> dict[str, dict[str, Any]]:
-    """CNBC first, Yahoo fallback; at 夜盘 overlay Yahoo overnight quote numbers."""
+async def fetch_day_quotes(
+    symbols: list[str],
+    *,
+    overnight_priority: list[str] | None = None,
+) -> dict[str, dict[str, Any]]:
+    """CNBC first, Yahoo fallback; at 夜盘 stamp session + best-effort Overnight.
+
+    Full Yahoo page scrapes are limited to overnight_priority (selected / top
+    holdings). Batch lists must stay fast — never scrape every constituent.
+    """
     async with httpx.AsyncClient(follow_redirects=True, trust_env=False) as client:
         quotes = await fetch_cnbc_quotes(client, symbols)
         missing = [s for s in symbols if s.upper().strip() not in quotes]
         if missing:
             yahoo = await fetch_yahoo_light_quotes(client, missing, concurrency=3)
             quotes.update(yahoo)
-        # Yahoo overnight has no tape — sync numeric Overnight fields onto every row.
         if session_from_clock()[0] == "night":
-            await overlay_yahoo_overnight_quotes(
-                client, quotes, symbols, concurrency=4
+            _stamp_night_session(quotes)
+            # None → try first symbols; [] → skip page scrapes (ETF strip).
+            candidates = (
+                list(symbols or [])
+                if overnight_priority is None
+                else list(overnight_priority)
             )
+            pri: list[str] = []
+            seen: set[str] = set()
+            for raw in candidates:
+                sym = str(raw or "").upper().strip()
+                if sym and sym not in seen and sym in quotes:
+                    seen.add(sym)
+                    pri.append(sym)
+            # At most 2 page scrapes so sector/holdings desks stay under ~5s.
+            if pri:
+                await overlay_yahoo_overnight_quotes(
+                    client,
+                    quotes,
+                    pri,
+                    concurrency=2,
+                    limit=2,
+                    deadline_s=5.0,
+                    allow_page=True,
+                )
+                _stamp_night_session(quotes)
         return quotes
 
 
