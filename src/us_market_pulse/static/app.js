@@ -6242,7 +6242,7 @@ async function loadSectorDesk({ force = false } = {}) {
   const mapPromise = loadSectorMap({ force }).catch(() => null);
   try {
     const res = await fetch(`/api/sectors?${params.toString()}`, {
-      signal: AbortSignal.timeout(22000),
+      signal: AbortSignal.timeout(40000),
     });
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     const data = await res.json();
