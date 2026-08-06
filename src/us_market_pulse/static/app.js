@@ -4857,7 +4857,7 @@ function renderSectorMap(map) {
   const narrow =
     typeof window !== "undefined" &&
     (window.matchMedia("(max-width: 720px)").matches ||
-      document.documentElement.classList.contains("pulse-native-app"));
+      document.documentElement.classList.contains("pulse-native-phone"));
   const width = 1000;
   const height = narrow ? 640 : 520;
   const sectorNodes = sectors.map((s) => ({
