@@ -6022,8 +6022,16 @@ html[data-theme="dark"] .brief-chip {
   border-color: var(--line);
 }
 
+html[data-theme="dark"] .chip.bullish,
+html[data-theme="dark"] .story-sentiment.bullish {
+  color: #f07167;
+}
+
 html[data-theme="dark"] .chip.bearish,
-html[data-theme="dark"] .story-sentiment.bearish,
+html[data-theme="dark"] .story-sentiment.bearish {
+  color: #2ecf9a;
+}
+
 html[data-theme="dark"] .delta.down,
 html[data-theme="dark"] .agenda-bear,
 html[data-theme="dark"] .brief-card.bearish .value,
