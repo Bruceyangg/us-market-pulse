@@ -49,6 +49,7 @@ const state = {
   usMarketsPollBusy: false,
   sectorsLoadBusy: false,
   sectorsLoadSeq: 0,
+  chartUpgradeSym: "",
   earnings: null,
   earningsDate: "",
   earningsSession: "all",
@@ -6294,13 +6295,29 @@ async function loadSectorDesk({ force = false } = {}) {
     persistPageDataCache();
     const hot = (data.hot_sectors || []).map((s) => s.label).slice(0, 2).join("、");
     const n = (data.picks || []).length;
+    const lite = Boolean(data.selected_pick?.lite);
     setStatus(
       `板块已更新${data.cached ? "（缓存）" : ""}${
         data.active_sector?.label ? ` · ${data.active_sector.label}` : ""
-      }${n ? ` · ${n} 只成分` : ""}${hot ? ` · 热点 ${hot}` : ""}`
+      }${n ? ` · ${n} 只成分` : ""}${hot ? ` · 热点 ${hot}` : ""}${
+        lite ? " · 走势补全中" : ""
+      }`
     );
     // Don't await map — paint desk immediately; map fills when ready.
     void mapPromise;
+    if (lite || !pickHasIntraday(data.selected_pick)) {
+      void refreshActiveIntraday({ force: true });
+    }
+    // One delayed chart upgrade per symbol — avoid reload loops.
+    const sel = data.selected_symbol || "";
+    if (sel && !pickHasChart(data.selected_pick) && state.chartUpgradeSym !== sel) {
+      state.chartUpgradeSym = sel;
+      window.setTimeout(() => {
+        if (state.sectorSymbol === sel && !pickHasChart(state.sectors?.selected_pick)) {
+          ensureMultiTfChartUpgrade({ force: true });
+        }
+      }, 700);
+    }
     return data;
   } catch (err) {
     if (seq === state.sectorsLoadSeq) {
@@ -7496,9 +7513,12 @@ function bootPage() {
       if (state.sectors) renderSectorPicks(state.sectors);
     });
     void loadSectorDesk().then(() => {
-      if (state.sectorTf === "intraday") refreshActiveIntraday();
+      // Lite list returns first; chart/news catch up without blocking 成分股.
+      if (state.sectorTf === "intraday") {
+        refreshActiveIntraday({ force: true });
+      }
       if (!pickHasChart(state.sectors?.selected_pick)) {
-        ensureMultiTfChartUpgrade();
+        ensureMultiTfChartUpgrade({ force: false });
       }
       persistPageDataCache();
     });
