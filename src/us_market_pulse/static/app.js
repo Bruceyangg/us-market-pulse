@@ -177,8 +177,7 @@ const els = {
   chainsMap: document.getElementById("chains-map"),
   chainsMapTitle: document.getElementById("chains-map-title"),
   chainsMapBlurb: document.getElementById("chains-map-blurb"),
-  chainsTopFlow: document.getElementById("chains-top-flow"),
-  chainsBranches: document.getElementById("chains-branches"),
+  chainsMindmap: document.getElementById("chains-mindmap"),
   chainsPanels: document.getElementById("chains-panels"),
   briefGrid: document.getElementById("brief-grid"),
   briefBlurb: document.getElementById("brief-blurb"),
@@ -6971,45 +6970,165 @@ function sortChainCompanies(list) {
     });
 }
 
-function renderChainsPanorama(chain) {
-  if (!els.chainsTopFlow || !els.chainsBranches || !els.chainsPanels) return;
-  const flow = chain.top_flow || [];
-  els.chainsTopFlow.innerHTML = flow
-    .map(
-      (stage, idx) => `
-      <div class="chains-top-box tone-${escapeHtml(stage.tone || "core")}">
-        ${escapeHtml(stage.label || "")}
-      </div>
-      ${
-        idx < flow.length - 1
-          ? '<div class="chains-top-arrow" aria-hidden="true">→</div>'
-          : ""
-      }`
-    )
-    .join("");
+function chainsMindmapStages(chain) {
+  const flow = Array.isArray(chain.top_flow) ? chain.top_flow : [];
+  const defaults = [
+    { id: "support", label: "上游支撑", tone: "support" },
+    { id: "core", label: "中游核心", tone: "core" },
+    { id: "downstream", label: "下游应用", tone: "app" },
+  ];
+  const stages = (flow.length ? flow : defaults).map((stage, idx) => ({
+    id: stage.id || defaults[idx]?.id || `stage_${idx}`,
+    label: stage.label || defaults[idx]?.label || "环节",
+    tone: stage.tone || defaults[idx]?.tone || "core",
+    panels: [],
+  }));
+  const byTone = { support: 0, core: 1, app: 2 };
+  const fallbackIdx = (tone) =>
+    byTone[tone] != null ? Math.min(byTone[tone], stages.length - 1) : 1;
 
-  els.chainsBranches.innerHTML = (chain.branches || [])
-    .map((branch) => {
-      const nodes = (branch.nodes || [])
-        .map(
-          (n) =>
-            `<span class="chains-branch-pill tone-${escapeHtml(
-              branch.tone || "core"
-            )}">${escapeHtml(n.label || n.id)}</span>`
-        )
+  for (const panel of chain.panels || []) {
+    const tone = panel.tone || "core";
+    let idx = stages.findIndex((s) => s.tone === tone || s.id === tone);
+    if (idx < 0) idx = fallbackIdx(tone);
+    stages[idx].panels.push(panel);
+  }
+  // Prefer branch node labels when a stage has no panels yet.
+  for (const branch of chain.branches || []) {
+    const tone = branch.tone || "core";
+    let idx = stages.findIndex(
+      (s) => s.tone === tone || s.id === branch.parent || s.id === tone
+    );
+    if (idx < 0 || stages[idx].panels.length) continue;
+    for (const node of branch.nodes || []) {
+      stages[idx].panels.push({
+        id: node.id,
+        label: node.label || node.id,
+        tone,
+        _virtual: true,
+      });
+    }
+  }
+  return stages.filter((s) => s.panels.length);
+}
+
+function renderChainsMindmap(chain) {
+  if (!els.chainsMindmap) return;
+  const stages = chainsMindmapStages(chain);
+  const rootLabel = (chain.label || "产业链").replace(/产业链$/, "") || "产业链";
+  const stageHtml = stages
+    .map((stage) => {
+      const leaves = stage.panels
+        .map((panel) => {
+          const id = panel.id || "";
+          const tag = panel._virtual
+            ? "span"
+            : "button";
+          const attrs = panel._virtual
+            ? ""
+            : ` type="button" data-panel-id="${escapeHtml(id)}"`;
+          return `<${tag} class="chains-mm-leaf tone-${escapeHtml(
+            stage.tone
+          )}"${attrs}>${escapeHtml(panel.label || id)}</${tag}>`;
+        })
         .join("");
-      const pipe = Array.isArray(branch.pipeline) && branch.pipeline.length
-        ? `<div class="chains-branch-pipe">${branch.pipeline
-            .map((p) => `<span>${escapeHtml(p.label || p.id)}</span>`)
-            .join('<span class="chains-pipe-arrow" aria-hidden="true">→</span>')}</div>`
-        : "";
       return `
-        <div class="chains-branch-col tone-${escapeHtml(branch.tone || "core")}">
-          <div class="chains-branch-nodes">${nodes}</div>
-          ${pipe}
+        <div class="chains-mm-stage tone-${escapeHtml(stage.tone)}" data-tone="${escapeHtml(
+          stage.tone
+        )}">
+          <div class="chains-mm-stage-label">${escapeHtml(stage.label)}</div>
+          <div class="chains-mm-leaves">${leaves}</div>
         </div>`;
     })
     .join("");
+
+  els.chainsMindmap.innerHTML = `
+    <div class="chains-mm-shell">
+      <svg class="chains-mm-links" aria-hidden="true"></svg>
+      <div class="chains-mm-root">
+        <span class="chains-mm-root-kicker">产业逻辑脑图</span>
+        <strong>${escapeHtml(rootLabel)}</strong>
+      </div>
+      <div class="chains-mm-flow" aria-hidden="true">
+        ${stages
+          .map((s, i) => {
+            const box = `<span class="chains-mm-flow-box tone-${escapeHtml(
+              s.tone
+            )}">${escapeHtml(s.label)}</span>`;
+            const arrow =
+              i < stages.length - 1
+                ? '<span class="chains-mm-flow-arrow">→</span>'
+                : "";
+            return box + arrow;
+          })
+          .join("")}
+      </div>
+      <div class="chains-mm-stages" style="grid-template-columns: repeat(${Math.max(
+        1,
+        Math.min(stages.length, 3)
+      )}, minmax(0, 1fr))">${stageHtml}</div>
+    </div>`;
+
+  els.chainsMindmap.querySelectorAll("[data-panel-id]").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      const id = btn.getAttribute("data-panel-id");
+      const target = id && document.getElementById(`chain-panel-${id}`);
+      if (!target) return;
+      target.scrollIntoView({ behavior: "smooth", block: "nearest" });
+      target.classList.add("is-flash");
+      window.setTimeout(() => target.classList.remove("is-flash"), 1200);
+    });
+  });
+
+  requestAnimationFrame(() => drawChainsMindmapLinks());
+}
+
+function drawChainsMindmapLinks() {
+  const shell = els.chainsMindmap?.querySelector(".chains-mm-shell");
+  const svg = els.chainsMindmap?.querySelector(".chains-mm-links");
+  const root = els.chainsMindmap?.querySelector(".chains-mm-root");
+  if (!shell || !svg || !root) return;
+  const shellBox = shell.getBoundingClientRect();
+  const rootBox = root.getBoundingClientRect();
+  const w = Math.max(1, shell.clientWidth);
+  const h = Math.max(1, shell.clientHeight);
+  svg.setAttribute("viewBox", `0 0 ${w} ${h}`);
+  svg.setAttribute("width", String(w));
+  svg.setAttribute("height", String(h));
+
+  const x0 = rootBox.left + rootBox.width / 2 - shellBox.left;
+  const y0 = rootBox.bottom - shellBox.top + 2;
+  const paths = [];
+
+  els.chainsMindmap.querySelectorAll(".chains-mm-stage").forEach((stage) => {
+    const label = stage.querySelector(".chains-mm-stage-label");
+    if (!label) return;
+    const lb = label.getBoundingClientRect();
+    const x1 = lb.left + lb.width / 2 - shellBox.left;
+    const y1 = lb.top - shellBox.top;
+    const midY = (y0 + y1) / 2;
+    paths.push(
+      `<path class="chains-mm-link tone-${stage.dataset.tone || "core"}" d="M ${x0} ${y0} C ${x0} ${midY}, ${x1} ${midY}, ${x1} ${y1}" fill="none" />`
+    );
+    const leaves = stage.querySelectorAll(".chains-mm-leaf");
+    leaves.forEach((leaf) => {
+      const fb = leaf.getBoundingClientRect();
+      const x2 = fb.left + fb.width / 2 - shellBox.left;
+      const y2 = fb.top - shellBox.top;
+      const yStem = lb.bottom - shellBox.top;
+      paths.push(
+        `<path class="chains-mm-link soft tone-${
+          stage.dataset.tone || "core"
+        }" d="M ${x1} ${yStem} C ${x1} ${(yStem + y2) / 2}, ${x2} ${(yStem + y2) / 2}, ${x2} ${y2}" fill="none" />`
+      );
+    });
+  });
+  svg.innerHTML = paths.join("");
+}
+
+function renderChainsPanorama(chain) {
+  if (!els.chainsPanels) return;
+  renderChainsMindmap(chain);
 
   els.chainsPanels.innerHTML = (chain.panels || [])
     .map((panel) => {
@@ -7075,6 +7194,15 @@ function renderChainsPanorama(chain) {
       { passive: true }
     );
   });
+
+  if (!window.__chainsMindmapResizeBound) {
+    window.__chainsMindmapResizeBound = true;
+    window.addEventListener("resize", () => {
+      if (els.chainsMindmap && !els.chainsMap?.classList.contains("is-hidden")) {
+        drawChainsMindmapLinks();
+      }
+    });
+  }
 }
 
 function renderChainsDesk(data) {
