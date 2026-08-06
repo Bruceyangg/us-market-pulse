@@ -2007,40 +2007,103 @@ html[data-theme="dark"] .desk-chg-row {
     right: 0;
     bottom: 0;
     z-index: 40;
-    display: flex;
-    flex-wrap: nowrap;
+    display: grid;
+    grid-template-columns: repeat(5, minmax(0, 1fr));
     gap: 0.12rem;
-    overflow-x: auto;
-    -webkit-overflow-scrolling: touch;
-    overscroll-behavior-x: contain;
-    scrollbar-width: none;
     padding: 0.4rem 0.45rem calc(0.4rem + env(safe-area-inset-bottom));
     background: var(--tabbar-bg);
     border-top: 1px solid var(--line);
     backdrop-filter: blur(14px);
   }
 
-  .mobile-tabbar::-webkit-scrollbar {
-    display: none;
-  }
-
-  .mobile-tabbar a {
+  .mobile-tabbar a,
+  .mobile-tabbar .tab-more {
     text-decoration: none;
     color: var(--ink-soft);
     font-size: 0.72rem;
     font-weight: 700;
     text-align: center;
-    padding: 0.55rem 0.35rem;
+    padding: 0.55rem 0.2rem;
     border-radius: 12px;
-    flex: 1 0 auto;
-    min-width: 3.45rem;
-    max-width: 5.2rem;
+    border: 0;
+    background: transparent;
+    font: inherit;
+    cursor: pointer;
+    min-width: 0;
   }
 
-  .mobile-tabbar a.is-active {
+  .mobile-tabbar a.is-active,
+  .mobile-tabbar .tab-more.is-active {
     color: var(--ink);
     background: var(--tabbar-active);
     box-shadow: inset 0 0 0 1px var(--line);
+  }
+
+  .mobile-more-sheet:not([hidden]) {
+    position: fixed;
+    inset: 0;
+    z-index: 90;
+    display: block;
+  }
+
+  .mobile-more-backdrop {
+    position: absolute;
+    inset: 0;
+    border: 0;
+    margin: 0;
+    padding: 0;
+    background: rgba(12, 18, 28, 0.45);
+    cursor: pointer;
+  }
+
+  .mobile-more-panel {
+    position: absolute;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    display: grid;
+    gap: 0.35rem;
+    padding: 1rem 1rem calc(1.1rem + env(safe-area-inset-bottom));
+    border-radius: 18px 18px 0 0;
+    background: var(--panel);
+    border-top: 1px solid var(--line);
+    box-shadow: 0 -10px 36px rgba(0, 0, 0, 0.18);
+  }
+
+  .mobile-more-title {
+    margin: 0;
+    font-size: 1.05rem;
+    font-weight: 750;
+  }
+
+  .mobile-more-sub {
+    margin: 0 0 0.35rem;
+    color: var(--ink-soft);
+    font-size: 0.78rem;
+  }
+
+  .mobile-more-item {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 0.75rem;
+    padding: 0.85rem 0.9rem;
+    border-radius: 14px;
+    text-decoration: none;
+    color: var(--ink);
+    background: color-mix(in srgb, var(--elevated-soft) 88%, transparent);
+    border: 1px solid var(--line);
+    font-weight: 700;
+  }
+
+  .mobile-more-item small {
+    font-weight: 500;
+    color: var(--ink-soft);
+  }
+
+  .mobile-more-item.is-active {
+    border-color: color-mix(in srgb, var(--sky) 45%, var(--line));
+    background: color-mix(in srgb, var(--sky) 10%, var(--panel));
   }
 
   .page-intro {
@@ -2901,6 +2964,13 @@ html[data-theme="dark"] .desk-chg-row {
   gap: 0.65rem;
 }
 
+.us-markets-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 0.65rem;
+}
+
 .us-markets-head h2 {
   margin: 0;
   font-size: 1.05rem;
@@ -2912,6 +2982,27 @@ html[data-theme="dark"] .desk-chg-row {
   margin: 0.15rem 0 0;
   color: var(--ink-soft);
   font-size: 0.78rem;
+}
+
+.us-futures-block[hidden] {
+  display: none !important;
+}
+
+.us-depth-toggle {
+  flex: 0 0 auto;
+  white-space: nowrap;
+}
+
+.sector-map-pane.is-map-collapsed .sector-map-canvas {
+  display: none;
+}
+
+.sector-map-head-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.55rem;
+  flex-wrap: wrap;
+  justify-content: flex-end;
 }
 
 .us-markets-strip-wrap {
@@ -6915,23 +7006,51 @@ html[data-theme="dark"] .earnings-row .session-pre-market {
 }
 
 /* ===== Android / native app shell (html.pulse-native-app) ===== */
-html.pulse-native-app .site-header,
+/* Keep a slim top chrome (theme + account); hide web nav to avoid double bars */
+html.pulse-native-app .desk-nav,
 html.pulse-native-app .mobile-tabbar,
+html.pulse-native-app .mobile-more-sheet,
 html.pulse-native-app .site-footer {
   display: none !important;
 }
 
+html.pulse-native-app .site-header {
+  display: flex !important;
+  position: sticky;
+  top: 0;
+  z-index: 80;
+  max-width: none;
+  margin: 0;
+  padding: 0.45rem 0.75rem;
+  gap: 0.55rem;
+  min-height: 2.85rem;
+}
+
+html.pulse-native-app .brand-text {
+  font-size: 0.95rem;
+}
+
+html.pulse-native-app .header-meta {
+  margin-left: auto;
+  gap: 0.35rem;
+}
+
+html.pulse-native-app .live-dot,
+html.pulse-native-app #status-line {
+  display: none;
+}
+
 html.pulse-native-app body {
   padding-bottom: 0.5rem !important;
-  padding-top: env(safe-area-inset-top, 0);
+  padding-top: 0;
   overscroll-behavior-y: contain;
   -webkit-tap-highlight-color: transparent;
 }
 
 html.pulse-native-app .page-main {
-  padding-top: 0.55rem;
+  padding-top: 0.4rem;
   padding-bottom: 0.75rem;
-  min-height: 100dvh;
+  min-height: calc(100dvh - 3rem);
 }
 
 html.pulse-native-app .page-intro {
@@ -7282,6 +7401,14 @@ html.pulse-native-app .portfolio-body .sector-hold-btn {
 html.pulse-native-phone .page-intro .lede {
   font-size: 0.8rem;
   line-height: 1.4;
+}
+
+html.pulse-native-phone .page-sectors .sectors-intro .lede {
+  display: none;
+}
+
+html.pulse-native-phone .page-kicker {
+  font-size: 0.68rem;
 }
 
 html.pulse-native-phone .us-markets-strip-wrap {
