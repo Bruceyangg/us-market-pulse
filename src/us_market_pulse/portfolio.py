@@ -520,7 +520,10 @@ async def build_portfolio_view(
     # 1) Batch day quotes (CNBC → Yahoo light) — same as sector constituents
     day_quotes: dict[str, Any] = {}
     try:
-        day_quotes = await asyncio.wait_for(fetch_day_quotes(symbols), timeout=10.0)
+        day_quotes = await asyncio.wait_for(
+            fetch_day_quotes(symbols, overnight_priority=[selected]),
+            timeout=10.0,
+        )
     except Exception as exc:  # noqa: BLE001
         errors.append(f"day quotes: {exc}")
 
