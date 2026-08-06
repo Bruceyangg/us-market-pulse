@@ -23,6 +23,8 @@ from us_market_pulse.markets import (
     _session_segments,
     fetch_symbol_bundle,
 )
+from us_market_pulse.feeds import fetch_google_news
+from us_market_pulse.feeds import fetch_google_news
 from us_market_pulse.portfolio_intel import match_portfolio_intel
 from us_market_pulse.quotes import (
     apply_list_quote_fields,
@@ -272,43 +274,104 @@ SECTOR_TOPIC_PATTERNS: dict[str, dict[str, Any]] = {
         "label": "AI 板块",
         "blurb": "人工智能、算力、大模型与 AI 基础设施",
         "query": "人工智能 OR AI OR Nvidia",
+        "gn_query": (
+            '("artificial intelligence" OR Nvidia OR OpenAI OR "data center" OR GPU) '
+            "when:7d"
+        ),
     },
     "semis": {
         "id": "semis",
         "label": "半导体",
         "blurb": "芯片、代工、设备与存储周期",
         "query": "半导体 OR chip OR semiconductor",
+        "gn_query": (
+            "(semiconductor OR chip OR TSMC OR ASML OR Nvidia OR AMD) stock when:7d"
+        ),
     },
     "tech": {
         "id": "tech",
         "label": "科技",
         "blurb": "科技巨头与软件硬件联动",
         "query": "科技股 OR Big Tech OR Nasdaq",
+        "gn_query": (
+            '("Big Tech" OR Apple OR Microsoft OR Google OR Meta OR Nasdaq) '
+            "stock when:7d"
+        ),
     },
     "cloud": {
         "id": "cloud",
         "label": "云计算",
         "blurb": "云资本开支、SaaS 与数据中心",
         "query": "云计算 OR cloud OR data center",
+        "gn_query": (
+            '("cloud computing" OR AWS OR Azure OR "data center" OR SaaS) '
+            "stock when:7d"
+        ),
     },
     "energy": {
         "id": "energy",
         "label": "能源",
         "blurb": "油价、天然气与能源股",
         "query": "原油 OR oil OR energy stocks",
+        "gn_query": (
+            "(crude OR oil OR energy stocks OR Exxon OR Chevron) when:7d"
+        ),
     },
     "finance": {
         "id": "finance",
         "label": "金融",
         "blurb": "银行、利率与金融监管",
         "query": "银行 OR banks OR financials",
+        "gn_query": (
+            "(banks OR financials OR Wall Street OR JPMorgan OR Fed rate) "
+            "stock when:7d"
+        ),
     },
     "health": {
         "id": "health",
         "label": "医疗",
         "blurb": "制药、医保与生物科技",
         "query": "制药 OR biotech OR healthcare",
+        "gn_query": (
+            "(biotech OR healthcare OR pharma OR Eli Lilly OR FDA) stock when:7d"
+        ),
     },
+}
+
+# Ticker → English name for Google News queries (VALUE_CHAIN names are often CN).
+_SYMBOL_GN_ALIAS: dict[str, str] = {
+    "NVDA": "Nvidia",
+    "AMD": "AMD",
+    "AVGO": "Broadcom",
+    "ARM": "Arm Holdings",
+    "SMCI": "Super Micro",
+    "PLTR": "Palantir",
+    "SNOW": "Snowflake",
+    "META": "Meta",
+    "GOOGL": "Google",
+    "GOOG": "Google",
+    "MSFT": "Microsoft",
+    "AAPL": "Apple",
+    "AMZN": "Amazon",
+    "TSLA": "Tesla",
+    "JPM": "JPMorgan",
+    "BAC": "Bank of America",
+    "GS": "Goldman Sachs",
+    "XOM": "Exxon",
+    "CVX": "Chevron",
+    "LLY": "Eli Lilly",
+    "JNJ": "Johnson & Johnson",
+    "PFE": "Pfizer",
+    "MRK": "Merck",
+    "ABBV": "AbbVie",
+    "ORCL": "Oracle",
+    "DDOG": "Datadog",
+    "NFLX": "Netflix",
+    "ISRG": "Intuitive Surgical",
+    "PATH": "UiPath",
+    "QCOM": "Qualcomm",
+    "TSM": "TSMC",
+    "ASML": "ASML",
 }
 
 VALUE_CHAIN: dict[str, dict[str, Any]] = {
@@ -1290,6 +1353,64 @@ def _match_sector_news(items: list[dict[str, Any]], topic_id: str) -> list[dict[
     return rows[:12]
 
 
+def _news_dedupe_key(item: dict[str, Any]) -> str:
+    url = str(item.get("url") or "").strip().casefold()
+    if url:
+        return f"u:{url}"
+    title = str(item.get("title") or "").strip().casefold()
+    return f"t:{title}" if title else f"id:{item.get('id')}"
+
+
+def _merge_news_latest(
+    *buckets: list[dict[str, Any]],
+    limit: int = 12,
+) -> list[dict[str, Any]]:
+    """Merge news buckets, prefer fresher published_ts, dedupe by url/title."""
+    best: dict[str, dict[str, Any]] = {}
+    for bucket in buckets:
+        for raw in bucket or []:
+            if not isinstance(raw, dict):
+                continue
+            key = _news_dedupe_key(raw)
+            if not key or key in {"u:", "t:", "id:"}:
+                continue
+            prev = best.get(key)
+            if prev is None or float(raw.get("published_ts") or 0) >= float(
+                prev.get("published_ts") or 0
+            ):
+                best[key] = dict(raw)
+    rows = sorted(
+        best.values(),
+        key=lambda x: float(x.get("published_ts") or 0),
+        reverse=True,
+    )
+    return [_slim_news_item(r) for r in rows[: max(1, min(int(limit), 16))]]
+
+
+def _symbol_google_query(symbol: str, name: str | None = None) -> str:
+    sym = (symbol or "").strip().upper()
+    if not sym:
+        return ""
+    alias = _SYMBOL_GN_ALIAS.get(sym)
+    if not alias:
+        # Prefer ASCII / Latin company names from the pick row.
+        raw = (name or "").strip()
+        if raw and all(ord(ch) < 128 for ch in raw) and raw.upper() != sym:
+            alias = raw
+    if alias:
+        return f'({sym} OR "{alias}") stock when:7d'
+    return f"{sym} stock when:7d"
+
+
+def _sector_google_query(topic_id: str, label: str | None = None) -> str:
+    meta = SECTOR_TOPIC_PATTERNS.get(topic_id) or {}
+    q = str(meta.get("gn_query") or "").strip()
+    if q:
+        return q
+    label_en = (label or topic_id or "US stocks").strip()
+    return f"({label_en}) stock when:7d"
+
+
 def _match_symbol_news(
     items: list[dict[str, Any]],
     symbol: str,
@@ -1306,6 +1427,54 @@ def _match_symbol_news(
         [{"symbol": sym, "name": (name or "").strip() or sym}],
     )
     return [_slim_news_item(dict(i)) for i in hits[: max(1, min(limit, 16))]]
+
+
+async def _hydrate_sector_symbol_news(
+    news_items: list[dict[str, Any]],
+    *,
+    topic_id: str,
+    sector_label: str,
+    selected_symbol: str,
+    selected_name: str | None,
+    force: bool = False,
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    """Google News–first latest headlines for sector + selected ticker."""
+    sector_matched = _match_sector_news(news_items, topic_id)
+    symbol_matched = _match_symbol_news(
+        news_items,
+        selected_symbol,
+        name=selected_name,
+        limit=8,
+    )
+    sector_q = _sector_google_query(topic_id, sector_label)
+    symbol_q = _symbol_google_query(selected_symbol, selected_name)
+    async def _empty_news() -> list[dict[str, Any]]:
+        return []
+
+    sector_gn_task = fetch_google_news(
+        sector_q,
+        limit=12,
+        source_name="Google News",
+        source_id=f"gn-sector-{topic_id or 'hot'}",
+        force=force,
+    )
+    symbol_gn_task = (
+        fetch_google_news(
+            symbol_q,
+            limit=10,
+            source_name="Google News",
+            source_id=f"gn-sym-{(selected_symbol or 'x').lower()}",
+            force=force,
+        )
+        if symbol_q
+        else _empty_news()
+    )
+    sector_gn, symbol_gn = await asyncio.gather(sector_gn_task, symbol_gn_task)
+    sector_news = _merge_news_latest(sector_gn, sector_matched, limit=12)
+    symbol_news = (
+        _merge_news_latest(symbol_gn, symbol_matched, limit=8) if symbol_q else []
+    )
+    return sector_news, symbol_news
 
 
 async def _fetch_quote(
@@ -2694,21 +2863,36 @@ async def build_sector_desk(
         except RuntimeError:
             pass
 
-    sector_news = _match_sector_news(
-        news_items, (active or {}).get("topic_id") or sector_id
+    topic_key = str((active or {}).get("topic_id") or sector_id or "")
+    selected_name = None
+    for row in pick_rows:
+        if str(row.get("symbol") or "").upper() == str(selected or "").upper():
+            selected_name = str(row.get("name") or "") or None
+            break
+    sector_news_slim, selected_symbol_news = await _hydrate_sector_symbol_news(
+        news_items,
+        topic_id=topic_key,
+        sector_label=str((active or {}).get("label") or sector_id or ""),
+        selected_symbol=str(selected or ""),
+        selected_name=selected_name,
+        force=force,
     )
-    sector_news_slim = [_slim_news_item(dict(i)) for i in sector_news[:10]]
+    sector_news = sector_news_slim
     # Enrich move analysis + per-symbol news once news is available
     for row in pick_rows:
         home_etf = next(
             (s for s in sectors if s.get("id") == row.get("sector_id")), active
         )
-        row["symbol_news"] = _match_symbol_news(
-            news_items,
-            str(row.get("symbol") or ""),
-            name=str(row.get("name") or "") or None,
-            limit=8,
-        )
+        sym = str(row.get("symbol") or "").upper()
+        if sym and sym == str(selected or "").upper() and selected_symbol_news:
+            row["symbol_news"] = list(selected_symbol_news)
+        else:
+            row["symbol_news"] = _match_symbol_news(
+                news_items,
+                sym,
+                name=str(row.get("name") or "") or None,
+                limit=8,
+            )
         # Prefer symbol-matched headlines for move factors; fall back to sector
         move_news = row["symbol_news"] or sector_news_slim
         row["move_analysis"] = _move_analysis(
@@ -2726,7 +2910,6 @@ async def build_sector_desk(
             news=move_news,
         )
 
-    topic_key = (active or {}).get("topic_id")
     if topic_key in TOPICS:
         sector_bear = topic_bearish_analysis(news_items, topic_key)
     else:
@@ -2740,8 +2923,8 @@ async def build_sector_desk(
             },
             "avg_score": 0,
             "assessment": (
-                f"{(active or {}).get('label') or '该板块'}近端匹配 "
-                f"{len(sector_news)} 条相关报道。"
+                f"{(active or {}).get('label') or '该板块'}近端汇总 "
+                f"{len(sector_news)} 条最新报道（Google News）。"
             ),
             "top_factors": [],
             "spotlight": [i for i in sector_news if i.get("sentiment") == "bearish"][:3],
