@@ -61,7 +61,7 @@
       href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,500;9..144,700&family=Sora:wght@400;500;600;700&display=swap"
       rel="stylesheet"
     />
-    <link rel="stylesheet" href="/static/styles.css?v=20260806e17" />
+    <link rel="stylesheet" href="/static/styles.css?v=20260806e19" />
     {% block head %}{% endblock %}
   </head>
   <body class="page-{{ page }}" data-page="{{ page }}">
@@ -126,54 +126,25 @@
       <a href="/markets" data-nav="markets" class="{% if page == 'markets' %}is-active{% endif %}">
         <span class="tab-label">市场</span>
       </a>
+      <a href="/earnings" data-nav="earnings" class="{% if page == 'earnings' %}is-active{% endif %}">
+        <span class="tab-label">财报</span>
+      </a>
       <a href="/intel" data-nav="intel" class="{% if page == 'intel' %}is-active{% endif %}">
         <span class="tab-label">情报</span>
       </a>
-      <button
-        type="button"
-        class="tab-more{% if page in ['earnings', 'chains', 'settings', 'login'] %} is-active{% endif %}"
-        id="btn-mobile-more"
-        aria-haspopup="dialog"
-        aria-expanded="false"
-        aria-controls="mobile-more-sheet"
-      >
-        <span class="tab-label">更多</span>
-      </button>
+      <a href="/chains" data-nav="chains" class="{% if page == 'chains' %}is-active{% endif %}">
+        <span class="tab-label">产业</span>
+      </a>
+      {% if user %}
+      <a href="/settings" data-nav="settings" class="{% if page == 'settings' %}is-active{% endif %}">
+        <span class="tab-label">设置</span>
+      </a>
+      {% else %}
+      <a href="/login" data-nav="login" class="{% if page == 'login' %}is-active{% endif %}">
+        <span class="tab-label">登录</span>
+      </a>
+      {% endif %}
     </nav>
-
-    <div
-      class="mobile-more-sheet"
-      id="mobile-more-sheet"
-      hidden
-      role="dialog"
-      aria-modal="true"
-      aria-label="更多模块"
-    >
-      <button type="button" class="mobile-more-backdrop" id="btn-mobile-more-close" aria-label="关闭"></button>
-      <div class="mobile-more-panel">
-        <p class="mobile-more-title">更多模块</p>
-        <p class="mobile-more-sub">财报 · 产业链 · 设置</p>
-        <a href="/earnings" data-nav="earnings" class="mobile-more-item{% if page == 'earnings' %} is-active{% endif %}">
-          <span>财报</span>
-          <small>日历与窗口</small>
-        </a>
-        <a href="/chains" data-nav="chains" class="mobile-more-item{% if page == 'chains' %} is-active{% endif %}">
-          <span>产业链</span>
-          <small>上下游映射</small>
-        </a>
-        {% if user %}
-        <a href="/settings" data-nav="settings" class="mobile-more-item{% if page == 'settings' %} is-active{% endif %}">
-          <span>设置</span>
-          <small>主题与账户</small>
-        </a>
-        {% else %}
-        <a href="/login" data-nav="login" class="mobile-more-item{% if page == 'login' %} is-active{% endif %}">
-          <span>登录</span>
-          <small>同步持仓</small>
-        </a>
-        {% endif %}
-      </div>
-    </div>
 
     <footer class="site-footer">
       <div>
@@ -200,7 +171,7 @@
     </div>
     {% endblock %}
 
-    <script src="/static/app.js?v=20260806e17" type="module"></script>
+    <script src="/static/app.js?v=20260806e19" type="module"></script>
     <script>
       if ("serviceWorker" in navigator) {
         window.addEventListener("load", function () {
