@@ -263,9 +263,10 @@ async def api_sectors(
     sector: str | None = Query(default=None),
     symbol: str | None = Query(default=None),
 ) -> dict[str, Any]:
-    # Avoid refresh_intel() here — it may refresh the unrelated market board.
+    # Soft-warm intel cache when empty so keyword fallbacks still work.
+    # Sector/symbol cards primarily use on-demand Google News in build_sector_desk.
     items = peek_intel_items()
-    if not items and refresh:
+    if not items:
         intel = await refresh_intel(force=False)
         items = intel.get("items") or []
     desk = await build_sector_desk(
