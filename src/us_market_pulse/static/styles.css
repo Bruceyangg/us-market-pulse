@@ -3846,25 +3846,37 @@ html[data-theme="dark"] .sector-pick-list .sector-hold-btn.is-held:hover {
   stroke-width: 0.6px;
 }
 
-/* Extended-hours ghost bands (blue pre / violet post — never red/green). */
+/* Extended-hours bands: very pale flat fills behind the tape (no grain). */
+.session-intraday-svg .session-bands,
+.yahoo-intraday-svg .session-bands {
+  pointer-events: none;
+}
+
 .session-intraday-svg .band-pre,
 .yahoo-intraday-svg .band-pre {
-  fill: rgba(70, 120, 190, 0.14);
+  fill: rgba(96, 140, 196, 0.06);
 }
 
 .session-intraday-svg .band-post,
 .yahoo-intraday-svg .band-post {
-  fill: rgba(140, 105, 200, 0.14);
+  fill: rgba(150, 120, 200, 0.06);
 }
 
 html[data-theme="dark"] .session-intraday-svg .band-pre,
 html[data-theme="dark"] .yahoo-intraday-svg .band-pre {
-  fill: rgba(78, 130, 200, 0.18);
+  fill: rgba(110, 150, 210, 0.08);
 }
 
 html[data-theme="dark"] .session-intraday-svg .band-post,
 html[data-theme="dark"] .yahoo-intraday-svg .band-post {
-  fill: rgba(150, 115, 210, 0.18);
+  fill: rgba(160, 130, 215, 0.08);
+}
+
+.session-intraday-svg .band-pre-ghost,
+.session-intraday-svg .band-post-ghost,
+.yahoo-intraday-svg .band-pre-ghost,
+.yahoo-intraday-svg .band-post-ghost {
+  display: none;
 }
 
 .portfolio-chart .session-intraday-svg .intraday-area,
