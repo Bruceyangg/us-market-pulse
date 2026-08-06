@@ -196,18 +196,20 @@ const els = {
 };
 
 function formatNumber(value, unit) {
-  if (value == null || Number.isNaN(value)) return "—";
-  const abs = Math.abs(value);
+  const n = Number(value);
+  if (value == null || !Number.isFinite(n)) return "—";
+  const abs = Math.abs(n);
   const digits = abs >= 100 ? 1 : abs >= 10 ? 2 : 3;
-  const text = value.toFixed(digits);
+  const text = n.toFixed(digits);
   return unit === "%" ? `${text}%` : text;
 }
 
 function formatDelta(delta) {
-  if (delta == null || Number.isNaN(delta)) return { text: "—", cls: "" };
-  const sign = delta > 0 ? "+" : "";
-  const cls = delta > 0 ? "up" : delta < 0 ? "down" : "";
-  return { text: `${sign}${delta.toFixed(3)}`, cls };
+  const n = Number(delta);
+  if (delta == null || !Number.isFinite(n)) return { text: "—", cls: "" };
+  const sign = n > 0 ? "+" : "";
+  const cls = n > 0 ? "up" : n < 0 ? "down" : "";
+  return { text: `${sign}${n.toFixed(3)}`, cls };
 }
 
 function relativeTime(iso) {
@@ -643,7 +645,9 @@ function renderSessionIntradaySvg(
     viewEnd,
     previousClose,
   });
-  const { width, height, padL, padTop, plotW, plotH } = INTRADAY_VB;
+  const { width, height, padL, padTop, padBottom, padR } = INTRADAY_VB;
+  const plotW = width - padL - padR;
+  const plotH = height - padTop - padBottom;
   if (!model) {
     return {
       html: `<svg viewBox="0 0 ${width} ${height}" role="img" aria-label="暂无走势"><text x="16" y="96" fill="${themeMutedFill()}" font-size="13">暂无分时数据</text></svg>`,
@@ -4156,8 +4160,9 @@ function pctClass(pct) {
 }
 
 function pctText(pct) {
-  if (typeof pct !== "number" || Number.isNaN(pct)) return "—";
-  return `${pct >= 0 ? "+" : ""}${pct.toFixed(2)}%`;
+  const n = Number(pct);
+  if (pct == null || !Number.isFinite(n)) return "—";
+  return `${n >= 0 ? "+" : ""}${n.toFixed(2)}%`;
 }
 
 /** Shared holdings/sectors list quote: 收盘涨跌幅 + 实时涨跌幅 + 时段. */
@@ -4204,13 +4209,23 @@ function mergeListQuoteFields(next, prev) {
   if (!next) return prev || next;
   if (!prev) return next;
   const out = { ...next };
+  const nextSid = String(out.session || prev.session || "");
+  const nextHasRt =
+    out.rt_price != null || out.rt_change != null || out.rt_change_pct != null;
+  // 夜盘 without Yahoo Overnight must not inherit prior CNBC 盘后 %.
+  if (nextSid === "night" && !nextHasRt) {
+    delete out.rt_price;
+    delete out.rt_change;
+    delete out.rt_change_pct;
+  } else {
+    for (const key of ["rt_price", "rt_change", "rt_change_pct"]) {
+      if (out[key] == null && prev[key] != null) out[key] = prev[key];
+    }
+  }
   for (const key of [
     "price",
     "change",
     "change_pct",
-    "rt_price",
-    "rt_change",
-    "rt_change_pct",
     "session",
     "session_label",
   ]) {
@@ -4791,6 +4806,11 @@ function applyIntradaySnapshot(sym, snap) {
     if (snap.rt_price != null) rtPatch.rt_price = snap.rt_price;
     if (snap.rt_change != null) rtPatch.rt_change = snap.rt_change;
     if (snap.rt_change_pct != null) rtPatch.rt_change_pct = snap.rt_change_pct;
+  } else if (sid === "night") {
+    // Clear stale 盘后 clones; Yahoo Overnight is quote-only when available.
+    rtPatch.rt_price = null;
+    rtPatch.rt_change = null;
+    rtPatch.rt_change_pct = null;
   } else if (sid === "regular") {
     rtPatch.rt_price = snap.price;
     rtPatch.rt_change = snap.change;
@@ -4817,7 +4837,6 @@ function applyIntradaySnapshot(sym, snap) {
       rtPatch.rt_change_pct = snap.change_pct;
     }
   }
-  // night + no explicit rt_*: keep prior CNBC/Yahoo AH fields via merge below.
 
   if (PAGE === "desk" && state.portfolio) {
     const board = state.portfolio.selected_board;
