@@ -360,7 +360,7 @@ async def api_chains(
     node: str | None = Query(default=None),
     q: str | None = Query(default=None),
 ) -> dict[str, Any]:
-    return build_chains_desk(chain_id=chain, node_id=node, q=q)
+    return await build_chains_desk(chain_id=chain, node_id=node, q=q)
 
 
 @app.get("/api/intel")
