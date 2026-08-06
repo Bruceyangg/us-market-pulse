@@ -4653,8 +4653,8 @@ function renderSectorNewsFeed(data) {
   const q = data?.active_sector?.topic_id || label;
   if (els.sectorNewsBlurb) {
     els.sectorNewsBlurb.textContent = news.length
-      ? `${label} · ${news.length} 条匹配`
-      : `${label} · 暂无匹配`;
+      ? `${label} · Google News · ${news.length} 条最新`
+      : `${label} · Google News · 暂无最新`;
   }
   if (els.sectorNewsLink) {
     els.sectorNewsLink.href = `/intel?q=${encodeURIComponent(q)}`;
@@ -4662,7 +4662,7 @@ function renderSectorNewsFeed(data) {
   if (!els.sectorNewsList) return;
   els.sectorNewsList.innerHTML = news.length
     ? news.slice(0, 8).map((item) => spotlightCardHtml(item)).join("")
-    : '<p class="empty">暂无该板块匹配新闻。</p>';
+    : '<p class="empty">暂无该板块最新新闻。</p>';
 }
 
 function renderSymbolNewsFeed(data) {
@@ -4675,11 +4675,11 @@ function renderSymbolNewsFeed(data) {
   const name = pick?.name || sym;
   if (els.symbolNewsBlurb) {
     if (!sym) {
-      els.symbolNewsBlurb.textContent = "点选个股后显示相关情报";
+      els.symbolNewsBlurb.textContent = "点选个股后汇总最新消息";
     } else if (!news.length) {
-      els.symbolNewsBlurb.textContent = `${name} · 暂无命中标题/正文的情报`;
+      els.symbolNewsBlurb.textContent = `${name} · Google News · 暂无最新`;
     } else {
-      els.symbolNewsBlurb.textContent = `${name} · ${news.length} 条相关`;
+      els.symbolNewsBlurb.textContent = `${name} · Google News · ${news.length} 条最新`;
     }
   }
   if (els.symbolNewsLink) {
@@ -4695,9 +4695,9 @@ function renderSymbolNewsFeed(data) {
   }
   els.symbolNewsList.innerHTML = news.length
     ? news.slice(0, 8).map((item) => spotlightCardHtml(item)).join("")
-    : `<p class="empty">暂无命中 ${escapeHtml(
+    : `<p class="empty">暂无 ${escapeHtml(
         sym
-      )} 的情报 · <a href="/intel?q=${encodeURIComponent(sym)}">去情报流搜索</a></p>`;
+      )} 最新消息 · <a href="/intel?q=${encodeURIComponent(sym)}">去情报流搜索</a></p>`;
 }
 
 function heatColor(pct) {
