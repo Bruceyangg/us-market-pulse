@@ -1783,11 +1783,12 @@ body {
   display: grid;
   grid-template-columns: repeat(5, minmax(0, 1fr));
   gap: 0.4rem;
-  margin: 0 0 0.55rem;
-  padding: 0.5rem 0.7rem;
-  border-radius: 12px;
+  margin: 0;
+  padding: 0.5rem 0.7rem 0.35rem;
+  border-radius: 12px 12px 0 0;
   background: color-mix(in srgb, var(--panel) 70%, transparent);
   border: 1px solid color-mix(in srgb, var(--line) 70%, transparent);
+  border-bottom: 0;
 }
 
 .portfolio-chart .chart-canvas,
@@ -1796,19 +1797,20 @@ body {
   flex: 1 1 auto;
 }
 
-.portfolio-stats span {
+.portfolio-stats .stat-cell,
+.portfolio-stats > span {
   display: grid;
-  gap: 0.15rem;
+  gap: 0.12rem;
   min-width: 0;
 }
 
 .portfolio-stats .k {
-  font-size: 0.68rem;
+  font-size: 0.64rem;
   color: var(--ink-soft);
 }
 
 .portfolio-stats .v {
-  font-size: 0.82rem;
+  font-size: 0.78rem;
   font-weight: 700;
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
@@ -1822,6 +1824,45 @@ body {
 
 .portfolio-stats .v.down {
   color: var(--signal);
+}
+
+/* 收盘% under 现价 (left-aligned) + live session % — holdings & sectors. */
+.desk-chg-row {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 0.55rem 1rem;
+  margin: 0 0 0.5rem;
+  padding: 0.15rem 0.7rem 0.45rem;
+  border: 1px solid color-mix(in srgb, var(--line) 70%, transparent);
+  border-top: 0;
+  border-radius: 0 0 12px 12px;
+  background: color-mix(in srgb, var(--panel) 70%, transparent);
+  font-size: 0.72rem;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  line-height: 1.25;
+}
+
+.desk-close-chg,
+.desk-session-chg {
+  white-space: nowrap;
+  color: var(--ink-soft);
+}
+
+.desk-close-chg.up,
+.desk-session-chg.up {
+  color: #d92b2b;
+}
+
+.desk-close-chg.down,
+.desk-session-chg.down {
+  color: var(--signal);
+}
+
+html[data-theme="dark"] .desk-chg-row {
+  background: rgba(14, 22, 34, 0.55);
+  border-color: rgba(148, 163, 184, 0.16);
 }
 
 .portfolio-chart .chart-canvas > svg,
