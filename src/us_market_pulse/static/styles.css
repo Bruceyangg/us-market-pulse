@@ -2904,59 +2904,38 @@ html[data-theme="dark"] .desk-chg-row {
 }
 
 .us-markets-strip-wrap {
-  display: grid;
-  grid-template-columns: auto minmax(0, 1fr) auto;
-  gap: 0.35rem;
-  align-items: stretch;
-}
-
-.us-markets-nav {
-  width: 1.85rem;
-  border: 1px solid color-mix(in srgb, var(--line) 85%, transparent);
-  border-radius: 10px;
-  background: color-mix(in srgb, var(--panel) 80%, transparent);
-  color: var(--ink-soft);
-  font-size: 1.15rem;
-  line-height: 1;
-  cursor: pointer;
-}
-
-.us-markets-nav:hover {
-  color: var(--ink);
-  border-color: color-mix(in srgb, var(--accent, #2f6f9f) 45%, var(--line));
+  display: block;
+  min-width: 0;
 }
 
 .us-markets-strip {
-  display: flex;
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(9.8rem, 1fr));
   gap: 0.55rem;
-  overflow-x: auto;
-  scroll-snap-type: x proximity;
-  padding: 0.15rem 0.1rem 0.35rem;
-  scrollbar-width: thin;
+  padding: 0.1rem 0 0.2rem;
+  min-width: 0;
 }
 
 .us-strip-card {
-  flex: 0 0 auto;
-  scroll-snap-align: start;
-  min-width: 8.6rem;
+  min-width: 0;
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
-  gap: 0.35rem 0.45rem;
+  gap: 0.4rem 0.5rem;
   align-items: center;
-  padding: 0.45rem 0.55rem;
-  border-radius: 12px;
+  padding: 0.65rem 0.7rem;
+  border-radius: 14px;
   border: 1px solid color-mix(in srgb, var(--line) 75%, transparent);
   background: color-mix(in srgb, var(--panel) 72%, transparent);
 }
 
 .us-strip-meta {
   display: grid;
-  gap: 0.1rem;
+  gap: 0.14rem;
   min-width: 0;
 }
 
 .us-strip-name {
-  font-size: 0.68rem;
+  font-size: 0.78rem;
   color: var(--ink-soft);
   white-space: nowrap;
   overflow: hidden;
@@ -2964,14 +2943,14 @@ html[data-theme="dark"] .desk-chg-row {
 }
 
 .us-strip-price {
-  font-size: 0.92rem;
+  font-size: 1.08rem;
   font-weight: 750;
   font-variant-numeric: tabular-nums;
   color: var(--ink);
 }
 
 .us-strip-chg {
-  font-size: 0.72rem;
+  font-size: 0.84rem;
   font-weight: 700;
   font-variant-numeric: tabular-nums;
 }
@@ -2987,9 +2966,15 @@ html[data-theme="dark"] .desk-chg-row {
 }
 
 .us-strip-spark {
-  width: 3.4rem;
-  height: 1.7rem;
+  width: 4.2rem;
+  height: 2.15rem;
   display: block;
+}
+
+@media (max-width: 720px) {
+  .us-markets-strip {
+    grid-template-columns: repeat(auto-fit, minmax(8.6rem, 1fr));
+  }
 }
 
 .us-futures-toolbar {
