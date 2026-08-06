@@ -82,7 +82,7 @@ _TF_BARS: dict[str, tuple[str, int]] = {
 }
 
 _CACHE: dict[str, Any] = {"payload": None, "fetched_at": 0.0}
-_CACHE_TTL = 90.0
+_CACHE_TTL = 120.0
 
 
 def _headers() -> dict[str, str]:
