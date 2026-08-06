@@ -6924,10 +6924,11 @@ function chainsCompanyRowHtml(c) {
   const sym = String(c.symbol || "").toUpperCase();
   const held = isInHoldings(sym);
   const sector = c.sector || "technology";
+  const core = Boolean(c.core);
   return `
-    <div class="chains-co-row ${held ? "in-holding" : ""}" data-symbol="${escapeHtml(
-      sym
-    )}">
+    <div class="chains-co-row ${held ? "in-holding" : ""} ${
+      core ? "is-core" : ""
+    }" data-symbol="${escapeHtml(sym)}">
       <a class="chains-co-main" href="/sectors?sector=${encodeURIComponent(
         sector
       )}&symbol=${encodeURIComponent(sym)}">
@@ -6939,17 +6940,35 @@ function chainsCompanyRowHtml(c) {
             : ""
         }
       </a>
-      <button
-        type="button"
-        class="sector-hold-btn ${held ? "is-held" : ""}"
-        data-hold-symbol="${escapeHtml(sym)}"
-        data-hold-name="${escapeHtml(c.name || "")}"
-        data-hold-action="${held ? "remove" : "add"}"
-        title="${held ? `从持仓移除 ${sym}` : `加入持仓 ${sym}`}"
-        aria-label="${held ? `从持仓移除 ${sym}` : `加入持仓 ${sym}`}"
-      >${held ? "−" : "+"}</button>
+      <div class="chains-co-aside">
+        ${
+          core
+            ? '<span class="chains-co-core-tag" title="核心标的">核心</span>'
+            : '<span class="chains-co-core-tag is-empty" aria-hidden="true"></span>'
+        }
+        <button
+          type="button"
+          class="sector-hold-btn ${held ? "is-held" : ""}"
+          data-hold-symbol="${escapeHtml(sym)}"
+          data-hold-name="${escapeHtml(c.name || "")}"
+          data-hold-action="${held ? "remove" : "add"}"
+          title="${held ? `从持仓移除 ${sym}` : `加入持仓 ${sym}`}"
+          aria-label="${held ? `从持仓移除 ${sym}` : `加入持仓 ${sym}`}"
+        >${held ? "−" : "+"}</button>
+      </div>
     </div>
   `;
+}
+
+function sortChainCompanies(list) {
+  return (list || [])
+    .slice()
+    .sort((a, b) => {
+      const ac = a?.core ? 0 : 1;
+      const bc = b?.core ? 0 : 1;
+      if (ac !== bc) return ac - bc;
+      return String(a?.symbol || "").localeCompare(String(b?.symbol || ""));
+    });
 }
 
 function renderChainsPanorama(chain) {
@@ -6994,20 +7013,27 @@ function renderChainsPanorama(chain) {
 
   els.chainsPanels.innerHTML = (chain.panels || [])
     .map((panel) => {
-      const cos = panel.companies || [];
+      const cos = sortChainCompanies(panel.companies || []);
+      const coreN = cos.filter((c) => c.core).length;
       return `
         <article class="chains-panel tone-${escapeHtml(panel.tone || "core")}" id="chain-panel-${escapeHtml(
           panel.id
         )}">
           <header class="chains-panel-head">
             <h3>${escapeHtml(panel.label || "")}</h3>
-            ${
-              panel.blurb
-                ? `<p>${escapeHtml(panel.blurb)}</p>`
+            <p>${escapeHtml(
+              panel.blurb || ""
+            )}${
+              cos.length
+                ? `${panel.blurb ? " · " : ""}${cos.length} 只${
+                    coreN ? ` · 核心 ${coreN}` : ""
+                  }`
                 : ""
-            }
+            }</p>
           </header>
-          <div class="chains-panel-list">
+          <div class="chains-panel-list" tabindex="0" aria-label="${escapeHtml(
+            panel.label || "股票列表"
+          )}可滚动">
             ${
               cos.length
                 ? cos.map(chainsCompanyRowHtml).join("")
@@ -7030,6 +7056,24 @@ function renderChainsPanorama(chain) {
       }
       toggleSectorHolding(sym, name);
     });
+  });
+  // Keep wheel/trackpad scroll inside panel lists without growing the card.
+  els.chainsPanels.querySelectorAll(".chains-panel-list").forEach((list) => {
+    list.addEventListener(
+      "wheel",
+      (event) => {
+        if (list.scrollHeight <= list.clientHeight + 1) return;
+        const dy = event.deltaY;
+        const top = list.scrollTop;
+        const max = list.scrollHeight - list.clientHeight;
+        const atTop = top <= 0 && dy < 0;
+        const atBottom = top >= max - 1 && dy > 0;
+        if (!atTop && !atBottom) {
+          event.stopPropagation();
+        }
+      },
+      { passive: true }
+    );
   });
 }
 
