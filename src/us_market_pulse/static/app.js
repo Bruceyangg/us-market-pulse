@@ -4261,9 +4261,28 @@ function mergeListQuoteFields(next, prev) {
   if (!next) return prev || next;
   if (!prev) return next;
   const out = { ...next };
-  // Keep prior 夜盘/盘后 RT when the new payload is missing it (CNBC extended).
-  for (const key of ["rt_price", "rt_change", "rt_change_pct"]) {
-    if (out[key] == null && prev[key] != null) out[key] = prev[key];
+  const nextSid = String(out.session || prev.session || "");
+  // 夜盘: only keep prior RT if it was true Overnight (never 盘后).
+  if (nextSid === "night") {
+    const prevOvernight = Boolean(prev.overnight);
+    const nextOvernight = Boolean(out.overnight);
+    if (!nextOvernight) {
+      if (prevOvernight) {
+        for (const key of ["rt_price", "rt_change", "rt_change_pct"]) {
+          if (out[key] == null && prev[key] != null) out[key] = prev[key];
+        }
+        out.overnight = true;
+      } else {
+        delete out.rt_price;
+        delete out.rt_change;
+        delete out.rt_change_pct;
+        delete out.overnight;
+      }
+    }
+  } else {
+    for (const key of ["rt_price", "rt_change", "rt_change_pct"]) {
+      if (out[key] == null && prev[key] != null) out[key] = prev[key];
+    }
   }
   for (const key of [
     "price",
@@ -4866,9 +4885,13 @@ function applyIntradaySnapshot(sym, snap) {
     if (snap.rt_price != null) rtPatch.rt_price = snap.rt_price;
     if (snap.rt_change != null) rtPatch.rt_change = snap.rt_change;
     if (snap.rt_change_pct != null) rtPatch.rt_change_pct = snap.rt_change_pct;
+    if (sid === "night") rtPatch.overnight = true;
   } else if (sid === "night") {
-    // CNBC extended 夜盘 may omit rt_* on a blip — keep prior values.
-    /* no clear */
+    // No true Overnight on this snap — clear 盘后 leftovers.
+    rtPatch.rt_price = null;
+    rtPatch.rt_change = null;
+    rtPatch.rt_change_pct = null;
+    rtPatch.overnight = false;
   } else if (sid === "regular") {
     rtPatch.rt_price = snap.price;
     rtPatch.rt_change = snap.change;
