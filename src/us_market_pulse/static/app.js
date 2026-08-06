@@ -7069,12 +7069,41 @@ function paintFromPageDataCache(page = PAGE) {
     return true;
   }
   if (page === "sectors" && row.sectors) {
-    state.sectors = row.sectors;
-    if (row.sectorId) state.sectorId = row.sectorId;
-    if (row.sectorSymbol) state.sectorSymbol = row.sectorSymbol;
-    if (row.sectorTf) state.sectorTf = row.sectorTf;
     if (row.sectorCache) state.sectorCache = row.sectorCache;
-    renderSectorDesk(row.sectors);
+    if (row.sectorTf) state.sectorTf = row.sectorTf;
+    // URL deep-link (?sector=&symbol=) wins over stale localStorage.
+    const params = new URLSearchParams(location.search);
+    const qSector = (params.get("sector") || "").trim().toLowerCase();
+    const qSymbol = (params.get("symbol") || "").trim().toUpperCase();
+    const wantSector = qSector || row.sectorId || "";
+    const wantSymbol = qSymbol || row.sectorSymbol || "";
+    if (wantSector) state.sectorId = wantSector;
+    if (wantSymbol) state.sectorSymbol = wantSymbol;
+    const desk =
+      (wantSector && sectorCacheGet(wantSector)) ||
+      (wantSector &&
+      row.sectors?.active_sector_id === wantSector
+        ? row.sectors
+        : null);
+    if (desk) {
+      state.sectors = desk;
+      if (wantSymbol) {
+        state.sectors = {
+          ...desk,
+          selected_symbol: wantSymbol,
+          selected_pick:
+            (desk.picks || []).find((p) => p.symbol === wantSymbol) ||
+            desk.selected_pick,
+        };
+      }
+      renderSectorDesk(state.sectors);
+    } else {
+      // Don't flash the wrong sector while network refresh runs.
+      state.sectors = null;
+      if (els.sectorPickList) {
+        els.sectorPickList.innerHTML = '<p class="empty">加载成分股…</p>';
+      }
+    }
     if (row.usMarkets) {
       if (row.usFuturesTf) state.usFuturesTf = row.usFuturesTf;
       renderUsMarketsDesk(row.usMarkets);
