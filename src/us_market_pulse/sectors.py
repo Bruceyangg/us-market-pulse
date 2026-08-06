@@ -32,6 +32,7 @@ from us_market_pulse.quotes import (
     fetch_nasdaq_daily_bars,
     fetch_nasdaq_intraday,
     fetch_nasdaq_intraday_many,
+    fetch_yahoo_overnight_quote,
     resolve_list_session,
     session_from_clock,
 )
@@ -757,18 +758,63 @@ async def fetch_intraday_snapshot(
         sid, _label = resolve_list_session(None)
 
     prev_close = series_row.get("previous_close")
-    # Day line stays Nasdaq/Yahoo full-day move vs previous close.
-    # Realtime line uses session-aware basis (pre vs prev close; post/night vs regular close).
-    rt_fields = derive_list_realtime(
-        session=sid,
-        day_price=price if isinstance(price, (int, float)) else None,
-        day_change=change if isinstance(change, (int, float)) else None,
-        day_change_pct=change_pct if isinstance(change_pct, (int, float)) else None,
-        previous_close=prev_close
-        if isinstance(prev_close, (int, float))
-        else None,
-        tape_points=last_pts,
-    )
+    day_price = price if isinstance(price, (int, float)) else None
+    day_change = change if isinstance(change, (int, float)) else None
+    day_change_pct = change_pct if isinstance(change_pct, (int, float)) else None
+    prev_num = prev_close if isinstance(prev_close, (int, float)) else None
+
+    # 夜盘: Yahoo Overnight is quote-only — never invent 夜盘 tape points.
+    # Chart series remain 盘前+盘中+盘后; list RT syncs Yahoo overnight numbers.
+    if sid == "night":
+        rt_fields: dict[str, Any] = {}
+        try:
+            async with httpx.AsyncClient(
+                headers=yahoo_headers,
+                follow_redirects=True,
+                trust_env=False,
+                timeout=httpx.Timeout(2.5, connect=1.0),
+            ) as yclient:
+                y_night = await fetch_yahoo_overnight_quote(yclient, sym)
+        except Exception:  # noqa: BLE001
+            y_night = None
+        if isinstance(y_night, dict):
+            if day_price is None and y_night.get("price") is not None:
+                price = y_night.get("price")
+                change = y_night.get("change")
+                change_pct = y_night.get("change_pct")
+                day_price = price if isinstance(price, (int, float)) else day_price
+                day_change = change if isinstance(change, (int, float)) else day_change
+                day_change_pct = (
+                    change_pct
+                    if isinstance(change_pct, (int, float))
+                    else day_change_pct
+                )
+            if y_night.get("previous_close") is not None:
+                prev_close = y_night.get("previous_close")
+                prev_num = (
+                    prev_close if isinstance(prev_close, (int, float)) else prev_num
+                )
+            for key in ("rt_price", "rt_change", "rt_change_pct"):
+                if y_night.get(key) is not None:
+                    rt_fields[key] = y_night[key]
+        if not rt_fields:
+            rt_fields = derive_list_realtime(
+                session="night",
+                day_price=day_price,
+                day_change=day_change,
+                day_change_pct=day_change_pct,
+                previous_close=prev_num,
+                tape_points=[],
+            )
+    else:
+        rt_fields = derive_list_realtime(
+            session=sid,
+            day_price=day_price,
+            day_change=day_change,
+            day_change_pct=day_change_pct,
+            previous_close=prev_num,
+            tape_points=last_pts,
+        )
     data = {
         "symbol": sym,
         "price": price,
