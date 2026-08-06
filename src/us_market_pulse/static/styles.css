@@ -7486,7 +7486,10 @@ html[data-theme="dark"] .chains-branch-pill.tone-app { color: #f0b06a; }
   padding: 0.75rem 0.8rem 0.85rem;
   display: flex;
   flex-direction: column;
-  gap: 0.5rem;
+  gap: 0.45rem;
+  min-height: 0;
+  /* Fixed card footprint — overflow scrolls inside the list. */
+  height: 17.8rem;
 }
 
 .chains-panel.tone-support {
@@ -7517,10 +7520,30 @@ html[data-theme="dark"] .chains-branch-pill.tone-app { color: #f0b06a; }
 
 .chains-panel-list {
   display: grid;
-  gap: 0.35rem;
+  gap: 0.28rem;
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding-right: 0.15rem;
+  scrollbar-gutter: stable;
+}
+
+.chains-panel-list:focus {
+  outline: none;
+}
+
+.chains-panel-list::-webkit-scrollbar {
+  width: 6px;
+}
+
+.chains-panel-list::-webkit-scrollbar-thumb {
+  background: color-mix(in srgb, var(--ink-soft) 35%, transparent);
+  border-radius: 999px;
 }
 
 .chains-co-row {
+  position: relative;
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
   gap: 0.3rem;
@@ -7575,6 +7598,33 @@ html[data-theme="dark"] .chains-branch-pill.tone-app { color: #f0b06a; }
   font-size: 0.68rem;
   color: var(--ink-soft);
   line-height: 1.3;
+}
+
+.chains-co-aside {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  justify-content: flex-start;
+  gap: 0.1rem;
+  min-width: 1.7rem;
+}
+
+.chains-co-core-tag {
+  font-size: 0.56rem;
+  font-weight: 750;
+  letter-spacing: 0.04em;
+  line-height: 1;
+  color: #c05621;
+  white-space: nowrap;
+}
+
+.chains-co-core-tag.is-empty {
+  visibility: hidden;
+  height: 0.56rem;
+}
+
+.chains-co-row.is-core {
+  background: color-mix(in srgb, #e0893a 7%, transparent);
 }
 
 .chains-panel .sector-hold-btn {
