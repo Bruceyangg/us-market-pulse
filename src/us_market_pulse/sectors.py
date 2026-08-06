@@ -2578,6 +2578,15 @@ async def build_sector_desk(
     if picks_fresh or picks_stale_ok:
         pick_rows = [dict(r) for r in picks_cached["pick_rows"]]
         earnings_by_symbol = dict(picks_cached.get("earnings_by_symbol") or {})
+        priced_cached = sum(
+            1
+            for r in pick_rows
+            if isinstance(r.get("price"), (int, float))
+            or isinstance(r.get("change_pct"), (int, float))
+        )
+        # Poisoned cache (sparks without quotes) — keep rows but force quote repair.
+        if pick_rows and priced_cached < max(3, len(pick_rows) // 2):
+            picks_fresh = False
         picks_from_cache = True
 
     selected = (selected_symbol or "").strip().upper()
@@ -2685,8 +2694,9 @@ async def build_sector_desk(
                     fetch_day_quotes(
                         pick_symbols,
                         overnight_priority=night_pri,
+                        bypass_cache=bool(missing_prices or force),
                     ),
-                    timeout=3.2 if missing_prices else 1.4,
+                    timeout=6.0 if missing_prices else 1.8,
                 )
             except asyncio.TimeoutError:
                 day_quotes = {}
@@ -2707,7 +2717,10 @@ async def build_sector_desk(
     # List first: sparks from cache. Selected chart races briefly (≤2s), then
     # continues in background so 成分股 never waits on a full multi-TF fetch.
     selected_pick = next((p for p in pick_rows if p.get("symbol") == selected), None)
-    need_selected_chart = bool(selected) and not _pick_has_chart(selected_pick)
+    # Upgrade when day/month missing OR desk 分时 is empty (avoids "正在加载分时…").
+    need_selected_chart = bool(selected) and (
+        not _pick_has_chart(selected_pick) or not _series_intraday_ok(selected_pick)
+    )
     _hydrate_sparks_from_cache(pick_rows)
 
     async def _apply_selected_bundle(bundle: dict[str, Any]) -> None:
@@ -2857,6 +2870,25 @@ async def build_sector_desk(
                 (p for p in pick_rows if p.get("symbol") == selected), selected_pick
             )
     _hydrate_sparks_from_cache(pick_rows)
+    # Last-resort list prices from spark endpoints when day quotes timed out.
+    for row in pick_rows:
+        pts = _spark_points_from_row(row)
+        if len(pts) < 2:
+            continue
+        last = pts[-1].get("v")
+        first = pts[0].get("v")
+        if row.get("price") is None and isinstance(last, (int, float)):
+            row["price"] = round(float(last), 4)
+        if (
+            row.get("change_pct") is None
+            and isinstance(first, (int, float))
+            and isinstance(last, (int, float))
+            and abs(float(first)) > 1e-9
+        ):
+            row["change_pct"] = round(
+                (float(last) - float(first)) / abs(float(first)) * 100.0, 3
+            )
+            row["momentum"] = float(row["change_pct"])
 
     async def _persist_sparks_later() -> None:
         if sparks_task is None:
