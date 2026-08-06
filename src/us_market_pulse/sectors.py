@@ -774,7 +774,9 @@ async def fetch_intraday_snapshot(
                 trust_env=False,
                 timeout=httpx.Timeout(12.0, connect=3.0),
             ) as yclient:
-                y_night = await fetch_yahoo_overnight_quote(yclient, sym)
+                y_night = await fetch_yahoo_overnight_quote(
+                    yclient, sym, allow_page=True, page_timeout=6.0, chart_timeout=3.0
+                )
         except Exception:  # noqa: BLE001
             y_night = None
         if isinstance(y_night, dict):
@@ -2243,7 +2245,8 @@ async def build_sector_desk(
         # Fast ETF strip via CNBC/Yahoo light quotes (avoid 8× multi-TF Yahoo charts)
         errors: list[str] = []
         etf_symbols = [row["symbol"] for row in SECTOR_ETFS]
-        etf_quotes = await fetch_day_quotes(etf_symbols)
+        # ETF strip: skip Yahoo Overnight page scrapes (keep desk cold-start fast).
+        etf_quotes = await fetch_day_quotes(etf_symbols, overnight_priority=[])
         sectors: list[dict[str, Any]] = []
         for spec in SECTOR_ETFS:
             quote = etf_quotes.get(str(spec["symbol"]).upper())
@@ -2370,7 +2373,11 @@ async def build_sector_desk(
     # Fast path: batch day quotes for the whole list; full multi-TF chart only
     # for the selected symbol (biggest latency win on sector switch).
     if not picks_fresh and pick_symbols:
-        day_quotes = await fetch_day_quotes(pick_symbols)
+        # Overnight page scrape only for the selected symbol — never N× Yahoo HTML.
+        day_quotes = await fetch_day_quotes(
+            pick_symbols,
+            overnight_priority=[selected] if selected else [],
+        )
         for sym in pick_symbols:
             quote = day_quotes.get(sym)
             if not quote and sym != selected:
@@ -2477,9 +2484,9 @@ async def build_sector_desk(
                     spark_client,
                     pick_rows,
                     force=force,
-                    limit=min(18, len(pick_rows) or 1),
+                    limit=min(12, len(pick_rows) or 1),
                 ),
-                timeout=14.0,
+                timeout=8.0,
             )
     except (asyncio.TimeoutError, httpx.HTTPError):
         _hydrate_sparks_from_cache(pick_rows)
