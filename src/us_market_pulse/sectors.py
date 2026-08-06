@@ -2816,7 +2816,7 @@ async def build_sector_desk(
         try:
             await asyncio.wait_for(
                 asyncio.gather(*waiters, return_exceptions=True),
-                timeout=6.5,
+                timeout=8.0,
             )
         except asyncio.TimeoutError:
             pass
@@ -2825,9 +2825,25 @@ async def build_sector_desk(
         sparked_now = sum(1 for r in pick_rows[:12] if _spark_points_from_row(r))
         if sparked_now < min(6, len(pick_rows)):
             try:
-                await asyncio.wait_for(asyncio.shield(sparks_task), timeout=2.5)
+                await asyncio.wait_for(asyncio.shield(sparks_task), timeout=3.5)
             except asyncio.TimeoutError:
                 pass
+    # Selected chart is more important than a perfect spark fill — wait briefly
+    # if the desk still has no multi-TF / 分时 for the clicked symbol.
+    if chart_task is not None and not chart_task.done():
+        selected_pick = next(
+            (p for p in pick_rows if p.get("symbol") == selected), selected_pick
+        )
+        if not (
+            _pick_has_chart(selected_pick) or _pick_has_intraday(selected_pick)
+        ):
+            try:
+                await asyncio.wait_for(asyncio.shield(chart_task), timeout=4.0)
+            except asyncio.TimeoutError:
+                pass
+            selected_pick = next(
+                (p for p in pick_rows if p.get("symbol") == selected), selected_pick
+            )
     _hydrate_sparks_from_cache(pick_rows)
 
     async def _persist_sparks_later() -> None:
@@ -3006,6 +3022,27 @@ async def build_sector_desk(
         )
     ]
 
+    def _stash_news(
+        sector_gn: list[dict[str, Any]],
+        symbol_gn: list[dict[str, Any]],
+    ) -> None:
+        cached = _PICKS_CACHE.get(sector_id) or {}
+        meta = dict(cached) if cached else {
+            "key": picks_key,
+            "pick_rows": [dict(r) for r in pick_rows],
+            "earnings_by_symbol": dict(earnings_by_symbol),
+            "fetched_at": time.time(),
+        }
+        if sector_gn:
+            meta["sector_news"] = sector_gn
+        sym_map = dict(meta.get("symbol_news") or {})
+        if symbol_gn and selected:
+            sym_map[str(selected).upper()] = symbol_gn
+            meta["symbol_news"] = sym_map
+        if sector_gn or symbol_gn:
+            meta["news_at"] = time.time()
+            _PICKS_CACHE[sector_id] = meta
+
     async def _news_bg() -> None:
         try:
             sector_gn, symbol_gn = await _hydrate_sector_symbol_news(
@@ -3018,31 +3055,50 @@ async def build_sector_desk(
             )
         except Exception:  # noqa: BLE001
             return
-        # Stash on picks cache marker so a quick follow-up refresh can reuse.
-        cached = _PICKS_CACHE.get(sector_id) or {}
-        if not cached:
-            return
-        meta = dict(cached)
-        meta["sector_news"] = sector_gn
-        meta["symbol_news"] = {str(selected or "").upper(): symbol_gn}
-        meta["news_at"] = time.time()
-        _PICKS_CACHE[sector_id] = meta
+        _stash_news(sector_gn, symbol_gn)
 
     # Prefer previously warmed GN headlines when available (< 3 min).
     news_cached = _PICKS_CACHE.get(sector_id) or {}
     news_age = time.time() - float(news_cached.get("news_at") or 0)
-    if news_age < 180 and news_cached.get("sector_news"):
-        sector_news_slim = list(news_cached.get("sector_news") or sector_news_slim)
-        warm_sym = (news_cached.get("symbol_news") or {}).get(
-            str(selected or "").upper()
-        )
+    warm_sector = list(news_cached.get("sector_news") or [])
+    warm_sym = (news_cached.get("symbol_news") or {}).get(
+        str(selected or "").upper()
+    )
+    if news_age < 180 and (warm_sector or warm_sym):
+        if warm_sector:
+            sector_news_slim = warm_sector
         if warm_sym:
             selected_symbol_news = list(warm_sym)
     else:
+        # Brief inline hydrate so 个股信息流 isn't empty on first paint.
+        # Finish in background if Yahoo/GN is slow.
         try:
-            asyncio.get_running_loop().create_task(_news_bg())
-        except RuntimeError:
-            pass
+            sector_gn, symbol_gn = await asyncio.wait_for(
+                _hydrate_sector_symbol_news(
+                    news_items,
+                    topic_id=topic_key,
+                    sector_label=str((active or {}).get("label") or sector_id or ""),
+                    selected_symbol=str(selected or ""),
+                    selected_name=selected_name,
+                    force=force,
+                ),
+                timeout=3.2,
+            )
+            if sector_gn:
+                sector_news_slim = list(sector_gn)
+            if symbol_gn:
+                selected_symbol_news = list(symbol_gn)
+            _stash_news(sector_gn or [], symbol_gn or [])
+        except asyncio.TimeoutError:
+            try:
+                asyncio.get_running_loop().create_task(_news_bg())
+            except RuntimeError:
+                pass
+        except Exception:  # noqa: BLE001
+            try:
+                asyncio.get_running_loop().create_task(_news_bg())
+            except RuntimeError:
+                pass
     sector_news = sector_news_slim
     # Enrich move analysis + per-symbol news once news is available
     for row in pick_rows:
