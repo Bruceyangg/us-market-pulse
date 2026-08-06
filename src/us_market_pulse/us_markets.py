@@ -81,8 +81,15 @@ _TF_BARS: dict[str, tuple[str, int]] = {
 }
 
 _CACHE: dict[str, Any] = {"payload": None, "fetched_at": 0.0}
-# Keep futures/strip tape near real-time; FE polls ~0.5s.
+# Tape (strip + 分时) stays near real-time; higher TFs reuse longer.
 _CACHE_TTL = 0.5
+_FULL_CACHE_TTL = 90.0
+_YAHOO_TF: dict[str, tuple[str, str]] = {
+    "intraday": ("1d", "1m"),
+    "day": ("2y", "1d"),
+    "month": ("max", "1mo"),
+    "quarter": ("max", "3mo"),
+}
 
 
 def _headers() -> dict[str, str]:
@@ -239,6 +246,86 @@ async def _fetch_cnbc_quotes(
     return out
 
 
+async def _fetch_yahoo_bars(
+    client: httpx.AsyncClient,
+    yahoo_sym: str,
+    *,
+    range_: str,
+    interval: str,
+) -> list[dict[str, Any]]:
+    """Fallback OHLC when CNBC bars are empty/rate-limited."""
+    enc = urlquote(yahoo_sym, safe="")
+    url = (
+        f"https://query1.finance.yahoo.com/v8/finance/chart/{enc}"
+        f"?range={range_}&interval={interval}&includePrePost=false"
+    )
+    try:
+        resp = await client.get(
+            url,
+            timeout=10.0,
+            headers={
+                "User-Agent": USER_AGENT,
+                "Accept": "application/json",
+            },
+        )
+        if resp.status_code >= 400:
+            return []
+        result = ((resp.json().get("chart") or {}).get("result") or [None])[0]
+        if not result:
+            return []
+        ts_list = result.get("timestamp") or []
+        quote = ((result.get("indicators") or {}).get("quote") or [None])[0] or {}
+        opens = quote.get("open") or []
+        highs = quote.get("high") or []
+        lows = quote.get("low") or []
+        closes = quote.get("close") or []
+        vols = quote.get("volume") or []
+        out: list[dict[str, Any]] = []
+        for i, ts in enumerate(ts_list):
+            try:
+                t = int(ts)
+            except (TypeError, ValueError):
+                continue
+            close = _parse_number(closes[i] if i < len(closes) else None)
+            if close is None:
+                continue
+            open_ = _parse_number(opens[i] if i < len(opens) else None) or close
+            high = _parse_number(highs[i] if i < len(highs) else None) or max(open_, close)
+            low = _parse_number(lows[i] if i < len(lows) else None) or min(open_, close)
+            vol = _parse_number(vols[i] if i < len(vols) else None)
+            out.append(
+                {
+                    "t": t,
+                    "o": round(float(open_), 6),
+                    "h": round(float(high), 6),
+                    "l": round(float(low), 6),
+                    "c": round(float(close), 6),
+                    "v": round(float(vol), 2) if vol is not None else None,
+                }
+            )
+        out.sort(key=lambda p: p["t"])
+        return out
+    except Exception:  # noqa: BLE001
+        return []
+
+
+def _series_ok(series: dict[str, Any] | None) -> bool:
+    return len(((series or {}).get("points")) or []) >= 2
+
+
+def _merge_futures_series(
+    base: dict[str, Any] | None, overlay: dict[str, Any] | None
+) -> dict[str, Any]:
+    """Prefer fresh overlay points; never drop a good higher-TF series."""
+    out = dict((base or {}).get("series") or {})
+    for tf_id, series in ((overlay or {}).get("series") or {}).items():
+        if _series_ok(series):
+            out[tf_id] = series
+        elif tf_id not in out:
+            out[tf_id] = series
+    return out
+
+
 async def _fetch_cnbc_bars(
     client: httpx.AsyncClient,
     cnbc_sym: str,
@@ -324,21 +411,37 @@ async def _build_futures_bundle(
     client: httpx.AsyncClient,
     spec: dict[str, str],
     quote: dict[str, Any] | None,
+    *,
+    tf_ids: set[str] | None = None,
 ) -> tuple[dict[str, Any] | None, list[str]]:
     errors: list[str] = []
     cnbc = _cnbc_for(spec["symbol"])
     series: dict[str, Any] = {}
     quote_seed = dict(quote or {})
+    wanted = {
+        str(tf["id"])
+        for tf in SECTOR_TIMEFRAMES
+        if tf_ids is None or str(tf["id"]) in tf_ids
+    }
 
     async def one_tf(tf: dict[str, Any]) -> None:
         tf_id = str(tf["id"])
+        if tf_id not in wanted:
+            return
         bar_type, lookback = _TF_BARS.get(tf_id, ("1D", 800))
         chart = str(tf.get("chart") or "line")
         raw = await _fetch_cnbc_bars(
             client, cnbc, bar_type, lookback_days=lookback
         )
+        source = "cnbc"
         if len(raw) < 2:
-            errors.append(f"{spec['label']}/{tf['label']}: no CNBC bars")
+            y_range, y_interval = _YAHOO_TF.get(tf_id, ("2y", "1d"))
+            raw = await _fetch_yahoo_bars(
+                client, spec["symbol"], range_=y_range, interval=y_interval
+            )
+            source = "yahoo"
+        if len(raw) < 2:
+            errors.append(f"{spec['label']}/{tf['label']}: no bars")
             return
         max_pts = int(tf.get("max_points") or 360)
         if chart == "line":
@@ -360,7 +463,11 @@ async def _build_futures_bundle(
             series[tf_id] = {
                 "tf": tf_id,
                 "label": tf["label"],
-                "blurb": "CNBC 分时 · 主连 北京06:00→05:00",
+                "blurb": (
+                    "CNBC 分时 · 主连 北京06:00→05:00"
+                    if source == "cnbc"
+                    else "Yahoo 分时 · 指数期货"
+                ),
                 "range": tf.get("range"),
                 "interval": tf.get("interval"),
                 "chart": "line",
@@ -371,7 +478,7 @@ async def _build_futures_bundle(
                 "previous_close": prev,
                 "cycle_start": cycle.get("cycle_start"),
                 "cycle_end": cycle.get("cycle_end"),
-                "source": "cnbc",
+                "source": source,
             }
             if price is not None:
                 quote_seed.setdefault("price", price)
@@ -381,14 +488,14 @@ async def _build_futures_bundle(
             series[tf_id] = {
                 "tf": tf_id,
                 "label": tf["label"],
-                "blurb": f"CNBC {tf['label']} · 指数期货主连（红涨绿跌）",
+                "blurb": f"{'CNBC' if source == 'cnbc' else 'Yahoo'} {tf['label']} · 指数期货主连（红涨绿跌）",
                 "range": tf.get("range"),
                 "interval": tf.get("interval"),
                 "chart": "candle",
                 "points": points,
                 "change": change,
                 "change_pct": change_pct,
-                "source": "cnbc",
+                "source": source,
             }
 
     await asyncio.gather(*(one_tf(tf) for tf in SECTOR_TIMEFRAMES))
@@ -421,21 +528,68 @@ async def _build_futures_bundle(
     }, errors
 
 
-async def build_us_markets_desk(*, force: bool = False) -> dict[str, Any]:
+def _futures_shell(
+    spec: dict[str, str], quote: dict[str, Any] | None
+) -> dict[str, Any]:
+    q = quote or {}
+    return {
+        "id": spec["id"],
+        "symbol": spec["symbol"],
+        "label": spec["label"],
+        "short": spec["short"],
+        "price": q.get("price"),
+        "change": q.get("change"),
+        "change_pct": q.get("change_pct"),
+        "points": [],
+        "series": {},
+        "lite": True,
+        "url": f"https://finance.yahoo.com/quote/{urlquote(spec['symbol'], safe='')}",
+    }
+
+
+async def build_us_markets_desk(
+    *, force: bool = False, mode: str = "full"
+) -> dict[str, Any]:
     """Strip quotes + ES/NQ/YM multi-TF charts (sector timeframe set)."""
     now = time.time()
-    if (
-        not force
-        and _CACHE.get("payload")
-        and now - float(_CACHE.get("fetched_at") or 0) < _CACHE_TTL
-    ):
-        out = dict(_CACHE["payload"])
+    mode_norm = (mode or "full").strip().lower()
+    if mode_norm not in {"full", "tape"}:
+        mode_norm = "full"
+    prev = _CACHE.get("payload")
+    age = now - float(_CACHE.get("fetched_at") or 0)
+    if not force and prev and age < _CACHE_TTL:
+        out = dict(prev)
+        out["cached"] = True
+        return out
+    # Soft-hit: for tape polls, reuse a very fresh payload.
+    if force and mode_norm == "tape" and prev and age < _CACHE_TTL:
+        out = dict(prev)
         out["cached"] = True
         return out
 
     errors: list[str] = []
     strip_syms = [s["symbol"] for s in US_MARKET_STRIP]
     fut_specs = list(US_FUTURES_CHARTS)
+    # tape = strip + 分时 only; full = all TFs (or fill missing higher TFs).
+    need_full = mode_norm == "full" or not prev
+    if prev and mode_norm == "full":
+        # Skip hammering higher TFs when they are still warm.
+        full_age = now - float(prev.get("fetched_at") or 0)
+        have_higher = all(
+            any(
+                _series_ok((f.get("series") or {}).get(tf))
+                for f in (prev.get("futures") or [])
+            )
+            for tf in ("day", "month", "quarter")
+        )
+        if have_higher and full_age < _FULL_CACHE_TTL and not force:
+            need_full = False
+
+    tf_ids = (
+        None
+        if need_full
+        else {"intraday"}
+    )
 
     async with httpx.AsyncClient(
         follow_redirects=True,
@@ -466,50 +620,50 @@ async def build_us_markets_desk(*, force: bool = False) -> dict[str, Any]:
         ]
 
         futures: list[dict[str, Any]] = []
+        prev_by_id = {
+            str(f.get("id") or "").lower(): f for f in ((prev or {}).get("futures") or [])
+        }
 
         async def one(spec: dict[str, str]) -> None:
             q = quotes.get(spec["symbol"].upper())
             try:
                 bundle, errs = await asyncio.wait_for(
-                    _build_futures_bundle(client, spec, q),
-                    timeout=20.0,
+                    _build_futures_bundle(client, spec, q, tf_ids=tf_ids),
+                    timeout=20.0 if need_full else 12.0,
                 )
             except (asyncio.TimeoutError, httpx.HTTPError) as exc:
                 errors.append(f"{spec['symbol']}: {exc.__class__.__name__}")
-                futures.append(
-                    {
-                        "id": spec["id"],
-                        "symbol": spec["symbol"],
-                        "label": spec["label"],
-                        "short": spec["short"],
-                        "price": (q or {}).get("price"),
-                        "change": (q or {}).get("change"),
-                        "change_pct": (q or {}).get("change_pct"),
-                        "points": [],
-                        "series": {},
-                        "lite": True,
-                        "url": f"https://finance.yahoo.com/quote/{urlquote(spec['symbol'], safe='')}",
-                    }
-                )
+                old = prev_by_id.get(spec["id"])
+                if old:
+                    merged = dict(old)
+                    merged.update(
+                        {
+                            "price": q.get("price") if q else old.get("price"),
+                            "change": q.get("change") if q else old.get("change"),
+                            "change_pct": q.get("change_pct")
+                            if q
+                            else old.get("change_pct"),
+                        }
+                    )
+                    futures.append(merged)
+                else:
+                    futures.append(_futures_shell(spec, q))
                 return
             errors.extend(errs or [])
+            old = prev_by_id.get(spec["id"])
             if not bundle:
-                futures.append(
-                    {
-                        "id": spec["id"],
-                        "symbol": spec["symbol"],
-                        "label": spec["label"],
-                        "short": spec["short"],
-                        "price": (q or {}).get("price"),
-                        "change": (q or {}).get("change"),
-                        "change_pct": (q or {}).get("change_pct"),
-                        "points": [],
-                        "series": {},
-                        "lite": True,
-                        "url": f"https://finance.yahoo.com/quote/{urlquote(spec['symbol'], safe='')}",
-                    }
-                )
+                futures.append(old or _futures_shell(spec, q))
                 return
+            if old:
+                bundle = {
+                    **old,
+                    **bundle,
+                    "series": _merge_futures_series(old, bundle),
+                    "lite": False,
+                }
+                # If tape refresh missed higher TFs, keep previous spark/points when needed.
+                if not bundle.get("points") and old.get("points"):
+                    bundle["points"] = old.get("points")
             futures.append(bundle)
 
         await asyncio.gather(*(one(s) for s in fut_specs))
@@ -541,6 +695,44 @@ async def build_us_markets_desk(*, force: bool = False) -> dict[str, Any]:
             row["change"] = fut.get("change")
             row["change_pct"] = fut.get("change_pct")
 
+    # If a full rebuild still lacks day bars, do one targeted Yahoo fill.
+    if need_full:
+        missing_day = [
+            f
+            for f in futures
+            if not _series_ok((f.get("series") or {}).get("day"))
+        ]
+        if missing_day:
+            async with httpx.AsyncClient(
+                follow_redirects=True,
+                trust_env=False,
+                timeout=httpx.Timeout(12.0, connect=4.0),
+                headers=_headers(),
+            ) as client:
+                async def fill_day(fut: dict[str, Any]) -> None:
+                    raw = await _fetch_yahoo_bars(
+                        client, str(fut.get("symbol") or ""), range_="2y", interval="1d"
+                    )
+                    if len(raw) < 2:
+                        return
+                    points = even_sample_points(raw, 560)
+                    change, change_pct = _series_change(points, "candle")
+                    series = dict(fut.get("series") or {})
+                    series["day"] = {
+                        "tf": "day",
+                        "label": "日图",
+                        "blurb": "Yahoo 日图 · 指数期货主连（红涨绿跌）",
+                        "chart": "candle",
+                        "points": points,
+                        "change": change,
+                        "change_pct": change_pct,
+                        "source": "yahoo",
+                    }
+                    fut["series"] = series
+                    fut["lite"] = False
+
+                await asyncio.gather(*(fill_day(f) for f in missing_day))
+
     payload = {
         "strip": strip,
         "futures": futures,
@@ -553,7 +745,17 @@ async def build_us_markets_desk(*, force: bool = False) -> dict[str, Any]:
         "fetched_at": now,
         "errors": errors[-24:],
         "cached": False,
+        "mode": "full" if need_full else "tape",
     }
+    # Preserve higher TFs if a tape refresh somehow emptied them.
+    if prev and not need_full:
+        prev_by = {
+            str(f.get("id") or "").lower(): f for f in (prev.get("futures") or [])
+        }
+        for fut in payload["futures"]:
+            old = prev_by.get(str(fut.get("id") or "").lower())
+            if old:
+                fut["series"] = _merge_futures_series(old, fut)
     _CACHE["payload"] = payload
     _CACHE["fetched_at"] = now
     return dict(payload)
