@@ -670,35 +670,15 @@ function renderSessionIntradaySvg(
   const xPost1 = xOfMins(YAHOO_DAY_END_MINS);
   const preW = Math.max(0, xPre1 - xPre0);
   const postW = Math.max(0, xPost1 - xPost0);
-  const ghostId = `g${Date.now().toString(36)}${Math.floor(Math.random() * 1e4)}`;
-  const prePat = `preGhost-${ghostId}`;
-  const postPat = `postGhost-${ghostId}`;
+  // Pale flat bands only (no grain) — painted before the tape so they sit behind.
   const sessionBands = `
-    <defs>
-      <pattern id="${prePat}" width="5" height="5" patternUnits="userSpaceOnUse" patternTransform="rotate(28)">
-        <circle cx="1" cy="1" r="0.55" fill="rgba(96,140,196,0.38)"></circle>
-      </pattern>
-      <pattern id="${postPat}" width="5" height="5" patternUnits="userSpaceOnUse" patternTransform="rotate(-28)">
-        <circle cx="1" cy="1" r="0.55" fill="rgba(156,120,210,0.38)"></circle>
-      </pattern>
-    </defs>
     <g class="session-bands" aria-hidden="true">
       <rect class="band-pre" x="${xPre0.toFixed(2)}" y="${padTop}" width="${preW.toFixed(
         2
-      )}" height="${plotH.toFixed(
-        2
-      )}" fill="rgba(70,120,190,0.13)"></rect>
-      <rect class="band-pre-ghost" x="${xPre0.toFixed(2)}" y="${padTop}" width="${preW.toFixed(
-        2
-      )}" height="${plotH.toFixed(2)}" fill="url(#${prePat})"></rect>
+      )}" height="${plotH.toFixed(2)}"></rect>
       <rect class="band-post" x="${xPost0.toFixed(2)}" y="${padTop}" width="${postW.toFixed(
         2
-      )}" height="${plotH.toFixed(
-        2
-      )}" fill="rgba(140,105,200,0.13)"></rect>
-      <rect class="band-post-ghost" x="${xPost0.toFixed(2)}" y="${padTop}" width="${postW.toFixed(
-        2
-      )}" height="${plotH.toFixed(2)}" fill="url(#${postPat})"></rect>
+      )}" height="${plotH.toFixed(2)}"></rect>
     </g>`;
 
   const hGrid = [0.2, 0.4, 0.6, 0.8]
@@ -5832,7 +5812,8 @@ async function loadSectorDesk({ force = false } = {}) {
   if (force) params.set("refresh", "true");
   setStatus(force ? "强制刷新板块…" : "同步板块行情与情报…");
   if (els.sectorsRefresh) els.sectorsRefresh.disabled = true;
-  const mapPromise = loadSectorMap({ force });
+  // Map is independent — never let it delay the constituent list / chart.
+  const mapPromise = loadSectorMap({ force }).catch(() => null);
   try {
     const res = await fetch(`/api/sectors?${params.toString()}`);
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
@@ -5889,11 +5870,12 @@ async function loadSectorDesk({ force = false } = {}) {
         data.active_sector?.label ? ` · ${data.active_sector.label}` : ""
       }${n ? ` · ${n} 只成分` : ""}${hot ? ` · 热点 ${hot}` : ""}`
     );
-    await mapPromise;
+    // Don't await map — paint desk immediately; map fills when ready.
+    void mapPromise;
     return data;
   } catch (err) {
     setStatus(`板块加载失败：${err.message || err}`);
-    await mapPromise;
+    void mapPromise;
     return null;
   } finally {
     if (els.sectorsRefresh) els.sectorsRefresh.disabled = false;
