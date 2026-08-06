@@ -546,6 +546,42 @@ const SESSION_LABELS = {
 };
 const SESSION_LABEL_ORDER = ["盘前", "盘中", "盘后"];
 
+/** ET clock → session id/label (matches backend session_from_clock). */
+function sessionFromClock(date = new Date()) {
+  const parts = new Intl.DateTimeFormat("en-US", {
+    timeZone: "America/New_York",
+    weekday: "short",
+    hour: "2-digit",
+    minute: "2-digit",
+    hourCycle: "h23",
+  }).formatToParts(date);
+  const map = Object.fromEntries(parts.map((p) => [p.type, p.value]));
+  const wd = String(map.weekday || "");
+  const mins = Number(map.hour || 0) * 60 + Number(map.minute || 0);
+  if (wd === "Sat" || wd === "Sun") return { id: "night", label: "夜盘" };
+  if (mins >= 20 * 60 || mins < 4 * 60) return { id: "night", label: "夜盘" };
+  if (mins < 9 * 60 + 30) return { id: "pre", label: "盘前" };
+  if (mins < 16 * 60) return { id: "regular", label: "盘中" };
+  return { id: "post", label: "盘后" };
+}
+
+function applyClockSession(row) {
+  if (!row || typeof row !== "object") return row;
+  const clock = sessionFromClock();
+  const out = { ...row, session: clock.id, session_label: clock.label };
+  if (clock.id === "regular") {
+    if (out.rt_price == null && out.price != null) out.rt_price = out.price;
+    if (out.rt_change == null && out.change != null) out.rt_change = out.change;
+    if (out.rt_change_pct == null && out.change_pct != null) {
+      out.rt_change_pct = out.change_pct;
+    }
+    delete out.overnight;
+  } else if (clock.id !== "night") {
+    delete out.overnight;
+  }
+  return out;
+}
+
 /** Yahoo 1D tape window (ET): 04:00 → 20:00. */
 const YAHOO_DAY_START_MINS = 4 * 60;
 const YAHOO_DAY_END_MINS = 20 * 60;
@@ -4524,16 +4560,17 @@ function deskStatsBlockHtml(pick, stats) {
 
 /** Shared holdings/sectors list quote: 收盘涨跌幅 + 实时涨跌幅 + 时段. */
 function listQuoteHtml(pick) {
-  const closePct = pick?.change_pct;
+  const stamped = applyClockSession(pick || {});
+  const closePct = stamped?.change_pct;
   const rtPct =
-    pick?.rt_change_pct != null ? pick.rt_change_pct : null;
-  const sessionLabel = String(pick?.session_label || "").trim();
+    stamped?.rt_change_pct != null ? stamped.rt_change_pct : null;
+  const sessionLabel = String(stamped?.session_label || "").trim();
   const price =
-    pick?.price == null ? "—" : formatNumber(pick.price, "");
+    stamped?.price == null ? "—" : formatNumber(stamped.price, "");
   const rtPrice =
-    pick?.rt_price == null ? "" : formatNumber(pick.rt_price, "");
+    stamped?.rt_price == null ? "" : formatNumber(stamped.rt_price, "");
   const showRt =
-    rtPct != null || pick?.rt_price != null || Boolean(sessionLabel);
+    rtPct != null || stamped?.rt_price != null || Boolean(sessionLabel);
   return `
     <span class="quote">
       <span class="quote-main">
@@ -4564,13 +4601,15 @@ function listQuoteHtml(pick) {
 
 function mergeListQuoteFields(next, prev) {
   if (!next) return prev || next;
-  if (!prev) return next;
+  if (!prev) return applyClockSession(next);
+  const clock = sessionFromClock();
   const out = { ...next };
-  const nextSid = String(out.session || "");
+  // Clock always wins for badge — never keep stale 盘前 into 盘中.
+  out.session = clock.id;
+  out.session_label = clock.label;
   const prevSid = String(prev.session || "");
-  // Never carry RT across session boundaries (夜盘→盘前 was showing stale %).
-  const sameSession = nextSid && prevSid && nextSid === prevSid;
-  if (nextSid === "night") {
+  const sameSession = prevSid && prevSid === clock.id;
+  if (clock.id === "night") {
     const prevOvernight = Boolean(prev.overnight);
     const nextOvernight = Boolean(out.overnight);
     if (!nextOvernight) {
@@ -4592,7 +4631,7 @@ function mergeListQuoteFields(next, prev) {
     }
     delete out.overnight;
   } else {
-    // Session flipped (e.g. 夜盘→盘前): drop prior RT unless next brought fresh.
+    // Session flipped: drop prior RT unless next brought fresh.
     if (out.rt_price == null) {
       delete out.rt_price;
       delete out.rt_change;
@@ -4600,16 +4639,10 @@ function mergeListQuoteFields(next, prev) {
     }
     delete out.overnight;
   }
-  for (const key of [
-    "price",
-    "change",
-    "change_pct",
-    "session",
-    "session_label",
-  ]) {
+  for (const key of ["price", "change", "change_pct"]) {
     if (out[key] == null && prev[key] != null) out[key] = prev[key];
   }
-  return out;
+  return applyClockSession(out);
 }
 
 function renderAiDesk(aiDesk) {
@@ -5998,9 +6031,15 @@ function renderValueChain(vc) {
 }
 
 function renderSectorPicks(data) {
-  const picks = data?.picks || [];
+  const picks = (data?.picks || []).map((p) => applyClockSession(p));
   const selected = data?.selected_symbol || state.sectorSymbol || "";
-  const selectedPick = data?.selected_pick || null;
+  const selectedPick = data?.selected_pick
+    ? applyClockSession(data.selected_pick)
+    : null;
+  if (data) {
+    data.picks = picks;
+    if (selectedPick) data.selected_pick = selectedPick;
+  }
   const sector = data?.active_sector || {};
   const tf = state.sectorTf || "intraday";
   const waveN = (data?.wave_leaders || picks.filter((p) => p.is_wave)).length;
@@ -7523,6 +7562,10 @@ function bootPage() {
       persistPageDataCache();
     });
     trackPageInterval(() => loadSectorDesk(), 90 * 1000);
+    // Keep 盘前/盘中/盘后/夜盘 badges in sync with ET clock between polls.
+    trackPageInterval(() => {
+      if (state.sectors?.picks?.length) renderSectorPicks(state.sectors);
+    }, 30 * 1000);
     // Futures 分时 + strip: fast tape only (keeps 日/月/季 cache intact).
     trackPageInterval(() => {
       if ((state.usFuturesTf || "intraday") === "intraday") {
