@@ -2827,6 +2827,212 @@ html[data-theme="dark"] .desk-chg-row {
   --desk-cols: minmax(16.5rem, 0.92fr) minmax(0, 1.55fr) minmax(16rem, 1fr);
 }
 
+/* US Markets strip + futures charts (above 全板块). */
+.us-markets-pane {
+  border: 1px solid var(--line);
+  border-radius: 18px;
+  background: color-mix(in srgb, var(--elevated-soft) 92%, transparent);
+  padding: 0.75rem 0.8rem 0.9rem;
+  display: grid;
+  gap: 0.65rem;
+}
+
+.us-markets-head h2 {
+  margin: 0;
+  font-size: 1.05rem;
+  font-weight: 750;
+  letter-spacing: -0.02em;
+}
+
+.us-markets-head p {
+  margin: 0.15rem 0 0;
+  color: var(--ink-soft);
+  font-size: 0.78rem;
+}
+
+.us-markets-strip-wrap {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  gap: 0.35rem;
+  align-items: stretch;
+}
+
+.us-markets-nav {
+  width: 1.85rem;
+  border: 1px solid color-mix(in srgb, var(--line) 85%, transparent);
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--panel) 80%, transparent);
+  color: var(--ink-soft);
+  font-size: 1.15rem;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.us-markets-nav:hover {
+  color: var(--ink);
+  border-color: color-mix(in srgb, var(--accent, #2f6f9f) 45%, var(--line));
+}
+
+.us-markets-strip {
+  display: flex;
+  gap: 0.55rem;
+  overflow-x: auto;
+  scroll-snap-type: x proximity;
+  padding: 0.15rem 0.1rem 0.35rem;
+  scrollbar-width: thin;
+}
+
+.us-strip-card {
+  flex: 0 0 auto;
+  scroll-snap-align: start;
+  min-width: 8.6rem;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 0.35rem 0.45rem;
+  align-items: center;
+  padding: 0.45rem 0.55rem;
+  border-radius: 12px;
+  border: 1px solid color-mix(in srgb, var(--line) 75%, transparent);
+  background: color-mix(in srgb, var(--panel) 72%, transparent);
+}
+
+.us-strip-meta {
+  display: grid;
+  gap: 0.1rem;
+  min-width: 0;
+}
+
+.us-strip-name {
+  font-size: 0.68rem;
+  color: var(--ink-soft);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.us-strip-price {
+  font-size: 0.92rem;
+  font-weight: 750;
+  font-variant-numeric: tabular-nums;
+  color: var(--ink);
+}
+
+.us-strip-chg {
+  font-size: 0.72rem;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+
+.us-strip-price.up,
+.us-strip-chg.up {
+  color: #d92b2b;
+}
+
+.us-strip-price.down,
+.us-strip-chg.down {
+  color: var(--signal);
+}
+
+.us-strip-spark {
+  width: 3.4rem;
+  height: 1.7rem;
+  display: block;
+}
+
+.us-futures-toolbar {
+  display: flex;
+  justify-content: flex-end;
+}
+
+.us-futures-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 0.65rem;
+}
+
+.us-futures-card {
+  border: 1px solid color-mix(in srgb, var(--line) 70%, transparent);
+  border-radius: 14px;
+  background: color-mix(in srgb, var(--panel) 65%, transparent);
+  padding: 0.55rem 0.6rem 0.65rem;
+  display: grid;
+  gap: 0.4rem;
+  min-width: 0;
+}
+
+.us-futures-card-head {
+  display: flex;
+  justify-content: space-between;
+  gap: 0.5rem;
+  align-items: flex-start;
+}
+
+.us-futures-card-head h3 {
+  margin: 0;
+  font-size: 0.95rem;
+  font-weight: 750;
+  letter-spacing: -0.01em;
+}
+
+.us-futures-sub {
+  margin: 0.12rem 0 0;
+  font-size: 0.68rem;
+  color: var(--ink-soft);
+}
+
+.us-futures-quote {
+  text-align: right;
+  display: grid;
+  gap: 0.08rem;
+}
+
+.us-futures-price {
+  font-size: 1rem;
+  font-weight: 750;
+  font-variant-numeric: tabular-nums;
+}
+
+.us-futures-chg {
+  font-size: 0.72rem;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+
+.us-futures-price.up,
+.us-futures-chg.up {
+  color: #d92b2b;
+}
+
+.us-futures-price.down,
+.us-futures-chg.down {
+  color: var(--signal);
+}
+
+.us-futures-canvas {
+  min-height: 11.5rem;
+}
+
+.us-futures-card .chart-zoom-stage > svg,
+.us-futures-card .chart-canvas > svg {
+  width: 100%;
+  height: 200px;
+  min-height: 170px;
+  display: block;
+}
+
+@media (max-width: 1100px) {
+  .us-futures-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+html[data-theme="dark"] .us-markets-pane,
+html[data-theme="dark"] .us-strip-card,
+html[data-theme="dark"] .us-futures-card {
+  background: rgba(12, 20, 32, 0.55);
+  border-color: rgba(148, 163, 184, 0.16);
+}
+
 .sector-map-pane {
   border: 1px solid var(--line);
   border-radius: 18px;
