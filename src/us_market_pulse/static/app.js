@@ -657,6 +657,45 @@ function renderSessionIntradaySvg(
   const fill = up ? TAPE_UP_SOFT : TAPE_DOWN_SOFT;
   const muted = themeMutedFill();
   const grid = "rgba(148,163,184,0.28)";
+  // Yahoo-style extended-hours bands (avoid red/green so they never clash with tape).
+  const PRE_OPEN = 9 * 60 + 30;
+  const POST_OPEN = 16 * 60;
+  const xPre0 = xOfMins(YAHOO_DAY_START_MINS);
+  const xPre1 = xOfMins(PRE_OPEN);
+  const xPost0 = xOfMins(POST_OPEN);
+  const xPost1 = xOfMins(YAHOO_DAY_END_MINS);
+  const preW = Math.max(0, xPre1 - xPre0);
+  const postW = Math.max(0, xPost1 - xPost0);
+  const ghostId = `g${Date.now().toString(36)}${Math.floor(Math.random() * 1e4)}`;
+  const prePat = `preGhost-${ghostId}`;
+  const postPat = `postGhost-${ghostId}`;
+  const sessionBands = `
+    <defs>
+      <pattern id="${prePat}" width="5" height="5" patternUnits="userSpaceOnUse" patternTransform="rotate(28)">
+        <circle cx="1" cy="1" r="0.55" fill="rgba(96,140,196,0.38)"></circle>
+      </pattern>
+      <pattern id="${postPat}" width="5" height="5" patternUnits="userSpaceOnUse" patternTransform="rotate(-28)">
+        <circle cx="1" cy="1" r="0.55" fill="rgba(156,120,210,0.38)"></circle>
+      </pattern>
+    </defs>
+    <g class="session-bands" aria-hidden="true">
+      <rect class="band-pre" x="${xPre0.toFixed(2)}" y="${padTop}" width="${preW.toFixed(
+        2
+      )}" height="${plotH.toFixed(
+        2
+      )}" fill="rgba(70,120,190,0.13)"></rect>
+      <rect class="band-pre-ghost" x="${xPre0.toFixed(2)}" y="${padTop}" width="${preW.toFixed(
+        2
+      )}" height="${plotH.toFixed(2)}" fill="url(#${prePat})"></rect>
+      <rect class="band-post" x="${xPost0.toFixed(2)}" y="${padTop}" width="${postW.toFixed(
+        2
+      )}" height="${plotH.toFixed(
+        2
+      )}" fill="rgba(140,105,200,0.13)"></rect>
+      <rect class="band-post-ghost" x="${xPost0.toFixed(2)}" y="${padTop}" width="${postW.toFixed(
+        2
+      )}" height="${plotH.toFixed(2)}" fill="url(#${postPat})"></rect>
+    </g>`;
 
   const hGrid = [0.2, 0.4, 0.6, 0.8]
     .map((t) => {
@@ -678,14 +717,14 @@ function renderSessionIntradaySvg(
     )}" stroke="${grid}" stroke-width="1" stroke-dasharray="2 3"></line>`;
   }).join("");
 
-  const sessionGuides = [9 * 60 + 30, 16 * 60]
+  const sessionGuides = [PRE_OPEN, POST_OPEN]
     .map((mins) => {
       const x = xOfMins(mins);
       return `<line x1="${x.toFixed(1)}" y1="${padTop}" x2="${x.toFixed(
         1
       )}" y2="${(padTop + plotH).toFixed(
         1
-      )}" stroke="rgba(148,163,184,0.45)" stroke-width="1"></line>`;
+      )}" stroke="rgba(148,163,184,0.55)" stroke-width="1"></line>`;
     })
     .join("");
 
@@ -738,6 +777,7 @@ function renderSessionIntradaySvg(
 
   const html = `
     <svg class="session-intraday-svg yahoo-intraday-svg" viewBox="0 0 ${width} ${height}" preserveAspectRatio="none" role="img" aria-label="Yahoo 1D 分时">
+      ${sessionBands}
       ${hGrid}
       ${vGrid}
       ${sessionGuides}
