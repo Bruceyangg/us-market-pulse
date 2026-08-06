@@ -4044,6 +4044,48 @@ html[data-theme="dark"] .sector-pick-list .sector-hold-btn.is-held:hover {
   opacity: 0.8;
 }
 
+.chart-live-refresh {
+  appearance: none;
+  border: 1px solid color-mix(in srgb, #2563eb 55%, var(--line));
+  border-radius: 999px;
+  background: linear-gradient(180deg, #3b82f6, #2563eb);
+  color: #fff;
+  font-size: 0.68rem;
+  font-weight: 750;
+  letter-spacing: 0.04em;
+  line-height: 1;
+  min-width: 2.6rem;
+  height: 1.65rem;
+  padding: 0 0.7rem;
+  cursor: pointer;
+  box-shadow: 0 1px 0 rgba(37, 99, 235, 0.35);
+  transition: filter 0.15s ease, transform 0.15s ease, opacity 0.15s ease;
+}
+
+.chart-live-refresh:hover {
+  filter: brightness(1.06);
+}
+
+.chart-live-refresh:active {
+  transform: translateY(1px);
+}
+
+.chart-live-refresh.is-hidden {
+  display: none;
+}
+
+.chart-live-refresh.is-busy,
+.chart-live-refresh:disabled {
+  opacity: 0.72;
+  cursor: wait;
+}
+
+html[data-theme="dark"] .chart-live-refresh {
+  border-color: color-mix(in srgb, #60a5fa 40%, var(--line));
+  background: linear-gradient(180deg, #3b82f6, #1d4ed8);
+  box-shadow: 0 1px 0 rgba(59, 130, 246, 0.28);
+}
+
 .session-intraday-svg text,
 .yahoo-intraday-svg text,
 .candle-ohlc-svg text {
