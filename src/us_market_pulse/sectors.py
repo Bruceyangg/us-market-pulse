@@ -2904,17 +2904,22 @@ async def build_sector_desk(
         if str(row.get("symbol") or "").upper() == str(selected or "").upper():
             selected_name = str(row.get("name") or "") or None
             break
+    # Keep desk TTFB low: short GN wait, then instant intel-match fallback.
+    # Timed-out GN task keeps running so the next click can hit cache.
+    news_task = asyncio.create_task(
+        _hydrate_sector_symbol_news(
+            news_items,
+            topic_id=topic_key,
+            sector_label=str((active or {}).get("label") or sector_id or ""),
+            selected_symbol=str(selected or ""),
+            selected_name=selected_name,
+            force=force,
+        )
+    )
     try:
         sector_news_slim, selected_symbol_news = await asyncio.wait_for(
-            _hydrate_sector_symbol_news(
-                news_items,
-                topic_id=topic_key,
-                sector_label=str((active or {}).get("label") or sector_id or ""),
-                selected_symbol=str(selected or ""),
-                selected_name=selected_name,
-                force=force,
-            ),
-            timeout=8.0,
+            asyncio.shield(news_task),
+            timeout=2.8,
         )
     except asyncio.TimeoutError:
         sector_news_slim = [
