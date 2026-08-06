@@ -158,8 +158,8 @@ def derive_list_realtime(
 
     - 盘中: same as day quote
     - 盘前: last pre print vs previous close
-    - 盘后/夜盘: last extended print vs regular close (not full-day % vs prev close)
-    - 夜盘: CNBC ExtendedMktQuote (last post/overnight print); never invent tape ticks
+    - 盘后: last post print vs regular close (CNBC ExtendedMktQuote)
+    - 夜盘: only true Overnight quote (Yahoo Overnight / overnightMarket*); never 盘后
     """
     sid = session if session in _SESSION_LABELS else "regular"
     pts = [p for p in (tape_points or []) if isinstance(p, dict)]
@@ -195,8 +195,7 @@ def derive_list_realtime(
                 out_change = chg
             if out_pct is None:
                 out_pct = pct
-    elif sid in {"post", "night"}:
-        # 夜盘/盘后 share CNBC extended print vs regular close.
+    elif sid == "post":
         if out_price is None and post_pts:
             out_price = _point_price(post_pts[-1])
         if out_price is not None and (out_pct is None or out_change is None):
@@ -206,7 +205,6 @@ def derive_list_realtime(
                 out_change = chg
             if out_pct is None:
                 out_pct = pct
-        # Drop fake clones of the regular day line (extended == close + same %).
         if (
             out_price is not None
             and day_price is not None
@@ -214,6 +212,23 @@ def derive_list_realtime(
             and out_pct is not None
             and day_change_pct is not None
             and abs(float(out_pct) - float(day_change_pct)) < 1e-6
+        ):
+            out_price = out_change = out_pct = None
+    else:  # night — only accept explicit Overnight numbers (never 盘后 tape/print)
+        if out_price is not None and (out_pct is None or out_change is None):
+            basis = regular_close if regular_close not in (None, 0) else previous_close
+            if basis is None:
+                basis = _parse_number(day_price)
+            chg, pct = _change_vs_basis(out_price, basis)
+            if out_change is None:
+                out_change = chg
+            if out_pct is None:
+                out_pct = pct
+        # Reject clones of the day line or leftover 盘后 masquerading as 夜盘.
+        if (
+            out_price is not None
+            and day_price is not None
+            and abs(float(out_price) - float(day_price)) < 1e-6
         ):
             out_price = out_change = out_pct = None
 
@@ -269,19 +284,22 @@ def _yahoo_meta_extended(
 #   220.29 +1.07 (+0.49%)
 #   Overnight: 10:44:05 PM EDT
 _YAHOO_OVERNIGHT_RE = re.compile(
-    r"(?P<price>\d+(?:\.\d+)?)\s+"
-    r"(?P<change>[+\-]?\d+(?:\.\d+)?)\s+"
-    r"\((?P<pct>[+\-]?\d+(?:\.\d+)?)%\)\s*"
+    r"(?P<price>\d[\d,]*(?:\.\d+)?)\s+"
+    r"(?P<change>[+\-]?\d[\d,]*(?:\.\d+)?)\s+"
+    r"\((?P<pct>[+\-]?\d[\d,]*(?:\.\d+)?)%\)\s*"
     r"(?:Overnight|夜盘)\s*:",
     re.I,
 )
 _YAHOO_CLOSE_RE = re.compile(
-    r"(?P<price>\d+(?:\.\d+)?)\s+"
-    r"(?P<change>[+\-]?\d+(?:\.\d+)?)\s+"
-    r"\((?P<pct>[+\-]?\d+(?:\.\d+)?)%\)\s*"
+    r"(?P<price>\d[\d,]*(?:\.\d+)?)\s+"
+    r"(?P<change>[+\-]?\d[\d,]*(?:\.\d+)?)\s+"
+    r"\((?P<pct>[+\-]?\d[\d,]*(?:\.\d+)?)%\)\s*"
     r"(?:At close|收盘)",
     re.I,
 )
+# Cache true Overnight stamps separately from day quotes (盘后 must not leak in).
+_OVERNIGHT_CACHE: dict[str, dict[str, Any]] = {}
+_OVERNIGHT_TTL = 45.0
 _YAHOO_JSON_RAW_RE = re.compile(
     r'"(?P<key>overnightMarketPrice|overnightMarketChange|'
     r'overnightMarketChangePercent|regularMarketPrice|'
@@ -357,17 +375,27 @@ async def fetch_yahoo_overnight_quote(
     allow_page: bool = True,
     page_timeout: float = 6.0,
     chart_timeout: float = 3.5,
+    bypass_cache: bool = False,
 ) -> dict[str, Any] | None:
     """
-    Yahoo overnight is numeric only (no 夜盘 tape).
+    True Yahoo Overnight (BOATS) — numeric only, distinct from 盘后 postMarket*.
 
-    Only accept true Overnight fields (page box / overnightMarket*).
-    Never reuse postMarket* — that is 盘后 and mismatches Yahoo Overnight.
-    Page scrape is optional: batch list loads should keep allow_page=False.
+    Never reuse postMarket* / CNBC ExtendedMktQuote.
     """
     sym = (symbol or "").strip().upper()
     if not sym:
         return None
+    now = time.time()
+    if not bypass_cache:
+        hit = _OVERNIGHT_CACHE.get(sym)
+        if (
+            isinstance(hit, dict)
+            and now - float(hit.get("at") or 0) < _OVERNIGHT_TTL
+            and isinstance(hit.get("quote"), dict)
+            and hit["quote"].get("rt_price") is not None
+        ):
+            return dict(hit["quote"])
+
     enc = quote(sym, safe="")
     headers = {
         **_yahoo_chart_headers(),
@@ -377,7 +405,7 @@ async def fetch_yahoo_overnight_quote(
     price = change = change_pct = prev = None
     market_state = None
 
-    # Quote page — source of truth for Yahoo "Overnight" numbers (selected only).
+    # Quote page — source of truth for Yahoo "Overnight" box.
     if allow_page:
         page_urls = (
             f"https://finance.yahoo.com/quote/{enc}/",
@@ -404,7 +432,7 @@ async def fetch_yahoo_overnight_quote(
             except Exception:  # noqa: BLE001
                 continue
 
-    # Chart meta: close/prev + rare overnightMarket* (never postMarket*).
+    # Chart meta: overnightMarket* only (never postMarket*).
     if overnight_px is None or price is None or prev is None:
         for host in ("query1", "query2"):
             url = (
@@ -449,6 +477,9 @@ async def fetch_yahoo_overnight_quote(
         change, change_pct = _change_vs_basis(price, prev)
     if overnight_px is None:
         return None
+    # Overnight % is vs regular close, not previous day close.
+    if overnight_pct is None and price not in (None, 0):
+        overnight_chg, overnight_pct = _change_vs_basis(overnight_px, price)
     out: dict[str, Any] = {
         "symbol": sym,
         "price": round(float(price), 2) if price is not None else None,
@@ -458,6 +489,7 @@ async def fetch_yahoo_overnight_quote(
         "source": "yahoo",
         "session": "night",
         "session_label": "夜盘",
+        "overnight": True,
         "market_state": market_state,
         "rt_price": round(float(overnight_px), 2),
     }
@@ -465,17 +497,23 @@ async def fetch_yahoo_overnight_quote(
         out["rt_change"] = round(float(overnight_chg), 4)
     if overnight_pct is not None:
         out["rt_change_pct"] = round(float(overnight_pct), 3)
+    _OVERNIGHT_CACHE[sym] = {"at": time.time(), "quote": dict(out)}
     return out
 
 
 def _stamp_night_session(quotes: dict[str, dict[str, Any]]) -> None:
-    """Force 夜盘 badge; keep CNBC/Yahoo extended RT when present."""
+    """Force 夜盘 badge; drop 盘后 RT unless marked true Overnight."""
     for sym, row in list(quotes.items()):
         if not isinstance(row, dict):
             continue
         base = dict(row)
         base["session"] = "night"
         base["session_label"] = "夜盘"
+        # Never show CNBC/Webull 盘后 as 夜盘.
+        if not base.get("overnight"):
+            base.pop("rt_price", None)
+            base.pop("rt_change", None)
+            base.pop("rt_change_pct", None)
         quotes[sym] = base
 
 
@@ -489,7 +527,7 @@ async def overlay_yahoo_overnight_quotes(
     deadline_s: float = 5.0,
     allow_page: bool = True,
 ) -> dict[str, dict[str, Any]]:
-    """Optional Yahoo Overnight enrich; never wipe CNBC extended 夜盘 RT."""
+    """Stamp true Yahoo Overnight onto quotes; never keep 盘后 as 夜盘."""
     import asyncio
 
     sem = asyncio.Semaphore(max(1, concurrency))
@@ -508,10 +546,14 @@ async def overlay_yahoo_overnight_quotes(
             base = dict(quotes.get(sym) or {})
             base["session"] = "night"
             base["session_label"] = "夜盘"
-            # CNBC ExtendedMktQuote already filled — skip Yahoo.
-            if base.get("rt_price") is not None:
+            if base.get("overnight") and base.get("rt_price") is not None:
                 quotes[sym] = base
                 return
+            # Clear any 盘后 RT before attempting Overnight.
+            base.pop("rt_price", None)
+            base.pop("rt_change", None)
+            base.pop("rt_change_pct", None)
+            base["overnight"] = False
             row = await fetch_yahoo_overnight_quote(
                 client,
                 sym,
@@ -531,6 +573,7 @@ async def overlay_yahoo_overnight_quotes(
                 if row.get(key) is not None:
                     base[key] = row[key]
             base["source"] = "yahoo"
+            base["overnight"] = True
             quotes[sym] = base
 
     if not uniq:
@@ -557,9 +600,25 @@ def apply_list_quote_fields(
     for key in ("session", "session_label"):
         if quote.get(key) is not None:
             row[key] = quote[key]
-    for key in ("rt_price", "rt_change", "rt_change_pct"):
-        if quote.get(key) is not None:
-            row[key] = quote[key]
+    night = str(quote.get("session") or row.get("session") or "") == "night"
+    if night:
+        if quote.get("overnight"):
+            for key in ("rt_price", "rt_change", "rt_change_pct"):
+                if quote.get(key) is not None:
+                    row[key] = quote[key]
+            row["overnight"] = True
+        else:
+            # Do not keep 盘后 % under a 夜盘 label.
+            row.pop("rt_price", None)
+            row.pop("rt_change", None)
+            row.pop("rt_change_pct", None)
+            row.pop("overnight", None)
+    else:
+        for key in ("rt_price", "rt_change", "rt_change_pct"):
+            if quote.get(key) is not None:
+                row[key] = quote[key]
+        if "overnight" in quote:
+            row["overnight"] = quote.get("overnight")
     return row
 
 
@@ -577,17 +636,16 @@ def _with_session_and_realtime(
     base["session"] = sid
     base["session_label"] = label
 
-    # CNBC ExtendedMktQuote covers 盘前/盘后; at 夜盘 reuse last extended print.
-    use_extended = isinstance(extended, dict) and sid in {"pre", "post", "night"}
+    # CNBC ExtendedMktQuote is 盘前/盘后 only — never treat POST_MKT as 夜盘.
+    use_extended = isinstance(extended, dict) and sid in {"pre", "post"}
     rt_price = _parse_number(extended.get("last")) if use_extended else None
     rt_change = _parse_number(extended.get("change")) if use_extended else None
     rt_pct = _parse_pct(extended.get("change_pct")) if use_extended else None
 
-    # Normalize extended % to the session basis so vendors never leak full-day %.
     if rt_price is not None:
         if sid == "pre":
             chg, pct = _change_vs_basis(rt_price, base.get("previous_close"))
-        elif sid in {"post", "night"}:
+        elif sid == "post":
             chg, pct = _change_vs_basis(rt_price, base.get("price"))
         else:
             chg, pct = None, None
@@ -610,6 +668,9 @@ def _with_session_and_realtime(
         for key in ("rt_price", "rt_change", "rt_change_pct"):
             if key not in rt_fields:
                 base.pop(key, None)
+        base.pop("overnight", None)
+    else:
+        base["overnight"] = False
     base.update(rt_fields)
     return base
 
@@ -827,52 +888,47 @@ async def fetch_day_quotes(
                 quotes[sym] = row
                 _DAY_QUOTE_CACHE[sym] = {"at": stamped_at, "quote": dict(row)}
 
-    # 夜盘: CNBC ExtendedMktQuote is the primary RT source (Yahoo optional).
+    # 夜盘: only Yahoo Overnight (BOATS). Never CNBC 盘后.
     if session_from_clock()[0] == "night" and quotes:
         _stamp_night_session(quotes)
-        need_rt = [
+        # None → try listed symbols; [] → skip (ETF strip).
+        if overnight_priority is None:
+            candidates = list(uniq)
+        else:
+            candidates = [
+                str(x).upper().strip()
+                for x in overnight_priority
+                if str(x).strip()
+            ]
+        need_on = [
             s
-            for s in uniq
-            if s in quotes and quotes[s].get("rt_price") is None
+            for s in candidates
+            if s in quotes and not (quotes[s].get("overnight") and quotes[s].get("rt_price") is not None)
         ]
-        if need_rt:
+        if need_on:
             async with httpx.AsyncClient(
-                follow_redirects=True, trust_env=False
+                follow_redirects=True,
+                trust_env=False,
+                headers=_yahoo_chart_headers(),
+                timeout=httpx.Timeout(8.0, connect=3.0),
             ) as client:
-                refill = await fetch_cnbc_quotes(client, need_rt)
-                stamped_at = time.time()
-                for sym, row in refill.items():
-                    quotes[sym] = row
-                    _DAY_QUOTE_CACHE[sym] = {"at": stamped_at, "quote": dict(row)}
+                await overlay_yahoo_overnight_quotes(
+                    client,
+                    quotes,
+                    need_on,
+                    concurrency=4,
+                    limit=min(12, len(need_on)),
+                    deadline_s=10.0,
+                    allow_page=True,
+                )
                 _stamp_night_session(quotes)
-                # Optional Yahoo only for still-missing priority symbols.
-                still = [
-                    s
-                    for s in (
-                        list(need_rt)
-                        if overnight_priority is None
-                        else [str(x).upper() for x in (overnight_priority or [])]
-                    )
-                    if s in quotes and quotes[s].get("rt_price") is None
-                ]
-                if still:
-                    await overlay_yahoo_overnight_quotes(
-                        client,
-                        quotes,
-                        still,
-                        concurrency=2,
-                        limit=min(2, len(still)),
-                        deadline_s=4.0,
-                        allow_page=False,
-                    )
-                    _stamp_night_session(quotes)
-                    stamped_at = time.time()
-                    for sym in still:
-                        if sym in quotes:
-                            _DAY_QUOTE_CACHE[sym] = {
-                                "at": stamped_at,
-                                "quote": dict(quotes[sym]),
-                            }
+                stamped_at = time.time()
+                for sym in need_on:
+                    if sym in quotes:
+                        _DAY_QUOTE_CACHE[sym] = {
+                            "at": stamped_at,
+                            "quote": dict(quotes[sym]),
+                        }
     return quotes
 
 
