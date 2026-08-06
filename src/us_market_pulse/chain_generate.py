@@ -14,12 +14,27 @@ from us_market_pulse.chains import _co, _panel
 
 
 _CACHE: dict[str, tuple[float, dict[str, Any]]] = {}
-_CACHE_TTL = 6 * 60 * 60
+_CACHE_TTL = 30 * 60  # shorter: new IPOs (e.g. SPCX) should surface faster
+_CACHE_VER = "v3"
 _WS = re.compile(r"[\s\-_/·•,+]+")
 
 
 def _norm(text: str) -> str:
     return _WS.sub("", (text or "").strip().lower())
+
+
+# Extra English search seeds for common Chinese industry phrases.
+QUERY_SEARCH_ALIASES: dict[str, list[str]] = {
+    "太空ai": ["SPCX", "SpaceX", "Starlink", "space AI"],
+    "太空": ["SPCX", "SpaceX", "Starlink", "space"],
+    "航天": ["SPCX", "SpaceX", "aerospace"],
+    "星链": ["SPCX", "Starlink", "SpaceX"],
+    "spacex": ["SPCX", "SpaceX"],
+    "人工智能": ["NVDA", "artificial intelligence", "AI chip"],
+    "新能源车": ["EV", "electric vehicle", "TSLA"],
+    "网络安全": ["cybersecurity", "CRWD"],
+    "人形机器人": ["humanoid robot", "robotics"],
+}
 
 
 # Theme packs compose into a panorama when keywords hit.
@@ -34,18 +49,46 @@ THEME_PACKS: list[dict[str, Any]] = [
             "火箭",
             "宇航",
             "星链",
+            "spacex",
+            "spcx",
             "space",
             "satellite",
             "rocket",
             "aerospace",
             "orbit",
-            "spacex",
+            "starlink",
         ],
-        "search_terms": ["space satellite", "aerospace", "rocket launch"],
+        "search_terms": [
+            "SPCX",
+            "SpaceX",
+            "Starlink",
+            "space satellite",
+            "aerospace",
+            "rocket launch",
+        ],
+        # Always inject — covers mega-cap / fresh IPOs Yahoo search may miss.
+        "must_include": [
+            _co("SPCX", "SpaceX", note="发射 / Starlink / AI · Nasdaq"),
+            _co("RKLB", "Rocket Lab", note="小卫星发射"),
+            _co("ASTS", "AST SpaceMobile", note="太空手机直连"),
+        ],
         "support_nodes": ["发射与运载", "卫星制造"],
         "core_nodes": ["卫星通信", "对地观测"],
         "app_nodes": ["国防航天", "商业太空服务"],
         "panels": [
+            _panel(
+                "flagship",
+                "太空龙头",
+                tone="core",
+                branch="flagship",
+                blurb="链上核心上市公司（含新上市）",
+                companies=[
+                    _co("SPCX", "SpaceX", note="发射 / Starlink / AI"),
+                    _co("RKLB", "Rocket Lab", note="小卫星发射"),
+                    _co("ASTS", "AST SpaceMobile", note="太空蜂窝"),
+                    _co("PL", "Planet Labs", note="对地观测"),
+                ],
+            ),
             _panel(
                 "launch",
                 "发射 / 运载",
@@ -53,6 +96,7 @@ THEME_PACKS: list[dict[str, Any]] = [
                 branch="launch",
                 blurb="火箭发射与可复用运载",
                 companies=[
+                    _co("SPCX", "SpaceX", note="可复用运载龙头"),
                     _co("RKLB", "Rocket Lab", note="小卫星发射"),
                     _co("BA", "波音", note="航天与防务"),
                     _co("LMT", "洛克希德马丁", note="运载与防务", sector="industrials"),
@@ -67,6 +111,7 @@ THEME_PACKS: list[dict[str, Any]] = [
                 branch="sat_mfg",
                 blurb="卫星平台、载荷与组件",
                 companies=[
+                    _co("SPCX", "SpaceX", note="星链卫星量产"),
                     _co("ASTS", "AST SpaceMobile", note="太空手机直连"),
                     _co("PL", "Planet Labs", note="对地观测星座"),
                     _co("LUNR", "Intuitive Machines", note="月球着陆"),
@@ -81,6 +126,7 @@ THEME_PACKS: list[dict[str, Any]] = [
                 branch="satcom",
                 blurb="宽带、物联网与直连手机",
                 companies=[
+                    _co("SPCX", "SpaceX", note="Starlink 宽带"),
                     _co("ASTS", "AST SpaceMobile", note="太空蜂窝"),
                     _co("IRDM", "Iridium", note="全球卫星通信"),
                     _co("GSAT", "Globalstar", note="物联网 / Apple 合作"),
@@ -105,6 +151,7 @@ THEME_PACKS: list[dict[str, Any]] = [
                 tone="app",
                 branch="defense",
                 companies=[
+                    _co("SPCX", "SpaceX", note="国家安全发射 / 星盾"),
                     _co("LMT", "洛克希德马丁", note="导弹与航天", sector="industrials"),
                     _co("NOC", "诺斯罗普格鲁曼", note="太空系统", sector="industrials"),
                     _co("RTX", "RTX", note="传感器 / 防务", sector="industrials"),
@@ -118,9 +165,21 @@ THEME_PACKS: list[dict[str, Any]] = [
                 tone="app",
                 branch="space_svc",
                 companies=[
+                    _co("SPCX", "SpaceX", note="发射即服务 / 星链"),
                     _co("RKLB", "Rocket Lab", note="发射即服务"),
                     _co("SPCE", "维珍银河", note="太空旅游"),
                     _co("RDW", "Redwire", note="在轨基础设施"),
+                ],
+            ),
+            _panel(
+                "spacex_etf",
+                "SpaceX 相关工具",
+                tone="app",
+                branch="spacex_etf",
+                blurb="跟踪 / 杠杆工具（波动更大）",
+                companies=[
+                    _co("SPCH", "2x Long SPCX", note="2x 做多 SpaceX ETF"),
+                    _co("SPAX", "T-REX 2X SPCX", note="2x 做多 SpaceX ETF"),
                 ],
             ),
         ],
@@ -402,7 +461,7 @@ def match_themes(query: str) -> list[dict[str, Any]]:
 
 
 def _merge_unique_companies(
-    items: list[dict[str, Any]], *, limit: int = 8
+    items: list[dict[str, Any]], *, limit: int = 12
 ) -> list[dict[str, Any]]:
     seen: set[str] = set()
     out: list[dict[str, Any]] = []
@@ -417,6 +476,10 @@ def _merge_unique_companies(
     return out
 
 
+def clear_chain_cache() -> None:
+    _CACHE.clear()
+
+
 def _yahoo_headers() -> dict[str, str]:
     return {
         "User-Agent": (
@@ -429,7 +492,7 @@ def _yahoo_headers() -> dict[str, str]:
     }
 
 
-async def _yahoo_search(term: str, *, limit: int = 12) -> list[dict[str, Any]]:
+async def _yahoo_search(term: str, *, limit: int = 20) -> list[dict[str, Any]]:
     q = (term or "").strip()
     if not q:
         return []
@@ -441,7 +504,7 @@ async def _yahoo_search(term: str, *, limit: int = 12) -> list[dict[str, Any]]:
         "quotesCount": str(limit),
         "newsCount": "0",
         "listsCount": "0",
-        "enableFuzzyQuery": "false",
+        "enableFuzzyQuery": "true",
     }
     try:
         async with httpx.AsyncClient(
@@ -488,7 +551,9 @@ def compose_from_themes(query: str, themes: list[dict[str, Any]]) -> dict[str, A
     panels: list[dict[str, Any]] = []
     seen_panel: set[str] = set()
 
+    must_include: list[dict[str, Any]] = []
     for theme in themes:
+        must_include.extend(theme.get("must_include") or [])
         for i, name in enumerate(theme.get("support_nodes") or []):
             support_nodes.append({"id": f"{theme['id']}_s{i}", "label": name})
         for i, name in enumerate(theme.get("core_nodes") or []):
@@ -505,7 +570,7 @@ def compose_from_themes(query: str, themes: list[dict[str, Any]]) -> dict[str, A
                             existing["companies"] = _merge_unique_companies(
                                 (existing.get("companies") or [])
                                 + (panel.get("companies") or []),
-                                limit=10,
+                                limit=12,
                             )
                             break
                 continue
@@ -517,6 +582,23 @@ def compose_from_themes(query: str, themes: list[dict[str, Any]]) -> dict[str, A
                 }
             )
 
+    # Pin must-include names (fresh IPOs / mega names) into the first panels.
+    if must_include and panels:
+        pinned = _merge_unique_companies(must_include, limit=8)
+        panels[0]["companies"] = _merge_unique_companies(
+            pinned + (panels[0].get("companies") or []), limit=12
+        )
+        # Also ensure they appear in any panel already listing peers.
+        for panel in panels[1:]:
+            have = {str(c.get("symbol") or "").upper() for c in (panel.get("companies") or [])}
+            inject = [c for c in pinned if c["symbol"] not in have and c["symbol"] in {
+                "SPCX", "NVDA", "TSM", "TSLA"
+            }]
+            if inject:
+                panel["companies"] = _merge_unique_companies(
+                    inject + (panel.get("companies") or []), limit=12
+                )
+
     # Cap node pills for readable UI.
     support_nodes = support_nodes[:4] or [{"id": "support_generic", "label": "上游支撑"}]
     core_nodes = core_nodes[:4] or [{"id": "core_generic", "label": "中游核心"}]
@@ -526,7 +608,10 @@ def compose_from_themes(query: str, themes: list[dict[str, Any]]) -> dict[str, A
     return {
         "id": f"gen_{slug}",
         "label": title,
-        "blurb": f"根据「{query.strip()}」自动组合主题包并检索美股生成的全景逻辑图（可继续细化）。",
+        "blurb": (
+            f"根据「{query.strip()}」自动组合主题包并检索美股生成；"
+            "含新上市龙头时会优先置顶，但并非交易所全量行情库。"
+        ),
         "generated": True,
         "themes": [t.get("id") for t in themes],
         "top_flow": [
@@ -615,16 +700,20 @@ def _generic_skeleton(query: str) -> dict[str, Any]:
 async def enrich_with_yahoo(chain: dict[str, Any], query: str) -> dict[str, Any]:
     themes = chain.get("themes") or []
     terms: list[str] = []
+    raw = query.strip()
+    # Alias seeds first (e.g. 太空AI → SPCX / SpaceX).
+    terms.extend(QUERY_SEARCH_ALIASES.get(_norm(raw), []))
     # Prefer English search terms from matched themes + original query.
     for theme in THEME_PACKS:
         if theme.get("id") in themes:
             terms.extend(theme.get("search_terms") or [])
-    # Translate-ish: append latin tokens from query and a couple of english guesses.
-    raw = query.strip()
+            for co in theme.get("must_include") or []:
+                sym = str(co.get("symbol") or "")
+                if sym:
+                    terms.append(sym)
     if re.search(r"[A-Za-z]", raw):
         terms.insert(0, raw)
     else:
-        # Chinese query → add theme english terms already; also try raw for Yahoo CN/EN mix.
         terms.append(raw)
     # Dedupe terms
     uniq_terms: list[str] = []
@@ -635,11 +724,11 @@ async def enrich_with_yahoo(chain: dict[str, Any], query: str) -> dict[str, Any]
             continue
         seen_t.add(key)
         uniq_terms.append(t.strip())
-        if len(uniq_terms) >= 4:
+        if len(uniq_terms) >= 8:
             break
 
     results = await asyncio.gather(
-        *[_yahoo_search(t, limit=10) for t in uniq_terms], return_exceptions=True
+        *[_yahoo_search(t, limit=16) for t in uniq_terms], return_exceptions=True
     )
     found: list[dict[str, Any]] = []
     for item in results:
@@ -687,7 +776,7 @@ async def generate_chain(query: str) -> dict[str, Any] | None:
     q = (query or "").strip()
     if not q:
         return None
-    cache_key = _norm(q)
+    cache_key = f"{_CACHE_VER}:{_norm(q)}"
     now = time.time()
     cached = _CACHE.get(cache_key)
     if cached and now - cached[0] < _CACHE_TTL:
