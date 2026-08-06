@@ -7417,7 +7417,6 @@ html.pulse-native-app .portfolio-body .sector-hold-btn {
 .chains-mm-link.tone-app { stroke: #e0893a; }
 
 .chains-mm-root,
-.chains-mm-flow,
 .chains-mm-stages {
   position: relative;
   z-index: 1;
@@ -7449,47 +7448,6 @@ html.pulse-native-app .portfolio-body .sector-hold-btn {
   font-size: 1.02rem;
   font-weight: 800;
   color: var(--ink);
-}
-
-.chains-mm-flow {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  flex-wrap: wrap;
-  gap: 0.4rem;
-  margin: 0 auto 0.95rem;
-}
-
-.chains-mm-flow-box {
-  padding: 0.28rem 0.7rem;
-  border-radius: 999px;
-  font-size: 0.72rem;
-  font-weight: 750;
-  border: 1px solid transparent;
-}
-
-.chains-mm-flow-box.tone-support {
-  color: #147a52;
-  background: color-mix(in srgb, #22a06b 14%, var(--panel));
-  border-color: color-mix(in srgb, #22a06b 38%, var(--line));
-}
-
-.chains-mm-flow-box.tone-core {
-  color: #1f5fbf;
-  background: color-mix(in srgb, #2f7cf6 14%, var(--panel));
-  border-color: color-mix(in srgb, #2f7cf6 38%, var(--line));
-}
-
-.chains-mm-flow-box.tone-app {
-  color: #b35d12;
-  background: color-mix(in srgb, #e0893a 14%, var(--panel));
-  border-color: color-mix(in srgb, #e0893a 38%, var(--line));
-}
-
-.chains-mm-flow-arrow {
-  color: #c9a227;
-  font-weight: 800;
-  font-size: 0.95rem;
 }
 
 .chains-mm-stages {
@@ -7574,13 +7532,10 @@ button.chains-mm-leaf:hover {
   border-color: color-mix(in srgb, #e0893a 36%, var(--line));
 }
 
-html[data-theme="dark"] .chains-mm-stage.tone-support .chains-mm-stage-label,
-html[data-theme="dark"] .chains-mm-flow-box.tone-support { color: #5fd4a2; }
+html[data-theme="dark"] .chains-mm-stage.tone-support .chains-mm-stage-label { color: #5fd4a2; }
 html[data-theme="dark"] .chains-mm-stage.tone-core .chains-mm-stage-label,
-html[data-theme="dark"] .chains-mm-flow-box.tone-core,
 html[data-theme="dark"] .chains-mm-root-kicker { color: #7eb6ff; }
-html[data-theme="dark"] .chains-mm-stage.tone-app .chains-mm-stage-label,
-html[data-theme="dark"] .chains-mm-flow-box.tone-app { color: #f0b06a; }
+html[data-theme="dark"] .chains-mm-stage.tone-app .chains-mm-stage-label { color: #f0b06a; }
 
 .chains-panel.is-flash {
   outline: 2px solid color-mix(in srgb, #2f7cf6 55%, transparent);
