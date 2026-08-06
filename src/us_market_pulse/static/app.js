@@ -526,10 +526,20 @@ function formatPriceTick(v) {
 const INTRADAY_VB = {
   width: 360,
   height: 188,
-  padL: 8,
-  padR: 44,
-  padTop: 10,
-  padBottom: 22,
+  padL: 6,
+  padR: 30,
+  padTop: 8,
+  padBottom: 18,
+};
+
+/** Shared day/month/quarter candle geometry (holdings + sectors). */
+const CANDLE_VB = {
+  width: 360,
+  height: 168,
+  padL: 6,
+  padR: 30,
+  padTop: 8,
+  padBottom: 10,
 };
 
 function formatBeijingCrosshairTime(ts) {
@@ -717,19 +727,20 @@ function renderSessionIntradaySvg(
 
   const timeLabels = YAHOO_TIME_TICKS.map((mins) => {
     const x = xOfMins(mins);
-    return `<text x="${x.toFixed(1)}" y="${(height - 6).toFixed(
+    return `<text x="${x.toFixed(1)}" y="${(height - 4).toFixed(
       1
-    )}" text-anchor="middle" fill="${muted}" font-size="8">${escapeHtml(
+    )}" text-anchor="middle" fill="${muted}" font-size="6.2">${escapeHtml(
       formatEtClockLabel(mins)
     )}</text>`;
   }).join("");
 
+  // Park price labels at the far right so the plot can use a narrower padR.
   const priceTicks = [max, (max + min) / 2, min].map((v, i) => {
     const y = yOf(v);
     const anchor = i === 0 ? "hanging" : i === 2 ? "auto" : "middle";
-    return `<text x="${(width - 6).toFixed(1)}" y="${y.toFixed(
+    return `<text x="${(width - 1.5).toFixed(1)}" y="${y.toFixed(
       1
-    )}" text-anchor="end" dominant-baseline="${anchor}" fill="${muted}" font-size="8.5">${escapeHtml(
+    )}" text-anchor="end" dominant-baseline="${anchor}" fill="${muted}" font-size="6.4">${escapeHtml(
       formatPriceTick(v)
     )}</text>`;
   }).join("");
@@ -741,9 +752,9 @@ function renderSessionIntradaySvg(
         ).toFixed(2)}" y2="${yOf(prev).toFixed(
           2
         )}" stroke="rgba(148,163,184,0.75)" stroke-width="1" stroke-dasharray="4 3"></line>
-        <text x="${(padL + 4).toFixed(1)}" y="${(yOf(prev) - 3).toFixed(
+        <text x="${(padL + 3).toFixed(1)}" y="${(yOf(prev) - 2.5).toFixed(
           1
-        )}" fill="${muted}" font-size="7.5">昨收 ${escapeHtml(
+        )}" fill="${muted}" font-size="6.2">昨收 ${escapeHtml(
           formatPriceTick(prev)
         )}</text>`
       : "";
@@ -818,19 +829,19 @@ function renderCandleSvg(
   points,
   { showMa = false, viewStart = 0, viewEnd = null } = {}
 ) {
-  const width = 320;
-  const height = 150;
-  const padX = 8;
-  const padY = 10;
+  const { width, height, padL, padR, padTop, padBottom } = CANDLE_VB;
+  const plotW = width - padL - padR;
+  const plotH = height - padTop - padBottom;
+  const muted = themeMutedFill();
   const bars = sanitizeCandleBars(points);
   if (bars.length < 2) {
-    return `<svg viewBox="0 0 ${width} ${height}" role="img" aria-label="暂无K线"><text x="16" y="78" fill="${themeMutedFill()}" font-size="13">暂无K线数据</text></svg>`;
+    return `<svg viewBox="0 0 ${width} ${height}" role="img" aria-label="暂无K线"><text x="16" y="78" fill="${muted}" font-size="11">暂无K线数据</text></svg>`;
   }
   const end = viewEnd == null ? bars.length : Math.min(bars.length, viewEnd);
   const start = clamp(viewStart, 0, Math.max(0, end));
   const viewBars = bars.slice(start, end);
   if (viewBars.length < 2) {
-    return `<svg viewBox="0 0 ${width} ${height}" role="img" aria-label="暂无K线"><text x="16" y="78" fill="${themeMutedFill()}" font-size="13">暂无K线数据</text></svg>`;
+    return `<svg viewBox="0 0 ${width} ${height}" role="img" aria-label="暂无K线"><text x="16" y="78" fill="${muted}" font-size="11">暂无K线数据</text></svg>`;
   }
 
   const closes = bars.map((b) => Number(b.c));
@@ -847,10 +858,10 @@ function renderCandleSvg(
   const min = Math.min(...lows, ...(maVals.length ? maVals : [Infinity]));
   const max = Math.max(...highs, ...(maVals.length ? maVals : [-Infinity]));
   const span = max - min || 1;
-  const slot = (width - padX * 2) / viewBars.length;
+  const slot = plotW / viewBars.length;
   const bodyW = Math.max(1.8, Math.min(8, slot * 0.68));
   const wickW = Math.max(1.2, Math.min(2.2, bodyW * 0.45));
-  const yOf = (price) => padY + (1 - (price - min) / span) * (height - padY * 2);
+  const yOf = (price) => padTop + (1 - (price - min) / span) * plotH;
 
   const shapes = viewBars
     .map((b, i) => {
@@ -860,7 +871,7 @@ function renderCandleSvg(
       const c = Number(b.c);
       const up = c >= o;
       const color = up ? TAPE_UP : TAPE_DOWN;
-      const x = padX + i * slot + slot / 2;
+      const x = padL + i * slot + slot / 2;
       const yHigh = yOf(h);
       const yLow = yOf(l);
       const yOpen = yOf(o);
@@ -891,7 +902,7 @@ function renderCandleSvg(
           started = false;
           return;
         }
-        const x = padX + i * slot + slot / 2;
+        const x = padL + i * slot + slot / 2;
         const y = yOf(v);
         d += `${started ? "L" : "M"}${x.toFixed(2)},${y.toFixed(2)} `;
         started = true;
@@ -899,16 +910,27 @@ function renderCandleSvg(
       if (!d) return "";
       return `<path d="${d.trim()}" fill="none" stroke="${
         m.color
-      }" stroke-width="1.35" stroke-linecap="round" stroke-linejoin="round" opacity="0.92"></path>`;
+      }" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round" opacity="0.9"></path>`;
     })
     .join("");
 
+  const priceTicks = [max, (max + min) / 2, min].map((v, i) => {
+    const y = yOf(v);
+    const anchor = i === 0 ? "hanging" : i === 2 ? "auto" : "middle";
+    return `<text x="${(width - 1.5).toFixed(1)}" y="${y.toFixed(
+      1
+    )}" text-anchor="end" dominant-baseline="${anchor}" fill="${muted}" font-size="6.4">${escapeHtml(
+      formatPriceTick(v)
+    )}</text>`;
+  }).join("");
+
   return `
-    <svg viewBox="0 0 ${width} ${height}" preserveAspectRatio="none" role="img" aria-label="K线柱状图 红涨绿跌${
+    <svg class="candle-ohlc-svg" viewBox="0 0 ${width} ${height}" preserveAspectRatio="none" role="img" aria-label="K线柱状图 红涨绿跌${
       showMa ? " 含均线" : ""
     }">
       ${shapes}
       ${maPaths}
+      ${priceTicks}
     </svg>
   `;
 }
