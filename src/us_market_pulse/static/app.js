@@ -46,6 +46,7 @@ const state = {
   sectorPrefetchTimer: null,
   usMarkets: null,
   usFuturesTf: "intraday",
+  usMarketsPollBusy: false,
   earnings: null,
   earningsDate: "",
   earningsSession: "all",
@@ -6428,6 +6429,8 @@ function renderUsMarketsDesk(data) {
 
 async function loadUsMarketsDesk({ force = false } = {}) {
   if (PAGE !== "sectors") return null;
+  if (state.usMarketsPollBusy) return null;
+  state.usMarketsPollBusy = true;
   try {
     const res = await fetch(
       `/api/us-markets${force ? "?refresh=true" : ""}`
@@ -6446,6 +6449,8 @@ async function loadUsMarketsDesk({ force = false } = {}) {
       )}</p>`;
     }
     return null;
+  } finally {
+    state.usMarketsPollBusy = false;
   }
 }
 
@@ -6946,12 +6951,12 @@ function bootPage() {
       persistPageDataCache();
     });
     trackPageInterval(() => loadSectorDesk(), 90 * 1000);
-    // Futures 分时 + strip: poll near backend us-markets TTL (~2s).
+    // Futures 分时 + strip: match stock 分时 cadence (~0.5s).
     trackPageInterval(() => {
       if ((state.usFuturesTf || "intraday") === "intraday") {
         loadUsMarketsDesk({ force: true });
       }
-    }, 2000);
+    }, 500);
     trackPageInterval(() => {
       if ((state.usFuturesTf || "intraday") !== "intraday") {
         loadUsMarketsDesk({ force: false });
