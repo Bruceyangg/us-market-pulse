@@ -625,7 +625,8 @@ _SYM_CACHE: dict[str, Any] = {}
 _SYM_TTL = 180.0
 # Shared holdings/sectors 分时 poll — short TTL so Yahoo-like tape stays fresh
 _INTRADAY_SNAP_CACHE: dict[str, Any] = {}
-_INTRADAY_SNAP_TTL = 1.5
+# Match FE 分时 poll (~0.5–1s); still coalesces bursts.
+_INTRADAY_SNAP_TTL = 0.75
 
 
 def _pick_has_chart(row: dict[str, Any] | None) -> bool:
