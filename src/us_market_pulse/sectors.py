@@ -32,9 +32,7 @@ from us_market_pulse.quotes import (
     fetch_nasdaq_daily_bars,
     fetch_nasdaq_intraday,
     fetch_nasdaq_intraday_many,
-    fetch_yahoo_overnight_quote,
     peek_overnight_quote,
-    _schedule_overnight_refresh,
     resolve_list_session,
     session_from_clock,
 )
