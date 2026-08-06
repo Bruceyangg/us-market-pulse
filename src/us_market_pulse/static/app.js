@@ -44,6 +44,8 @@ const state = {
   sectorSymbol: "",
   sectorTf: "intraday",
   sectorPrefetchTimer: null,
+  usMarkets: null,
+  usFuturesTf: "intraday",
   earnings: null,
   earningsDate: "",
   earningsSession: "all",
@@ -125,6 +127,12 @@ const els = {
   hotSectorsBlurb: document.getElementById("hot-sectors-blurb"),
   sectorMapBlurb: document.getElementById("sector-map-blurb"),
   sectorMapCanvas: document.getElementById("sector-map-canvas"),
+  usMarketsBlurb: document.getElementById("us-markets-blurb"),
+  usMarketsStrip: document.getElementById("us-markets-strip"),
+  usMarketsStripPrev: document.getElementById("us-markets-strip-prev"),
+  usMarketsStripNext: document.getElementById("us-markets-strip-next"),
+  usFuturesTfFilters: document.getElementById("us-futures-tf-filters"),
+  usFuturesGrid: document.getElementById("us-futures-grid"),
   sectorEtfGrid: document.getElementById("sector-etf-grid"),
   sectorPicksTitle: document.getElementById("sector-picks-title"),
   sectorPicksBlurb: document.getElementById("sector-picks-blurb"),
@@ -5923,9 +5931,208 @@ async function loadSectorDesk({ force = false } = {}) {
   }
 }
 
+function usStripSparkHtml(row) {
+  const pts = (row?.points || [])
+    .map((p) => Number(p?.v ?? p?.c))
+    .filter((n) => Number.isFinite(n));
+  if (pts.length < 2) return "";
+  const w = 56;
+  const h = 28;
+  const min = Math.min(...pts);
+  const max = Math.max(...pts);
+  const span = max - min || 1;
+  const step = (w - 2) / (pts.length - 1);
+  const d = pts
+    .map((v, i) => {
+      const x = 1 + i * step;
+      const y = 1 + (1 - (v - min) / span) * (h - 2);
+      return `${i === 0 ? "M" : "L"}${x.toFixed(1)},${y.toFixed(1)}`;
+    })
+    .join(" ");
+  const up = pts[pts.length - 1] >= pts[0];
+  const stroke = up ? TAPE_UP : TAPE_DOWN;
+  return `<svg class="us-strip-spark" viewBox="0 0 ${w} ${h}" preserveAspectRatio="none" aria-hidden="true"><path d="${d}" fill="none" stroke="${stroke}" stroke-width="1.2" vector-effect="non-scaling-stroke"></path></svg>`;
+}
+
+function renderUsMarketsStrip(strip) {
+  if (!els.usMarketsStrip) return;
+  const rows = strip || [];
+  if (!rows.length) {
+    els.usMarketsStrip.innerHTML = '<p class="empty">暂无美国市场行情</p>';
+    return;
+  }
+  els.usMarketsStrip.innerHTML = rows
+    .map((row) => {
+      const pct = row.change_pct;
+      const cls = pctClass(pct);
+      return `
+        <article class="us-strip-card ${cls}" data-us-sym="${escapeHtml(
+          row.symbol || ""
+        )}">
+          <div class="us-strip-meta">
+            <span class="us-strip-name">${escapeHtml(row.label || row.short || "")}</span>
+            <span class="us-strip-price ${cls}">${escapeHtml(
+              row.price == null ? "—" : formatNumber(row.price, "")
+            )}</span>
+            <span class="us-strip-chg ${cls}">${escapeHtml(pctText(pct))}</span>
+          </div>
+          ${usStripSparkHtml(row)}
+        </article>
+      `;
+    })
+    .join("");
+}
+
+function renderUsFuturesCharts() {
+  if (!els.usFuturesGrid) return;
+  const data = state.usMarkets || {};
+  const futures = data.futures || [];
+  const tf = state.usFuturesTf || "intraday";
+  if (els.usFuturesTfFilters) {
+    els.usFuturesTfFilters.querySelectorAll("[data-uftf]").forEach((btn) => {
+      const on = btn.getAttribute("data-uftf") === tf;
+      btn.classList.toggle("is-active", on);
+      btn.setAttribute("aria-selected", on ? "true" : "false");
+    });
+  }
+  if (!futures.length) {
+    els.usFuturesGrid.innerHTML = '<p class="empty">暂无指数期货走势</p>';
+    return;
+  }
+  els.usFuturesGrid.innerHTML = futures
+    .map((fut) => {
+      const id = String(fut.id || fut.symbol || "").toLowerCase();
+      const resolved = resolveSectorChartSeries(fut, tf);
+      const series = resolved.series;
+      const points = resolved.points;
+      const kind = resolved.kind;
+      const pct =
+        series?.change_pct != null
+          ? series.change_pct
+          : fut.change_pct;
+      const up = !(typeof pct === "number" && pct < 0);
+      return `
+        <article class="us-futures-card" data-fut-id="${escapeHtml(id)}">
+          <div class="us-futures-card-head">
+            <div>
+              <h3>${escapeHtml(fut.short || fut.label || fut.symbol || "")}</h3>
+              <p class="us-futures-sub">${escapeHtml(fut.label || "")} · ${escapeHtml(
+                fut.symbol || ""
+              )}</p>
+            </div>
+            <div class="us-futures-quote">
+              <span class="us-futures-price ${up ? "up" : "down"}">${escapeHtml(
+                fut.price == null ? "—" : formatNumber(fut.price, "")
+              )}</span>
+              <span class="us-futures-chg ${up ? "up" : "down"}">${escapeHtml(
+                pctText(pct)
+              )}</span>
+            </div>
+          </div>
+          <div class="chart-canvas us-futures-canvas" data-zoom-host="us-fut-${escapeHtml(
+            id
+          )}" data-fut-key="${escapeHtml(id)}"></div>
+          ${
+            points.length < 2
+              ? `<p class="chart-placeholder">暂无${escapeHtml(
+                  { intraday: "分时", day: "日图", month: "月图", quarter: "季图" }[
+                    tf
+                  ] || "走势"
+                )}数据</p>`
+              : ""
+          }
+        </article>
+      `;
+    })
+    .join("");
+
+  futures.forEach((fut) => {
+    const id = String(fut.id || fut.symbol || "").toLowerCase();
+    const host = els.usFuturesGrid.querySelector(`[data-fut-key="${id}"]`);
+    if (!host) return;
+    const resolved = resolveSectorChartSeries(fut, tf);
+    const points = resolved.points;
+    if (points.length < 2) return;
+    const series = resolved.series;
+    const kind = resolved.kind;
+    const pct =
+      series?.change_pct != null ? series.change_pct : fut.change_pct;
+    const up = !(typeof pct === "number" && pct < 0);
+    bindZoomableChart(host, {
+      key: `us-fut-${id}`,
+      scope: `${fut.symbol || id}:${tf}`,
+      points,
+      tf,
+      kind,
+      up,
+      sessions: series?.sessions || null,
+      previousClose: series?.previous_close ?? null,
+      cycleStart: series?.cycle_start ?? null,
+    });
+  });
+}
+
+function renderUsMarketsDesk(data) {
+  state.usMarkets = data || null;
+  if (els.usMarketsBlurb) {
+    const n = (data?.futures || []).length;
+    const src = data?.source || "Yahoo";
+    els.usMarketsBlurb.textContent = `${src}${
+      data?.cached ? " · 缓存" : ""
+    }${n ? ` · ${n} 条期货主连` : ""}`;
+  }
+  renderUsMarketsStrip(data?.strip || []);
+  renderUsFuturesCharts();
+}
+
+async function loadUsMarketsDesk({ force = false } = {}) {
+  if (PAGE !== "sectors") return null;
+  try {
+    const res = await fetch(
+      `/api/us-markets${force ? "?refresh=true" : ""}`
+    );
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const data = await res.json();
+    renderUsMarketsDesk(data);
+    return data;
+  } catch (err) {
+    if (els.usMarketsBlurb) {
+      els.usMarketsBlurb.textContent = `美国市场加载失败：${err.message || err}`;
+    }
+    if (els.usMarketsStrip) {
+      els.usMarketsStrip.innerHTML = `<p class="empty">加载失败：${escapeHtml(
+        String(err.message || err)
+      )}</p>`;
+    }
+    return null;
+  }
+}
+
+function bindUsMarketsDesk() {
+  if (PAGE !== "sectors") return;
+  els.usMarketsStripPrev?.addEventListener("click", () => {
+    els.usMarketsStrip?.scrollBy({ left: -240, behavior: "smooth" });
+  });
+  els.usMarketsStripNext?.addEventListener("click", () => {
+    els.usMarketsStrip?.scrollBy({ left: 240, behavior: "smooth" });
+  });
+  els.usFuturesTfFilters?.querySelectorAll("[data-uftf]").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      const tf = btn.getAttribute("data-uftf");
+      if (!tf || tf === state.usFuturesTf) return;
+      state.usFuturesTf = tf;
+      renderUsFuturesCharts();
+    });
+  });
+}
+
 function bindSectorDesk() {
   if (PAGE !== "sectors") return;
-  els.sectorsRefresh?.addEventListener("click", () => loadSectorDesk({ force: true }));
+  bindUsMarketsDesk();
+  els.sectorsRefresh?.addEventListener("click", () => {
+    loadSectorDesk({ force: true });
+    loadUsMarketsDesk({ force: true });
+  });
   els.sectorTfFilters?.querySelectorAll("[data-stf]").forEach((btn) => {
     btn.addEventListener("click", () => {
       const tf = btn.getAttribute("data-stf");
@@ -6383,6 +6590,7 @@ function bootPage() {
       setStatus("已恢复板块缓存 · 后台刷新中…");
     }
     bindSectorDesk();
+    loadUsMarketsDesk();
     refreshHoldingSymbols().finally(() =>
       loadSectorDesk().then(() => {
         if (state.sectorTf === "intraday") refreshActiveIntraday();
@@ -6392,6 +6600,7 @@ function bootPage() {
       })
     );
     trackPageInterval(() => loadSectorDesk(), 90 * 1000);
+    trackPageInterval(() => loadUsMarketsDesk(), 90 * 1000);
     trackPageInterval(() => refreshActiveIntraday(), 1000);
   } else if (PAGE === "earnings") {
     bindEarningsDesk();
