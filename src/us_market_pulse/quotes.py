@@ -105,14 +105,36 @@ def session_from_status(status: str | None = None) -> tuple[str, str]:
 def resolve_list_session(
     status: str | None = None,
 ) -> tuple[str, str]:
-    """List badge session: clock wins at 夜盘 so vendors don't stick on 盘后."""
+    """List badge session: ET clock is authoritative.
+
+    Vendors often stick on PRE_MKT / POST_MKT after the bell; never let that
+    override 盘中 / 夜盘. Extended quotes still feed rt_* via derive_list_realtime.
+    """
     clock_sid, clock_label = session_from_clock()
-    if clock_sid == "night":
-        return clock_sid, clock_label
-    key = str(status or "").upper().strip().replace(" ", "_")
-    if key in _CNBC_SESSION_MAP:
-        return _CNBC_SESSION_MAP[key]
+    # Clock always wins — 盘前/盘中/盘后/夜盘 follow America/New_York time.
+    _ = status  # retained for call-site compatibility
     return clock_sid, clock_label
+
+
+def restamp_list_session(row: dict[str, Any] | None) -> dict[str, Any] | None:
+    """Force session badge + regular-hours RT onto a pick/holding row."""
+    if not isinstance(row, dict):
+        return row
+    sid, label = session_from_clock()
+    row["session"] = sid
+    row["session_label"] = label
+    if sid == "regular":
+        # 盘中: realtime line mirrors the day tape.
+        if row.get("rt_price") is None and row.get("price") is not None:
+            row["rt_price"] = row.get("price")
+        if row.get("rt_change") is None and row.get("change") is not None:
+            row["rt_change"] = row.get("change")
+        if row.get("rt_change_pct") is None and row.get("change_pct") is not None:
+            row["rt_change_pct"] = row.get("change_pct")
+        row.pop("overnight", None)
+    elif sid != "night":
+        row.pop("overnight", None)
+    return row
 
 
 def _change_vs_basis(
