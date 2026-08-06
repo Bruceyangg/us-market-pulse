@@ -269,12 +269,14 @@ async def api_sectors(
     sector: str | None = Query(default=None),
     symbol: str | None = Query(default=None),
 ) -> dict[str, Any]:
-    # Soft-warm intel cache when empty so keyword fallbacks still work.
+    # Never block the desk on a full intel RSS refresh — peek + background warm.
     # Sector/symbol cards primarily use on-demand Google News in build_sector_desk.
-    items = peek_intel_items()
+    items = peek_intel_items() or []
     if not items:
-        intel = await refresh_intel(force=False)
-        items = intel.get("items") or []
+        try:
+            asyncio.get_running_loop().create_task(refresh_intel(force=False))
+        except RuntimeError:
+            pass
     desk = await build_sector_desk(
         items,
         force=refresh,
@@ -302,9 +304,19 @@ async def api_sectors_map(refresh: bool = Query(default=False)) -> dict[str, Any
 
 
 @app.get("/api/us-markets")
-async def api_us_markets(refresh: bool = Query(default=False)) -> dict[str, Any]:
-    """US markets strip + NQ/ES/YM futures charts for the sectors page."""
-    return await build_us_markets_desk(force=refresh)
+async def api_us_markets(
+    refresh: bool = Query(default=False),
+    mode: str = Query(default="full"),
+) -> dict[str, Any]:
+    """US markets strip + NQ/ES/YM futures charts for the sectors page.
+
+    mode=tape: refresh strip + 分时 only, preserve cached 日/月/季.
+    mode=full: rebuild all timeframes (first load / TF upgrade).
+    """
+    m = (mode or "full").strip().lower()
+    if m not in {"full", "tape"}:
+        m = "full"
+    return await build_us_markets_desk(force=refresh, mode=m)
 
 
 @app.get("/api/earnings")
