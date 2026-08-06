@@ -671,14 +671,14 @@ async def fetch_intraday_snapshot(
         headers=yahoo_headers,
         follow_redirects=True,
         trust_env=False,
-        timeout=httpx.Timeout(2.2, connect=1.0),
+        timeout=httpx.Timeout(4.0, connect=2.0),
     ) as client:
-        # Fast path: Nasdaq only (typical 200–800ms).
+        # Fast path: Nasdaq only (typical 200–800ms; allow more in 盘前).
         nd = None
         try:
             nd = await asyncio.wait_for(
                 fetch_nasdaq_intraday(client, sym, max_points=480),
-                timeout=2.0,
+                timeout=3.5,
             )
         except Exception:  # noqa: BLE001
             nd = None
@@ -765,6 +765,42 @@ async def fetch_intraday_snapshot(
     day_change_pct = change_pct if isinstance(change_pct, (int, float)) else None
     prev_num = prev_close if isinstance(prev_close, (int, float)) else None
 
+    # During 盘前/盘后, Nasdaq lastSale is the extended print — pull the day
+    # quote so 收盘 + 盘前% match Yahoo (vs last regular close).
+    day_q: dict[str, Any] | None = None
+    if sid in {"pre", "post", "night"}:
+        try:
+            from us_market_pulse.quotes import fetch_day_quotes
+
+            day_map = await fetch_day_quotes([sym])
+            day_q = day_map.get(sym) if isinstance(day_map, dict) else None
+        except Exception:  # noqa: BLE001
+            day_q = None
+        if isinstance(day_q, dict):
+            if day_q.get("price") is not None:
+                price = day_q.get("price")
+                day_price = price if isinstance(price, (int, float)) else day_price
+            if day_q.get("change") is not None:
+                change = day_q.get("change")
+                day_change = change if isinstance(change, (int, float)) else day_change
+            if day_q.get("change_pct") is not None:
+                change_pct = day_q.get("change_pct")
+                day_change_pct = (
+                    change_pct
+                    if isinstance(change_pct, (int, float))
+                    else day_change_pct
+                )
+            if day_q.get("previous_close") is not None:
+                prev_close = day_q.get("previous_close")
+                prev_num = (
+                    prev_close if isinstance(prev_close, (int, float)) else prev_num
+                )
+            # Chart 昨收 guide = last regular close during 盘前 (Yahoo At close).
+            if sid == "pre" and day_q.get("price") is not None:
+                series_row["previous_close"] = day_q.get("price")
+            elif day_q.get("previous_close") is not None:
+                series_row["previous_close"] = day_q.get("previous_close")
+
     # 夜盘: Yahoo Overnight only (distinct from 盘后). No tape invented.
     if sid == "night":
         rt_fields: dict[str, Any] = {}
@@ -796,6 +832,13 @@ async def fetch_intraday_snapshot(
         # No overnight → leave rt_* empty (show 夜盘: --), never use 盘后.
         if not rt_fields:
             rt_fields = {}
+    elif sid in {"pre", "post"} and isinstance(day_q, dict) and day_q.get("rt_price") is not None:
+        # Trust CNBC/Yahoo extended quote for list RT (synced with Yahoo page).
+        rt_fields = {
+            k: day_q[k]
+            for k in ("rt_price", "rt_change", "rt_change_pct")
+            if day_q.get(k) is not None
+        }
     else:
         rt_fields = derive_list_realtime(
             session=sid,
