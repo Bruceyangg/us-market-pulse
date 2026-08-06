@@ -320,10 +320,13 @@ def _clean_text(value: str | None, limit: int = 280) -> str:
 
 
 async def _fetch_feed(
-    client: httpx.AsyncClient, source: dict[str, str]
+    client: httpx.AsyncClient,
+    source: dict[str, str],
+    *,
+    timeout: float = 20.0,
 ) -> tuple[list[dict[str, Any]], str | None]:
     try:
-        resp = await client.get(source["url"], timeout=20.0)
+        resp = await client.get(source["url"], timeout=timeout)
         resp.raise_for_status()
         parsed = feedparser.parse(resp.content)
     except Exception as exc:  # noqa: BLE001 — surface per-source failures
@@ -460,9 +463,9 @@ async def fetch_google_news(
     async with httpx.AsyncClient(
         headers={"User-Agent": USER_AGENT},
         follow_redirects=True,
-        timeout=20.0,
+        timeout=8.0,
     ) as client:
-        items, _err = await _fetch_feed(client, source)
+        items, _err = await _fetch_feed(client, source, timeout=7.0)
     # _fetch_feed caps at 12; trim further if needed.
     out = list(items or [])[: max(1, min(int(limit), 20))]
     _GN_CACHE[cache_key] = {"fetched_at": now, "items": out}
