@@ -81,8 +81,8 @@ _TF_BARS: dict[str, tuple[str, int]] = {
 }
 
 _CACHE: dict[str, Any] = {"payload": None, "fetched_at": 0.0}
-# Keep futures/strip tape near real-time; FE polls ~1–2s.
-_CACHE_TTL = 2.0
+# Keep futures/strip tape near real-time; FE polls ~0.5s.
+_CACHE_TTL = 0.5
 
 
 def _headers() -> dict[str, str]:
