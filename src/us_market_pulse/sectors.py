@@ -553,12 +553,14 @@ _CACHE_TTL = 180.0
 # Per-sector pick boards (quotes + earnings) — avoids refetch on every symbol click
 _PICKS_CACHE: dict[str, Any] = {}
 _PICKS_TTL = 180.0
+# Serve slightly stale pick boards with a soft quote refresh (SWR).
+_PICKS_STALE_TTL = 900.0
 # Per-symbol Yahoo quote/earnings snippets shared across sectors
 _SYM_CACHE: dict[str, Any] = {}
 _SYM_TTL = 180.0
 # Shared holdings/sectors 分时 poll — short TTL so Yahoo-like tape stays fresh
 _INTRADAY_SNAP_CACHE: dict[str, Any] = {}
-_INTRADAY_SNAP_TTL = 1.0
+_INTRADAY_SNAP_TTL = 1.5
 
 
 def _pick_has_chart(row: dict[str, Any] | None) -> bool:
@@ -774,8 +776,13 @@ async def fetch_intraday_snapshot(
                 trust_env=False,
                 timeout=httpx.Timeout(12.0, connect=3.0),
             ) as yclient:
+                # Page scrape only on explicit refresh — 1s polls must stay light.
                 y_night = await fetch_yahoo_overnight_quote(
-                    yclient, sym, allow_page=True, page_timeout=6.0, chart_timeout=3.0
+                    yclient,
+                    sym,
+                    allow_page=bool(force),
+                    page_timeout=6.0,
+                    chart_timeout=3.0,
                 )
         except Exception:  # noqa: BLE001
             y_night = None
@@ -2339,15 +2346,19 @@ async def build_sector_desk(
     earnings_by_symbol: dict[str, Any] = {}
     picks_key = f"v2:{sector_id}:{'|'.join(pick_symbols)}"
     picks_cached = _PICKS_CACHE.get(sector_id) or {}
-    picks_fresh = (
-        not force
-        and picks_cached.get("key") == picks_key
-        and time.time() - float(picks_cached.get("fetched_at") or 0) < _PICKS_TTL
-        and picks_cached.get("pick_rows")
+    picks_age = time.time() - float(picks_cached.get("fetched_at") or 0)
+    picks_key_ok = picks_cached.get("key") == picks_key and bool(
+        picks_cached.get("pick_rows")
     )
-    if picks_fresh:
+    picks_fresh = not force and picks_key_ok and picks_age < _PICKS_TTL
+    picks_stale_ok = (
+        not force and picks_key_ok and picks_age < _PICKS_STALE_TTL
+    )
+    picks_from_cache = False
+    if picks_fresh or picks_stale_ok:
         pick_rows = [dict(r) for r in picks_cached["pick_rows"]]
         earnings_by_symbol = dict(picks_cached.get("earnings_by_symbol") or {})
+        picks_from_cache = True
 
     selected = (selected_symbol or "").strip().upper()
     universe = {str(s).strip().upper() for s in pick_symbols if str(s).strip()}
@@ -2372,11 +2383,12 @@ async def build_sector_desk(
 
     # Fast path: batch day quotes for the whole list; full multi-TF chart only
     # for the selected symbol (biggest latency win on sector switch).
-    if not picks_fresh and pick_symbols:
+    if not picks_from_cache and pick_symbols:
         # Overnight page scrape only for the selected symbol — never N× Yahoo HTML.
         day_quotes = await fetch_day_quotes(
             pick_symbols,
             overnight_priority=[selected] if selected else [],
+            bypass_cache=force,
         )
         for sym in pick_symbols:
             quote = day_quotes.get(sym)
@@ -2405,19 +2417,45 @@ async def build_sector_desk(
             and selected not in universe
         ):
             selected = pick_rows[0]["symbol"] if pick_rows else selected
+    elif picks_stale_ok and not picks_fresh and pick_symbols:
+        # SWR: reuse boards/charts, soft-refresh day tape only.
+        day_quotes = await fetch_day_quotes(
+            pick_symbols,
+            overnight_priority=[selected] if selected else [],
+        )
+        for row in pick_rows:
+            sym = str(row.get("symbol") or "").upper()
+            quote = day_quotes.get(sym)
+            if not quote:
+                continue
+            apply_list_quote_fields(row, quote)
+            if quote.get("price") is not None:
+                row["price"] = quote.get("price")
+            if quote.get("change") is not None:
+                row["change"] = quote.get("change")
+            if quote.get("change_pct") is not None:
+                row["change_pct"] = quote.get("change_pct")
+                row["momentum"] = float(quote["change_pct"] or 0)
 
     # Ensure selected symbol has day/month/quarter (not just list 分时 spark).
-    # Skip per-symbol earnings here — Yahoo quoteSummary can take 20s+ and blocks the desk.
+    # Chart upgrade + list sparks run in parallel — they don't depend on each other.
     selected_pick = next((p for p in pick_rows if p.get("symbol") == selected), None)
-    # Intraday-only rows must still upgrade — otherwise 日/月/季 stay empty.
     need_selected_chart = bool(selected) and not _pick_has_chart(selected_pick)
-    if selected and need_selected_chart:
+    # On a fresh/stale cache hit, keep list sparks as-is — don't re-hit Nasdaq.
+    need_sparks = False
+    if pick_rows and not picks_from_cache:
+        sparked = sum(1 for r in pick_rows[:12] if _spark_points_from_row(r))
+        need_sparks = sparked < min(8, len(pick_rows))
+
+    async def _upgrade_selected_chart() -> None:
+        nonlocal selected_pick
+        if not (selected and need_selected_chart):
+            return
         try:
             async with httpx.AsyncClient(
                 headers=yahoo_headers,
                 follow_redirects=True,
                 trust_env=False,
-                # Nasdaq daily OHLC (~25y) can take a few seconds when Yahoo is blocked
                 timeout=httpx.Timeout(16.0, connect=3.0),
             ) as client:
                 bundle, errs = await asyncio.wait_for(
@@ -2433,6 +2471,9 @@ async def build_sector_desk(
             wave = _momentum_fields(bundle)
             day_pct = bundle.get("change_pct")
             sector_label = (active or {}).get("label") or ""
+            prev_row = next(
+                (p for p in pick_rows if p.get("symbol") == selected), None
+            )
             rich = {
                 **bundle,
                 "name": vc.get("name") or selected,
@@ -2443,7 +2484,8 @@ async def build_sector_desk(
                 "is_wave": wave["is_wave"],
                 "is_strong": wave["is_wave"]
                 or (rs is not None and rs > 0)
-                or float(day_pct or 0) > float((home_etf or {}).get("change_pct") or 0),
+                or float(day_pct or 0)
+                > float((home_etf or {}).get("change_pct") or 0),
                 "sector_id": sector_id,
                 "sector_label": sector_label,
                 "earnings": earnings_by_symbol.get(selected),
@@ -2452,8 +2494,7 @@ async def build_sector_desk(
                 "lite": False,
                 "chart_attempted": True,
             }
-            # Keep 收盘涨跌幅 / 实时涨跌幅 / 时段 from day quote (list UI).
-            apply_list_quote_fields(rich, selected_pick)
+            apply_list_quote_fields(rich, prev_row)
             replaced = False
             for idx, row in enumerate(pick_rows):
                 if row.get("symbol") == selected:
@@ -2471,25 +2512,30 @@ async def build_sector_desk(
             if selected_pick is not None:
                 selected_pick["chart_attempted"] = True
 
-    # List column always shows 24h sparklines (independent of day/month/quarter desk TF).
-    try:
-        async with httpx.AsyncClient(
-            headers=yahoo_headers,
-            follow_redirects=True,
-            trust_env=False,
-            timeout=httpx.Timeout(4.0, connect=2.0),
-        ) as spark_client:
-            await asyncio.wait_for(
-                _hydrate_list_intraday_sparks(
-                    spark_client,
-                    pick_rows,
-                    force=force,
-                    limit=min(12, len(pick_rows) or 1),
-                ),
-                timeout=8.0,
-            )
-    except (asyncio.TimeoutError, httpx.HTTPError):
-        _hydrate_sparks_from_cache(pick_rows)
+    async def _hydrate_sparks() -> None:
+        if not need_sparks:
+            _hydrate_sparks_from_cache(pick_rows)
+            return
+        try:
+            async with httpx.AsyncClient(
+                headers=yahoo_headers,
+                follow_redirects=True,
+                trust_env=False,
+                timeout=httpx.Timeout(4.0, connect=2.0),
+            ) as spark_client:
+                await asyncio.wait_for(
+                    _hydrate_list_intraday_sparks(
+                        spark_client,
+                        pick_rows,
+                        force=force,
+                        limit=min(12, len(pick_rows) or 1),
+                    ),
+                    timeout=8.0,
+                )
+        except (asyncio.TimeoutError, httpx.HTTPError):
+            _hydrate_sparks_from_cache(pick_rows)
+
+    await asyncio.gather(_upgrade_selected_chart(), _hydrate_sparks())
 
     if pick_rows:
         pick_rows.sort(
@@ -2540,7 +2586,12 @@ async def build_sector_desk(
             row["earnings"] = earn
             earnings_by_symbol[sym] = earn
 
-    if selected and not _earnings_has_core(earnings_by_symbol.get(selected)):
+    # Earnings surprise API is slow/flaky — never block warm cache hits on it.
+    if (
+        selected
+        and not picks_from_cache
+        and not _earnings_has_core(earnings_by_symbol.get(selected))
+    ):
         try:
             async with httpx.AsyncClient(
                 headers={
@@ -2549,7 +2600,7 @@ async def build_sector_desk(
                 },
                 follow_redirects=True,
                 trust_env=False,
-                timeout=httpx.Timeout(3.5, connect=2.0),
+                timeout=httpx.Timeout(2.0, connect=1.2),
             ) as client:
                 earn = await asyncio.wait_for(
                     _fetch_earnings_nasdaq(
@@ -2557,7 +2608,7 @@ async def build_sector_desk(
                         selected,
                         upcoming=upcoming_peek.get(selected),
                     ),
-                    timeout=3.5,
+                    timeout=2.0,
                 )
         except (asyncio.TimeoutError, httpx.HTTPError):
             earn = None
@@ -2695,7 +2746,7 @@ async def build_sector_desk(
     return {
         **payload,
         "sectors": [_slim_sector_etf(dict(s)) for s in sectors],
-        "cached": bool(_CACHE["payload"]) and not force,
+        "cached": bool(picks_fresh) and not force,
         "ai_desk": hot_desk,
         "hot_desk": hot_desk,
         "hot_sectors": [s for s in sectors if s.get("is_hot")][:4],
