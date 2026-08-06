@@ -298,7 +298,8 @@ _YAHOO_CLOSE_RE = re.compile(
 )
 # Cache true Overnight stamps separately from day quotes (盘后 must not leak in).
 _OVERNIGHT_CACHE: dict[str, dict[str, Any]] = {}
-_OVERNIGHT_TTL = 45.0
+_OVERNIGHT_TTL = 90.0
+_OVERNIGHT_MISS_TTL = 45.0
 _YAHOO_JSON_RAW_RE = re.compile(
     r'"(?P<key>overnightMarketPrice|overnightMarketChange|'
     r'overnightMarketChangePercent|regularMarketPrice|'
@@ -387,13 +388,14 @@ async def fetch_yahoo_overnight_quote(
     now = time.time()
     if not bypass_cache:
         hit = _OVERNIGHT_CACHE.get(sym)
-        if (
-            isinstance(hit, dict)
-            and now - float(hit.get("at") or 0) < _OVERNIGHT_TTL
-            and isinstance(hit.get("quote"), dict)
-            and hit["quote"].get("rt_price") is not None
+        if isinstance(hit, dict) and now - float(hit.get("at") or 0) < (
+            _OVERNIGHT_TTL if hit.get("quote") else _OVERNIGHT_MISS_TTL
         ):
-            return dict(hit["quote"])
+            cached = hit.get("quote")
+            if isinstance(cached, dict) and cached.get("rt_price") is not None:
+                return dict(cached)
+            if cached is None:
+                return None
 
     enc = quote(sym, safe="")
     headers = {
@@ -406,25 +408,25 @@ async def fetch_yahoo_overnight_quote(
 
     # Quote page — source of truth for Yahoo "Overnight" box (not 盘后).
     # Direct Yahoo often 403 from cloud IPs; jina reader is a BOATS-safe fallback.
+    # Keep page attempts tiny: one direct + one jina (jina is slow).
     if allow_page:
         page_urls = (
             f"https://finance.yahoo.com/quote/{enc}/",
-            f"https://finance.yahoo.com/quote/{enc}",
             f"https://r.jina.ai/https://finance.yahoo.com/quote/{enc}/",
-            f"https://r.jina.ai/http://finance.yahoo.com/quote/{enc}",
         )
         jina_headers = {
             "User-Agent": USER_AGENT,
             "Accept": "text/markdown,text/plain,*/*",
             "X-Retain-Images": "none",
             "X-Return-Format": "markdown",
+            "X-Timeout": "10",
         }
         for page_url in page_urls:
             try:
                 is_jina = "r.jina.ai" in page_url
                 page = await client.get(
                     page_url,
-                    timeout=max(page_timeout, 12.0) if is_jina else page_timeout,
+                    timeout=min(10.0, max(4.0, page_timeout)) if is_jina else min(4.0, page_timeout),
                     headers=jina_headers if is_jina else headers,
                 )
                 if page.status_code >= 400 or not page.text:
@@ -487,6 +489,7 @@ async def fetch_yahoo_overnight_quote(
     if change_pct is None and price is not None and prev not in (None, 0):
         change, change_pct = _change_vs_basis(price, prev)
     if overnight_px is None:
+        _OVERNIGHT_CACHE[sym] = {"at": time.time(), "quote": None}
         return None
     # Overnight % is vs regular close, not previous day close.
     if overnight_pct is None and price not in (None, 0):
@@ -569,9 +572,8 @@ async def overlay_yahoo_overnight_quotes(
                 client,
                 sym,
                 allow_page=allow_page,
-                # jina fallback needs a longer page budget than direct Yahoo.
-                page_timeout=min(14.0, max(6.0, deadline_s)),
-                chart_timeout=min(3.5, max(1.5, deadline_s / 2)),
+                page_timeout=min(10.0, max(5.0, deadline_s)),
+                chart_timeout=min(2.5, max(1.2, deadline_s / 3)),
             )
             if not row or row.get("rt_price") is None:
                 quotes[sym] = base
@@ -922,15 +924,16 @@ async def fetch_day_quotes(
                 follow_redirects=True,
                 trust_env=False,
                 headers=_yahoo_chart_headers(),
-                timeout=httpx.Timeout(20.0, connect=5.0),
+                timeout=httpx.Timeout(12.0, connect=4.0),
             ) as client:
                 await overlay_yahoo_overnight_quotes(
                     client,
                     quotes,
                     need_on,
-                    concurrency=2,
-                    limit=min(12, len(need_on)),
-                    deadline_s=18.0,
+                    concurrency=1,
+                    # jina is slow — only a few Overnight stamps per request.
+                    limit=min(3, len(need_on)),
+                    deadline_s=12.0,
                     allow_page=True,
                 )
                 _stamp_night_session(quotes)
