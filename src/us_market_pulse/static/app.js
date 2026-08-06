@@ -47,6 +47,8 @@ const state = {
   usMarkets: null,
   usFuturesTf: "intraday",
   usMarketsPollBusy: false,
+  sectorsLoadBusy: false,
+  sectorsLoadSeq: 0,
   earnings: null,
   earningsDate: "",
   earningsSession: "all",
@@ -6203,8 +6205,33 @@ function renderSectorDesk(data) {
   renderSectorPicks(data);
 }
 
+function paintSectorDeskError(message) {
+  const msg = String(message || "加载失败");
+  if (els.sectorPickList && !state.sectors?.picks?.length) {
+    els.sectorPickList.innerHTML = `<p class="empty">成分加载失败：${escapeHtml(
+      msg
+    )} · <button type="button" class="btn ghost btn-compact" data-retry-sectors="1">重试</button></p>`;
+    els.sectorPickList
+      .querySelector("[data-retry-sectors]")
+      ?.addEventListener("click", () => loadSectorDesk({ force: true }));
+  }
+  if (els.aiAnalysisCard && !state.sectors?.hot_desk && !state.sectors?.ai_desk) {
+    els.aiAnalysisCard.innerHTML = `<p class="empty">热点汇总失败：${escapeHtml(
+      msg
+    )}</p>`;
+  }
+  if (els.sectorNewsList && !(state.sectors?.sector_news || []).length) {
+    els.sectorNewsList.innerHTML = `<p class="empty">板块新闻加载失败：${escapeHtml(
+      msg
+    )}</p>`;
+  }
+}
+
 async function loadSectorDesk({ force = false } = {}) {
   if (PAGE !== "sectors") return null;
+  if (state.sectorsLoadBusy && !force) return state.sectors;
+  const seq = ++state.sectorsLoadSeq;
+  state.sectorsLoadBusy = true;
   const params = new URLSearchParams();
   if (state.sectorId) params.set("sector", state.sectorId);
   if (state.sectorSymbol) params.set("symbol", state.sectorSymbol);
@@ -6214,9 +6241,12 @@ async function loadSectorDesk({ force = false } = {}) {
   // Map is independent — never let it delay the constituent list / chart.
   const mapPromise = loadSectorMap({ force }).catch(() => null);
   try {
-    const res = await fetch(`/api/sectors?${params.toString()}`);
+    const res = await fetch(`/api/sectors?${params.toString()}`, {
+      signal: AbortSignal.timeout(22000),
+    });
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     const data = await res.json();
+    if (seq !== state.sectorsLoadSeq) return data;
     if (data?.active_sector_id) sectorCachePut(data.active_sector_id, data);
     // Keep previously upgraded picks / 分时 when the new payload is still lite
     // or arrives with day/month candles but an empty intraday series.
@@ -6273,10 +6303,15 @@ async function loadSectorDesk({ force = false } = {}) {
     void mapPromise;
     return data;
   } catch (err) {
-    setStatus(`板块加载失败：${err.message || err}`);
+    if (seq === state.sectorsLoadSeq) {
+      const msg = err?.name === "TimeoutError" ? "请求超时" : err.message || err;
+      setStatus(`板块加载失败：${msg}`);
+      paintSectorDeskError(msg);
+    }
     void mapPromise;
     return null;
   } finally {
+    if (seq === state.sectorsLoadSeq) state.sectorsLoadBusy = false;
     if (els.sectorsRefresh) els.sectorsRefresh.disabled = false;
   }
 }
@@ -6437,23 +6472,61 @@ function renderUsMarketsDesk(data) {
   renderUsFuturesCharts();
 }
 
-async function loadUsMarketsDesk({ force = false } = {}) {
+function mergeUsMarketsPayload(prev, next) {
+  if (!prev?.futures?.length || !next?.futures?.length) return next;
+  const prevBy = Object.fromEntries(
+    prev.futures.map((f) => [String(f.id || f.symbol || "").toLowerCase(), f])
+  );
+  next.futures = next.futures.map((fut) => {
+    const key = String(fut.id || fut.symbol || "").toLowerCase();
+    const old = prevBy[key];
+    if (!old) return fut;
+    const series = { ...(old.series || {}) };
+    Object.entries(fut.series || {}).forEach(([tf, row]) => {
+      if ((row?.points || []).length >= 2) series[tf] = row;
+    });
+    return {
+      ...old,
+      ...fut,
+      series,
+      points: fut.points?.length ? fut.points : old.points,
+      lite: false,
+    };
+  });
+  if ((!next.strip || !next.strip.length) && prev.strip?.length) {
+    next.strip = prev.strip;
+  }
+  return next;
+}
+
+function futuresTfReady(tf) {
+  const want = tf || state.usFuturesTf || "intraday";
+  return (state.usMarkets?.futures || []).some(
+    (f) => ((f.series || {})[want]?.points || []).length >= 2
+  );
+}
+
+async function loadUsMarketsDesk({ force = false, mode = "full" } = {}) {
   if (PAGE !== "sectors") return null;
-  if (state.usMarketsPollBusy && !force) return null;
+  if (state.usMarketsPollBusy && !force) return state.usMarkets;
   state.usMarketsPollBusy = true;
   try {
-    const res = await fetch(
-      `/api/us-markets${force ? "?refresh=true" : ""}`
-    );
+    const params = new URLSearchParams();
+    params.set("mode", mode === "tape" ? "tape" : "full");
+    if (force) params.set("refresh", "true");
+    const res = await fetch(`/api/us-markets?${params.toString()}`, {
+      signal: AbortSignal.timeout(mode === "tape" ? 12000 : 22000),
+    });
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
-    const data = await res.json();
+    let data = await res.json();
+    data = mergeUsMarketsPayload(state.usMarkets, data);
     renderUsMarketsDesk(data);
     return data;
   } catch (err) {
     if (els.usMarketsBlurb) {
       els.usMarketsBlurb.textContent = `美国市场加载失败：${err.message || err}`;
     }
-    if (els.usMarketsStrip) {
+    if (els.usMarketsStrip && !(state.usMarkets?.strip || []).length) {
       els.usMarketsStrip.innerHTML = `<p class="empty">加载失败：${escapeHtml(
         String(err.message || err)
       )}</p>`;
@@ -6472,6 +6545,9 @@ function bindUsMarketsDesk() {
       if (!tf || tf === state.usFuturesTf) return;
       state.usFuturesTf = tf;
       renderUsFuturesCharts();
+      if (!futuresTfReady(tf)) {
+        void loadUsMarketsDesk({ force: true, mode: "full" });
+      }
     });
   });
 }
@@ -6481,7 +6557,7 @@ function bindSectorDesk() {
   bindUsMarketsDesk();
   els.sectorsRefresh?.addEventListener("click", () => {
     loadSectorDesk({ force: true });
-    loadUsMarketsDesk({ force: true });
+    loadUsMarketsDesk({ force: true, mode: "full" });
   });
   els.sectorTfFilters?.querySelectorAll("[data-stf]").forEach((btn) => {
     btn.addEventListener("click", () => {
@@ -7415,7 +7491,7 @@ function bootPage() {
     }
     bindSectorDesk();
     // Parallel: desk / US markets / hold-tags — never wait on full portfolio quotes.
-    void loadUsMarketsDesk().then(() => persistPageDataCache());
+    void loadUsMarketsDesk({ mode: "full" }).then(() => persistPageDataCache());
     void refreshHoldingSymbols().then(() => {
       if (state.sectors) renderSectorPicks(state.sectors);
     });
@@ -7427,17 +7503,15 @@ function bootPage() {
       persistPageDataCache();
     });
     trackPageInterval(() => loadSectorDesk(), 90 * 1000);
-    // Futures 分时 + strip: match stock 分时 cadence (~0.5s).
+    // Futures 分时 + strip: fast tape only (keeps 日/月/季 cache intact).
     trackPageInterval(() => {
       if ((state.usFuturesTf || "intraday") === "intraday") {
-        loadUsMarketsDesk({ force: true });
+        loadUsMarketsDesk({ force: true, mode: "tape" });
       }
-    }, 500);
+    }, 1500);
     trackPageInterval(() => {
-      if ((state.usFuturesTf || "intraday") !== "intraday") {
-        loadUsMarketsDesk({ force: false });
-      }
-    }, 60 * 1000);
+      loadUsMarketsDesk({ force: false, mode: "full" });
+    }, 90 * 1000);
     trackPageInterval(() => refreshHoldingSymbols({ force: true }), 120 * 1000);
     trackPageInterval(() => refreshActiveIntraday(), 500);
   } else if (PAGE === "earnings") {
