@@ -38,6 +38,7 @@ from us_market_pulse.quotes import (
     fetch_nasdaq_intraday_many,
     peek_overnight_quote,
     resolve_list_session,
+    restamp_list_session,
     session_from_clock,
 )
 from us_market_pulse.topics import TOPICS, filter_topic_items, topic_bearish_analysis
@@ -805,25 +806,10 @@ async def fetch_intraday_snapshot(
             return dict(cached["data"])
         return None
 
-    # Badge: ET clock wins at 夜盘; otherwise prefer last tape session.
+    # Badge: ET clock is authoritative (vendors/tape lag stick on 盘前).
     last_pts = list(series_row.get("points") or [])
-    tape_sid = str((last_pts[-1].get("session") if last_pts else "") or "")
     clock_sid, clock_label = session_from_clock()
-    if clock_sid == "night":
-        sid, _label = clock_sid, clock_label
-    elif tape_sid in {"pre", "regular", "post", "night"}:
-        sid = tape_sid
-        _label = {
-            "pre": "盘前",
-            "regular": "盘中",
-            "post": "盘后",
-            "night": "夜盘",
-        }.get(sid, clock_label)
-        # Tape lag: still regular while clock already pre/post.
-        if clock_sid in {"pre", "post"}:
-            sid, _label = clock_sid, clock_label
-    else:
-        sid, _label = resolve_list_session(None)
+    sid, _label = clock_sid, clock_label
 
     prev_close = series_row.get("previous_close")
     day_price = price if isinstance(price, (int, float)) else None
@@ -1153,8 +1139,8 @@ async def _hydrate_list_intraday_sparks(
 
     try:
         nd_map = await asyncio.wait_for(
-            fetch_nasdaq_intraday_many(missing, concurrency=5, max_points=96),
-            timeout=12.0,
+            fetch_nasdaq_intraday_many(missing, concurrency=8, max_points=64),
+            timeout=6.0,
         )
     except (asyncio.TimeoutError, httpx.HTTPError):
         nd_map = {}
@@ -1196,12 +1182,12 @@ async def _hydrate_list_intraday_sparks(
             )
             break
 
-    # Optional Yahoo fill only for stragglers Nasdaq missed (keep short budget)
+    # Optional Yahoo fill only for a few stragglers (hard budget).
     still = [
         str(r.get("symbol") or "").upper()
         for r in pick_rows
         if str(r.get("symbol") or "") and not _spark_points_from_row(r)
-    ][:6]
+    ][:4]
     if not still:
         return
 
@@ -1209,13 +1195,19 @@ async def _hydrate_list_intraday_sparks(
         try:
             pts = await asyncio.wait_for(
                 _fetch_intraday_spark(client, sym, force=force),
-                timeout=2.5,
+                timeout=1.6,
             )
             return sym, pts
         except (asyncio.TimeoutError, httpx.HTTPError):
             return sym, []
 
-    results = await asyncio.gather(*(one(sym) for sym in still))
+    try:
+        results = await asyncio.wait_for(
+            asyncio.gather(*(one(sym) for sym in still)),
+            timeout=2.0,
+        )
+    except asyncio.TimeoutError:
+        results = []
     by_sym = {sym: pts for sym, pts in results if pts}
     for row in pick_rows:
         sym = str(row.get("symbol") or "").upper()
@@ -2784,43 +2776,89 @@ async def build_sector_desk(
                 "fetched_at": cached.get("fetched_at") or time.time(),
             }
 
-    if need_selected_chart and selected:
-        chart_task = asyncio.create_task(_upgrade_selected_chart())
-        # Cold/force: race briefly so first paint often has 分时.
-        # Cache hit: never stall — FE /api/quote/intraday fills the chart.
-        if not picks_from_cache or force:
+    # Chart + list sparks in parallel. Prefer finishing sparks before reply
+    # so the left column isn't blank; chart may continue warming cache.
+    sparked = sum(1 for r in pick_rows[:12] if _spark_points_from_row(r))
+    need_sparks = bool(pick_rows) and sparked < min(8, len(pick_rows))
+    chart_task = (
+        asyncio.create_task(_upgrade_selected_chart())
+        if need_selected_chart and selected
+        else None
+    )
+    sparks_task = None
+    if need_sparks:
+
+        async def _sparks_job() -> None:
             try:
-                await asyncio.wait_for(asyncio.shield(chart_task), timeout=2.0)
+                async with httpx.AsyncClient(
+                    headers=yahoo_headers,
+                    follow_redirects=True,
+                    trust_env=False,
+                    timeout=httpx.Timeout(4.0, connect=2.0),
+                ) as spark_client:
+                    await _hydrate_list_intraday_sparks(
+                        spark_client,
+                        pick_rows,
+                        force=False,
+                        limit=min(12, len(pick_rows) or 1),
+                    )
+            except (asyncio.TimeoutError, httpx.HTTPError):
+                _hydrate_sparks_from_cache(pick_rows)
+
+        sparks_task = asyncio.create_task(_sparks_job())
+
+    waiters = []
+    if chart_task is not None:
+        waiters.append(asyncio.shield(chart_task))
+    if sparks_task is not None:
+        waiters.append(asyncio.shield(sparks_task))
+    if waiters:
+        try:
+            await asyncio.wait_for(
+                asyncio.gather(*waiters, return_exceptions=True),
+                timeout=6.5,
+            )
+        except asyncio.TimeoutError:
+            pass
+    # If sparks still thin, give them a short extra beat before we freeze the list.
+    if sparks_task is not None and not sparks_task.done():
+        sparked_now = sum(1 for r in pick_rows[:12] if _spark_points_from_row(r))
+        if sparked_now < min(6, len(pick_rows)):
+            try:
+                await asyncio.wait_for(asyncio.shield(sparks_task), timeout=2.5)
             except asyncio.TimeoutError:
                 pass
-        # else: task warms _PICKS_CACHE in background
+    _hydrate_sparks_from_cache(pick_rows)
 
-    # Warm list sparks in background when missing.
-    if pick_rows and not picks_from_cache:
-        sparked = sum(1 for r in pick_rows[:12] if _spark_points_from_row(r))
-        if sparked < min(6, len(pick_rows)):
+    async def _persist_sparks_later() -> None:
+        if sparks_task is None:
+            return
+        try:
+            await sparks_task
+        except Exception:  # noqa: BLE001
+            return
+        cached = _PICKS_CACHE.get(sector_id) or {}
+        if not cached.get("pick_rows"):
+            return
+        rows = [dict(r) for r in cached["pick_rows"]]
+        by = {str(r.get("symbol") or "").upper(): r for r in pick_rows}
+        for row in rows:
+            src = by.get(str(row.get("symbol") or "").upper())
+            if not src:
+                continue
+            pts = _spark_points_from_row(src)
+            if pts and not _spark_points_from_row(row):
+                _apply_intraday_spark(row, pts, change_pct=src.get("change_pct"))
+        _PICKS_CACHE[sector_id] = {
+            **cached,
+            "pick_rows": rows,
+        }
 
-            async def _sparks_bg() -> None:
-                try:
-                    async with httpx.AsyncClient(
-                        headers=yahoo_headers,
-                        follow_redirects=True,
-                        trust_env=False,
-                        timeout=httpx.Timeout(4.0, connect=2.0),
-                    ) as spark_client:
-                        await _hydrate_list_intraday_sparks(
-                            spark_client,
-                            [dict(r) for r in pick_rows],
-                            force=False,
-                            limit=min(12, len(pick_rows) or 1),
-                        )
-                except (asyncio.TimeoutError, httpx.HTTPError):
-                    return
-
-            try:
-                asyncio.get_running_loop().create_task(_sparks_bg())
-            except RuntimeError:
-                pass
+    if sparks_task is not None and not sparks_task.done():
+        try:
+            asyncio.get_running_loop().create_task(_persist_sparks_later())
+        except RuntimeError:
+            pass
 
     if pick_rows:
         pick_rows.sort(
@@ -3092,13 +3130,22 @@ async def build_sector_desk(
         ),
     )
 
+    # Clock-authoritative session badges (盘前→盘中→盘后→夜盘) on every response.
+    for row in pick_rows:
+        restamp_list_session(row)
+    if selected_pick is not None:
+        restamp_list_session(selected_pick)
+
     wire_picks = [_slim_pick_row(dict(p), selected) for p in pick_rows]
+    for row in wire_picks:
+        restamp_list_session(row)
     wire_selected = next((p for p in wire_picks if p.get("symbol") == selected), None)
     # Always expose the selected desk chart (full multi-TF or Nasdaq 分时 fallback)
     if selected_pick and (
         _pick_has_chart(selected_pick) or _pick_has_intraday(selected_pick)
     ):
         wire_selected = dict(selected_pick)
+        restamp_list_session(wire_selected)
         wire_picks = [
             wire_selected if p.get("symbol") == selected else p for p in wire_picks
         ]
@@ -3107,6 +3154,8 @@ async def build_sector_desk(
         **payload,
         "sectors": [_slim_sector_etf(dict(s)) for s in sectors],
         "cached": bool(picks_fresh) and not force,
+        "market_session": session_from_clock()[0],
+        "market_session_label": session_from_clock()[1],
         "ai_desk": hot_desk,
         "hot_desk": hot_desk,
         "hot_sectors": [s for s in sectors if s.get("is_hot")][:4],
