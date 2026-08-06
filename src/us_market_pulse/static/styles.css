@@ -475,7 +475,7 @@ html[data-theme="dark"] .holding-intel-sticky {
   padding: 0.7rem 0.75rem;
   border-radius: 12px;
   border: 1px solid var(--line);
-  background: rgba(255, 255, 255, 0.88);
+  background: rgba(148, 163, 184, 0.14);
   text-decoration: none;
   color: inherit;
   min-width: 0;
@@ -489,13 +489,52 @@ html[data-theme="dark"] .holding-intel-sticky {
   box-shadow: var(--shadow);
 }
 
-.holding-intel-card.is-bearish {
-  border-color: rgba(180, 35, 24, 0.18);
-  background: linear-gradient(180deg, rgba(255, 247, 245, 0.96), rgba(255, 255, 255, 0.88));
+/* 信息卡背景：中性灰 / 多红 / 空绿 */
+.holding-intel-card.is-neutral,
+.spotlight-card.is-neutral,
+.story.is-neutral,
+.watch-hit-card.is-neutral,
+.event-card.is-neutral,
+.day-item.is-neutral,
+.driver-item.is-neutral {
+  border-color: rgba(100, 116, 139, 0.22);
+  background: linear-gradient(
+    180deg,
+    rgba(148, 163, 184, 0.2),
+    rgba(148, 163, 184, 0.08)
+  );
 }
 
-.holding-intel-card.is-bullish {
-  border-color: rgba(15, 138, 106, 0.16);
+.holding-intel-card.is-bullish,
+.spotlight-card.is-bullish,
+.story.is-bullish,
+.watch-hit-card.is-bullish,
+.event-card.is-bullish,
+.day-item.is-bullish,
+.driver-item.is-bullish,
+.agenda-card.is-bullish {
+  border-color: rgba(194, 59, 59, 0.28);
+  background: linear-gradient(
+    180deg,
+    rgba(194, 59, 59, 0.16),
+    rgba(194, 59, 59, 0.05)
+  );
+}
+
+.holding-intel-card.is-bearish,
+.spotlight-card.is-bearish,
+.story.is-bearish,
+.watch-hit-card.is-bearish,
+.event-card.is-bearish,
+.day-item.is-bearish,
+.driver-item.is-bearish,
+.agenda-card.is-bearish {
+  border-color: rgba(15, 138, 106, 0.28);
+  background: linear-gradient(
+    180deg,
+    rgba(15, 138, 106, 0.16),
+    rgba(15, 138, 106, 0.05)
+  );
 }
 
 .holding-intel-meta {
@@ -507,7 +546,8 @@ html[data-theme="dark"] .holding-intel-sticky {
   color: var(--ink-soft);
 }
 
-.holding-intel-card h3 {
+.holding-intel-card h3,
+.holding-intel-card .news-title-en {
   margin: 0;
   font-size: 0.9rem;
   line-height: 1.35;
@@ -518,9 +558,9 @@ html[data-theme="dark"] .holding-intel-sticky {
   overflow-wrap: anywhere;
 }
 
-.holding-intel-card .en {
+.holding-intel-card .news-title-zh {
   margin: 0;
-  font-size: 0.76rem;
+  font-size: 0.78rem;
   color: var(--ink-soft);
   line-height: 1.35;
   display: -webkit-box;
@@ -2600,8 +2640,12 @@ html[data-theme="dark"] .desk-chg-row {
   padding: 1rem 1.1rem;
   padding-right: 4.8rem;
   border-radius: var(--radius);
-  border: 1px solid rgba(194, 59, 59, 0.28);
-  background: linear-gradient(90deg, rgba(194, 59, 59, 0.1), rgba(255, 255, 255, 0.55));
+  border: 1px solid rgba(100, 116, 139, 0.22);
+  background: linear-gradient(
+    180deg,
+    rgba(148, 163, 184, 0.18),
+    rgba(148, 163, 184, 0.06)
+  );
   box-shadow: var(--shadow);
   text-decoration: none;
   color: inherit;
@@ -2624,14 +2668,23 @@ html[data-theme="dark"] .desk-chg-row {
   animation: shimmer 1.4s linear infinite;
 }
 
-.spotlight-card h3 {
+.spotlight-card h3,
+.spotlight-card .news-title-en {
   margin: 0;
   font-size: 1.05rem;
   line-height: 1.4;
   font-family: var(--font-display);
 }
 
-.spotlight-card p {
+.spotlight-card .news-title-zh {
+  margin: 0;
+  color: var(--ink-soft);
+  font-size: 0.9rem;
+  line-height: 1.4;
+}
+
+.spotlight-card p,
+.spotlight-card .news-logic {
   margin: 0;
   color: var(--ink-soft);
   font-size: 0.86rem;
@@ -4421,7 +4474,8 @@ html[data-theme="dark"] .chart-zoom .chart-crosshair-tip {
   overflow: hidden;
 }
 
-.spotlight-list.compact .spotlight-card h3 {
+.spotlight-list.compact .spotlight-card h3,
+.spotlight-list.compact .spotlight-card .news-title-en {
   position: relative;
   z-index: 1;
   margin: 0;
@@ -4429,9 +4483,27 @@ html[data-theme="dark"] .chart-zoom .chart-crosshair-tip {
   line-height: 1.35;
   max-height: 2.7em;
   overflow: hidden;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
 }
 
-.spotlight-list.compact .spotlight-card p {
+.spotlight-list.compact .spotlight-card .news-title-zh {
+  position: relative;
+  z-index: 1;
+  margin: 0;
+  font-size: 0.72rem;
+  line-height: 1.35;
+  max-height: 2.7em;
+  overflow: hidden;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  color: var(--ink-soft);
+}
+
+.spotlight-list.compact .spotlight-card p,
+.spotlight-list.compact .spotlight-card .news-logic {
   position: relative;
   z-index: 1;
   margin: 0;
@@ -4448,7 +4520,8 @@ html[data-theme="dark"] .chart-zoom .chart-crosshair-tip {
   transform-origin: top right;
 }
 
-.spotlight-list.compact .story-title-en {
+.spotlight-list.compact .news-logic,
+.spotlight-list.compact .war-card-meta {
   display: none;
 }
 
@@ -4911,18 +4984,19 @@ html[data-theme="dark"] .chart-zoom .chart-crosshair-tip {
   border-color: #b34141;
 }
 
+/* 标签色：红多绿空 */
 .chip.bullish {
-  background: var(--signal-soft);
-  color: var(--signal);
+  background: rgba(194, 59, 59, 0.14);
+  color: #c23b3b;
 }
 
 .chip.bearish {
-  background: rgba(179, 65, 65, 0.12);
-  color: #b34141;
+  background: rgba(15, 138, 106, 0.14);
+  color: #0f8a6a;
 }
 
 .chip.neutral {
-  background: rgba(16, 32, 51, 0.08);
+  background: rgba(100, 116, 139, 0.16);
   color: var(--ink-soft);
 }
 
@@ -4933,11 +5007,11 @@ html[data-theme="dark"] .chart-zoom .chart-crosshair-tip {
 }
 
 .story-sentiment.bullish {
-  color: var(--signal);
+  color: #c23b3b;
 }
 
 .story-sentiment.bearish {
-  color: #b34141;
+  color: #0f8a6a;
 }
 
 .story-sentiment.neutral {
@@ -4991,14 +5065,9 @@ html[data-theme="dark"] .chart-zoom .chart-crosshair-tip {
   transition: transform 0.25s ease;
 }
 
-.agenda-card.is-bearish {
-  border-color: rgba(194, 59, 59, 0.35);
-  background: linear-gradient(180deg, rgba(194, 59, 59, 0.08), rgba(255, 255, 255, 0.7));
-}
-
-.agenda-card.is-bullish {
-  border-color: rgba(15, 138, 106, 0.35);
-  background: linear-gradient(180deg, rgba(15, 138, 106, 0.08), rgba(255, 255, 255, 0.7));
+.agenda-card.is-neutral {
+  border-color: rgba(100, 116, 139, 0.28);
+  background: linear-gradient(180deg, rgba(148, 163, 184, 0.16), rgba(255, 255, 255, 0.7));
 }
 
 .agenda-card:hover {
@@ -5131,11 +5200,40 @@ html[data-theme="dark"] .chart-zoom .chart-crosshair-tip {
   color: var(--sky);
 }
 
-.story-title-en {
-  margin: 0.35rem 0 0;
+.story-title-en,
+.news-title-en {
+  margin: 0;
+  line-height: 1.4;
+}
+
+.story-title-block .news-title-en {
+  font-size: 1.05rem;
+  font-family: var(--font-display);
+}
+
+.story-title-block .news-title-en a {
+  color: inherit;
+  text-decoration: none;
+}
+
+.story-title-zh,
+.news-title-zh {
+  margin: 0.2rem 0 0;
   color: var(--ink-soft);
-  font-size: 0.82rem;
-  line-height: 1.45;
+  font-size: 0.88rem;
+  line-height: 1.4;
+}
+
+span.news-title-en {
+  display: block;
+  font-size: 0.92rem;
+  font-weight: 600;
+  line-height: 1.35;
+}
+
+span.news-title-zh,
+p.news-title-zh {
+  display: block;
 }
 
 .verdict-badge {
@@ -5157,24 +5255,25 @@ html[data-theme="dark"] .chart-zoom .chart-crosshair-tip {
   animation: verdictPop 0.45s ease-out both;
 }
 
-.verdict-badge.verdict-bearish {
+/* 徽章：红多绿空灰中性 */
+.verdict-badge.verdict-bullish {
   background: linear-gradient(135deg, #c23b3b, #8f1f1f);
   box-shadow: 0 6px 16px rgba(179, 65, 65, 0.35);
 }
 
-.verdict-badge.verdict-bearish.is-strong {
+.verdict-badge.verdict-bullish.is-strong {
   padding: 0.35rem 0.75rem;
   font-size: 0.84rem;
   background: linear-gradient(135deg, #e23a3a, #9a1212);
   animation: verdictPop 0.45s ease-out both, bearPulse 1.6s ease-in-out 0.45s infinite;
 }
 
-.verdict-badge.verdict-bullish {
+.verdict-badge.verdict-bearish {
   background: linear-gradient(135deg, #1aa37a, #0c6b50);
   box-shadow: 0 6px 16px rgba(15, 138, 106, 0.28);
 }
 
-.verdict-badge.verdict-bullish.is-strong {
+.verdict-badge.verdict-bearish.is-strong {
   padding: 0.35rem 0.75rem;
   font-size: 0.84rem;
 }
@@ -5205,16 +5304,19 @@ html[data-theme="dark"] .chart-zoom .chart-crosshair-tip {
   }
 }
 
-.story.is-bearish {
+.story.is-bullish {
   border-left: 3px solid #c23b3b;
   padding-left: 0.95rem;
-  background: linear-gradient(90deg, rgba(194, 59, 59, 0.07), transparent 55%);
 }
 
-.story.is-bullish {
-  border-left: 3px solid var(--signal);
+.story.is-bearish {
+  border-left: 3px solid #0f8a6a;
   padding-left: 0.95rem;
-  background: linear-gradient(90deg, rgba(15, 138, 106, 0.07), transparent 55%);
+}
+
+.story.is-neutral {
+  border-left: 3px solid #64748b;
+  padding-left: 0.95rem;
 }
 
 .story-verdict {
@@ -5225,12 +5327,12 @@ html[data-theme="dark"] .chart-zoom .chart-crosshair-tip {
   border: 1px solid var(--line);
 }
 
-.story-verdict.bearish {
+.story-verdict.bullish {
   border-color: rgba(194, 59, 59, 0.28);
   background: rgba(194, 59, 59, 0.06);
 }
 
-.story-verdict.bullish {
+.story-verdict.bearish {
   border-color: rgba(15, 138, 106, 0.28);
   background: rgba(15, 138, 106, 0.06);
 }
@@ -5850,17 +5952,36 @@ html[data-theme="dark"] .btn.ghost:hover {
   border-color: var(--line);
 }
 
-html[data-theme="dark"] .holding-intel-card.is-bearish,
 html[data-theme="dark"] .live-brief-rail,
-html[data-theme="dark"] .live-brief-pin-inner,
-html[data-theme="dark"] .spotlight-card,
-html[data-theme="dark"] .agenda-card.is-bearish {
-  background: linear-gradient(180deg, rgba(240, 113, 103, 0.14), var(--elevated));
+html[data-theme="dark"] .live-brief-pin-inner {
+  background: linear-gradient(180deg, rgba(148, 163, 184, 0.12), var(--elevated));
+}
+
+html[data-theme="dark"] .holding-intel-card.is-neutral,
+html[data-theme="dark"] .spotlight-card.is-neutral,
+html[data-theme="dark"] .story.is-neutral,
+html[data-theme="dark"] .agenda-card.is-neutral,
+html[data-theme="dark"] .event-card.is-neutral,
+html[data-theme="dark"] .watch-hit-card.is-neutral {
+  background: linear-gradient(180deg, rgba(148, 163, 184, 0.16), var(--elevated));
 }
 
 html[data-theme="dark"] .holding-intel-card.is-bullish,
-html[data-theme="dark"] .agenda-card.is-bullish {
-  background: linear-gradient(180deg, rgba(46, 207, 154, 0.12), var(--elevated));
+html[data-theme="dark"] .spotlight-card.is-bullish,
+html[data-theme="dark"] .story.is-bullish,
+html[data-theme="dark"] .agenda-card.is-bullish,
+html[data-theme="dark"] .event-card.is-bullish,
+html[data-theme="dark"] .watch-hit-card.is-bullish {
+  background: linear-gradient(180deg, rgba(240, 113, 103, 0.16), var(--elevated));
+}
+
+html[data-theme="dark"] .holding-intel-card.is-bearish,
+html[data-theme="dark"] .spotlight-card.is-bearish,
+html[data-theme="dark"] .story.is-bearish,
+html[data-theme="dark"] .agenda-card.is-bearish,
+html[data-theme="dark"] .event-card.is-bearish,
+html[data-theme="dark"] .watch-hit-card.is-bearish {
+  background: linear-gradient(180deg, rgba(46, 207, 154, 0.14), var(--elevated));
 }
 
 html[data-theme="dark"] .site-footer,
