@@ -40,6 +40,14 @@
           var qs = location.search || "";
           if (/PulseDeskApp/i.test(ua) || /[?&]app=1(?:&|$)/.test(qs)) {
             document.documentElement.classList.add("pulse-native-app");
+            var vw = window.innerWidth || document.documentElement.clientWidth || 0;
+            document.documentElement.classList.add(
+              vw >= 600 ? "pulse-native-tablet" : "pulse-native-phone",
+            );
+            document.documentElement.setAttribute(
+              "data-pulse-app",
+              vw >= 600 ? "tablet" : "phone",
+            );
           }
         } catch (e) {
           document.documentElement.setAttribute("data-theme", "light");
@@ -53,7 +61,7 @@
       href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,500;9..144,700&family=Sora:wght@400;500;600;700&display=swap"
       rel="stylesheet"
     />
-    <link rel="stylesheet" href="/static/styles.css?v=20260806e15" />
+    <link rel="stylesheet" href="/static/styles.css?v=20260806e16" />
     {% block head %}{% endblock %}
   </head>
   <body class="page-{{ page }}" data-page="{{ page }}">
@@ -163,7 +171,7 @@
     </div>
     {% endblock %}
 
-    <script src="/static/app.js?v=20260806e15" type="module"></script>
+    <script src="/static/app.js?v=20260806e16" type="module"></script>
     <script>
       if ("serviceWorker" in navigator) {
         window.addEventListener("load", function () {
