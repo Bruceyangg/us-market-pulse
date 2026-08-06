@@ -454,8 +454,8 @@ function renderChartSvg(points, { up = true, viewStart = 0, viewEnd = null } = {
   const fill = up ? TAPE_UP_SOFT : TAPE_DOWN_SOFT;
   return `
     <svg viewBox="0 0 ${width} ${height}" preserveAspectRatio="none" role="img" aria-label="分时走势图">
-      <path d="${area}" fill="${fill}"></path>
-      <path d="${line}" fill="none" stroke="${stroke}" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"></path>
+      <path class="intraday-area" d="${area}" fill="${fill}"></path>
+      <path class="intraday-line" d="${line}" fill="none" stroke="${stroke}" stroke-width="0.5" stroke-linecap="round" stroke-linejoin="round" vector-effect="non-scaling-stroke"></path>
     </svg>
   `;
 }
@@ -663,7 +663,7 @@ function renderSessionIntradaySvg(
   const last = coords[coords.length - 1];
   const tip = `<circle cx="${last[0].toFixed(2)}" cy="${last[1].toFixed(
     2
-  )}" r="2.6" fill="${stroke}"></circle>`;
+  )}" r="0.9" fill="${stroke}" vector-effect="non-scaling-stroke"></circle>`;
 
   return `
     <svg class="session-intraday-svg yahoo-intraday-svg" viewBox="0 0 ${width} ${height}" preserveAspectRatio="none" role="img" aria-label="Yahoo 1D 分时">
@@ -671,8 +671,8 @@ function renderSessionIntradaySvg(
       ${vGrid}
       ${sessionGuides}
       ${prevLine}
-      <path d="${area}" fill="${fill}"></path>
-      <path d="${line}" fill="none" stroke="${stroke}" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"></path>
+      <path class="intraday-area" d="${area}" fill="${fill}"></path>
+      <path class="intraday-line" d="${line}" fill="none" stroke="${stroke}" stroke-width="0.5" stroke-linecap="round" stroke-linejoin="round" vector-effect="non-scaling-stroke"></path>
       ${tip}
       ${timeLabels}
       ${priceTicks}

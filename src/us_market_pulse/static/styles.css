@@ -3829,6 +3829,21 @@ html[data-theme="dark"] .sector-pick-list .sector-hold-btn.is-held:hover {
   min-height: 190px;
 }
 
+/* Holdings + sectors share the same 分时 renderer — keep the tape hairline-thin. */
+.portfolio-chart .session-intraday-svg .intraday-line,
+.sector-chart .session-intraday-svg .intraday-line,
+.chart-card .session-intraday-svg .intraday-line,
+.yahoo-intraday-svg .intraday-line {
+  stroke-width: 0.5px;
+}
+
+.portfolio-chart .session-intraday-svg .intraday-area,
+.sector-chart .session-intraday-svg .intraday-area,
+.chart-card .session-intraday-svg .intraday-area,
+.yahoo-intraday-svg .intraday-area {
+  opacity: 0.55;
+}
+
 .portfolio-chart .chart-canvas > svg,
 .portfolio-chart .chart-zoom-stage > svg,
 .chart-card .chart-canvas > svg,
