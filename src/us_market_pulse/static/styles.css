@@ -4046,24 +4046,32 @@ html[data-theme="dark"] .sector-pick-list .sector-hold-btn.is-held:hover {
 
 .chart-live-refresh {
   appearance: none;
-  border: 1px solid color-mix(in srgb, #2563eb 55%, var(--line));
-  border-radius: 999px;
-  background: linear-gradient(180deg, #3b82f6, #2563eb);
-  color: #fff;
-  font-size: 0.68rem;
-  font-weight: 750;
-  letter-spacing: 0.04em;
-  line-height: 1;
-  min-width: 2.6rem;
+  flex: 0 0 auto;
+  width: 1.7rem;
   height: 1.65rem;
-  padding: 0 0.7rem;
+  padding: 0;
+  border: 1px solid color-mix(in srgb, #2f7cf6 42%, var(--line));
+  border-radius: 999px;
+  background: color-mix(in srgb, #2f7cf6 14%, var(--panel));
+  color: #2f7cf6;
+  display: inline-grid;
+  place-items: center;
   cursor: pointer;
-  box-shadow: 0 1px 0 rgba(37, 99, 235, 0.35);
-  transition: filter 0.15s ease, transform 0.15s ease, opacity 0.15s ease;
+  box-shadow: 0 1px 0 color-mix(in srgb, #2f7cf6 18%, transparent);
+  transition: background 0.15s ease, color 0.15s ease, border-color 0.15s ease,
+    transform 0.15s ease, opacity 0.15s ease;
+}
+
+.chart-live-refresh-icon {
+  width: 0.95rem;
+  height: 0.95rem;
+  display: block;
 }
 
 .chart-live-refresh:hover {
-  filter: brightness(1.06);
+  background: color-mix(in srgb, #2f7cf6 22%, var(--panel));
+  color: #1d6ef0;
+  border-color: color-mix(in srgb, #2f7cf6 58%, var(--line));
 }
 
 .chart-live-refresh:active {
@@ -4076,14 +4084,31 @@ html[data-theme="dark"] .sector-pick-list .sector-hold-btn.is-held:hover {
 
 .chart-live-refresh.is-busy,
 .chart-live-refresh:disabled {
-  opacity: 0.72;
+  opacity: 0.8;
   cursor: wait;
 }
 
+.chart-live-refresh.is-busy .chart-live-refresh-icon {
+  animation: chart-live-spin 0.7s linear infinite;
+}
+
+@keyframes chart-live-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
 html[data-theme="dark"] .chart-live-refresh {
-  border-color: color-mix(in srgb, #60a5fa 40%, var(--line));
-  background: linear-gradient(180deg, #3b82f6, #1d4ed8);
-  box-shadow: 0 1px 0 rgba(59, 130, 246, 0.28);
+  border-color: color-mix(in srgb, #5aa2ff 38%, var(--line));
+  background: color-mix(in srgb, #5aa2ff 16%, var(--panel));
+  color: #5aa2ff;
+  box-shadow: 0 1px 0 color-mix(in srgb, #5aa2ff 16%, transparent);
+}
+
+html[data-theme="dark"] .chart-live-refresh:hover {
+  background: color-mix(in srgb, #5aa2ff 26%, var(--panel));
+  color: #7bb6ff;
+  border-color: color-mix(in srgb, #5aa2ff 55%, var(--line));
 }
 
 .session-intraday-svg text,
