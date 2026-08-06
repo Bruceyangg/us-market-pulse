@@ -8,6 +8,7 @@ import time
 from datetime import datetime, timezone
 from email.utils import parsedate_to_datetime
 from typing import Any
+from urllib.parse import quote_plus
 
 _TAG_RE = re.compile(r"<[^>]+>")
 
@@ -413,6 +414,66 @@ async def _fetch_fred_series(
 def peek_intel_items() -> list[dict[str, Any]]:
     """Return cached intel items without refreshing RSS or the market board."""
     return list(_CACHE.get("items") or [])
+
+
+_GN_CACHE: dict[str, dict[str, Any]] = {}
+_GN_TTL = 180.0
+
+
+def google_news_search_url(query: str) -> str:
+    """Build a Google News RSS search URL (en-US)."""
+    q = (query or "").strip() or "US stocks"
+    return (
+        "https://news.google.com/rss/search?q="
+        f"{quote_plus(q)}&hl=en-US&gl=US&ceid=US:en"
+    )
+
+
+async def fetch_google_news(
+    query: str,
+    *,
+    limit: int = 12,
+    source_name: str = "Google News",
+    source_id: str = "gn-search",
+    force: bool = False,
+) -> list[dict[str, Any]]:
+    """On-demand Google News RSS for sector / ticker desks (short TTL cache)."""
+    q = (query or "").strip()
+    if not q:
+        return []
+    cache_key = f"{source_id}:{q.casefold()}:{max(1, min(limit, 20))}"
+    now = time.time()
+    hit = _GN_CACHE.get(cache_key)
+    if (
+        not force
+        and hit
+        and now - float(hit.get("fetched_at") or 0) < _GN_TTL
+    ):
+        return list(hit.get("items") or [])
+
+    source = {
+        "id": source_id,
+        "name": source_name,
+        "category": "markets",
+        "url": google_news_search_url(q),
+    }
+    async with httpx.AsyncClient(
+        headers={"User-Agent": USER_AGENT},
+        follow_redirects=True,
+        timeout=20.0,
+    ) as client:
+        items, _err = await _fetch_feed(client, source)
+    # _fetch_feed caps at 12; trim further if needed.
+    out = list(items or [])[: max(1, min(int(limit), 20))]
+    _GN_CACHE[cache_key] = {"fetched_at": now, "items": out}
+    # Bound cache growth.
+    if len(_GN_CACHE) > 48:
+        oldest = sorted(
+            _GN_CACHE.items(), key=lambda kv: float(kv[1].get("fetched_at") or 0)
+        )[:16]
+        for key, _ in oldest:
+            _GN_CACHE.pop(key, None)
+    return out
 
 
 async def refresh_intel(force: bool = False) -> dict[str, Any]:
