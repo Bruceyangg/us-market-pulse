@@ -772,7 +772,7 @@ async def fetch_intraday_snapshot(
                 headers=yahoo_headers,
                 follow_redirects=True,
                 trust_env=False,
-                timeout=httpx.Timeout(2.5, connect=1.0),
+                timeout=httpx.Timeout(12.0, connect=3.0),
             ) as yclient:
                 y_night = await fetch_yahoo_overnight_quote(yclient, sym)
         except Exception:  # noqa: BLE001
