@@ -10,12 +10,13 @@ from typing import Any
 
 import httpx
 
-from us_market_pulse.chains import _co, _panel
+from us_market_pulse.chains import CORE_SYMBOLS, _co, _panel, sort_companies
 
 
 _CACHE: dict[str, tuple[float, dict[str, Any]]] = {}
 _CACHE_TTL = 30 * 60  # shorter: new IPOs (e.g. SPCX) should surface faster
-_CACHE_VER = "v3"
+_CACHE_VER = "v4"
+_PANEL_CO_LIMIT = 28
 _WS = re.compile(r"[\s\-_/·•,+]+")
 
 
@@ -68,9 +69,9 @@ THEME_PACKS: list[dict[str, Any]] = [
         ],
         # Always inject — covers mega-cap / fresh IPOs Yahoo search may miss.
         "must_include": [
-            _co("SPCX", "SpaceX", note="发射 / Starlink / AI · Nasdaq"),
-            _co("RKLB", "Rocket Lab", note="小卫星发射"),
-            _co("ASTS", "AST SpaceMobile", note="太空手机直连"),
+            _co("SPCX", "SpaceX", note="发射 / Starlink / AI · Nasdaq", core=True),
+            _co("RKLB", "Rocket Lab", note="小卫星发射", core=True),
+            _co("ASTS", "AST SpaceMobile", note="太空手机直连", core=True),
         ],
         "support_nodes": ["发射与运载", "卫星制造"],
         "core_nodes": ["卫星通信", "对地观测"],
@@ -126,12 +127,16 @@ THEME_PACKS: list[dict[str, Any]] = [
                 branch="satcom",
                 blurb="宽带、物联网与直连手机",
                 companies=[
-                    _co("SPCX", "SpaceX", note="Starlink 宽带"),
-                    _co("ASTS", "AST SpaceMobile", note="太空蜂窝"),
-                    _co("IRDM", "Iridium", note="全球卫星通信"),
+                    _co("SPCX", "SpaceX", note="Starlink 宽带", core=True),
+                    _co("ASTS", "AST SpaceMobile", note="太空蜂窝", core=True),
+                    _co("IRDM", "Iridium", note="全球卫星通信", core=True),
                     _co("GSAT", "Globalstar", note="物联网 / Apple 合作"),
                     _co("SATS", "EchoStar", note="卫星与宽带"),
                     _co("VSAT", "Viasat", note="卫星宽带"),
+                    _co("GILT", "Gilat", note="卫星地面站 / 通信"),
+                    _co("CMTL", "Comtech", note="卫星地面通信"),
+                    _co("SPIR", "Spire Global", note="气象 / AIS 数据"),
+                    _co("BKSY", "BlackSky", note="遥感数据服务"),
                 ],
             ),
             _panel(
@@ -461,7 +466,7 @@ def match_themes(query: str) -> list[dict[str, Any]]:
 
 
 def _merge_unique_companies(
-    items: list[dict[str, Any]], *, limit: int = 12
+    items: list[dict[str, Any]], *, limit: int = _PANEL_CO_LIMIT
 ) -> list[dict[str, Any]]:
     seen: set[str] = set()
     out: list[dict[str, Any]] = []
@@ -470,10 +475,14 @@ def _merge_unique_companies(
         if not sym or sym in seen:
             continue
         seen.add(sym)
-        out.append(c)
+        row = dict(c)
+        row["symbol"] = sym
+        if row.get("core") is None:
+            row["core"] = sym in CORE_SYMBOLS
+        out.append(row)
         if len(out) >= limit:
             break
-    return out
+    return sort_companies(out)
 
 
 def clear_chain_cache() -> None:
@@ -570,7 +579,7 @@ def compose_from_themes(query: str, themes: list[dict[str, Any]]) -> dict[str, A
                             existing["companies"] = _merge_unique_companies(
                                 (existing.get("companies") or [])
                                 + (panel.get("companies") or []),
-                                limit=12,
+                                limit=_PANEL_CO_LIMIT,
                             )
                             break
                 continue
@@ -584,20 +593,30 @@ def compose_from_themes(query: str, themes: list[dict[str, Any]]) -> dict[str, A
 
     # Pin must-include names (fresh IPOs / mega names) into the first panels.
     if must_include and panels:
-        pinned = _merge_unique_companies(must_include, limit=8)
+        pinned = _merge_unique_companies(
+            [{**c, "core": True} for c in must_include], limit=12
+        )
         panels[0]["companies"] = _merge_unique_companies(
-            pinned + (panels[0].get("companies") or []), limit=12
+            pinned + (panels[0].get("companies") or []), limit=_PANEL_CO_LIMIT
         )
         # Also ensure they appear in any panel already listing peers.
         for panel in panels[1:]:
-            have = {str(c.get("symbol") or "").upper() for c in (panel.get("companies") or [])}
-            inject = [c for c in pinned if c["symbol"] not in have and c["symbol"] in {
-                "SPCX", "NVDA", "TSM", "TSLA"
-            }]
+            have = {
+                str(c.get("symbol") or "").upper()
+                for c in (panel.get("companies") or [])
+            }
+            inject = [
+                c
+                for c in pinned
+                if c["symbol"] not in have
+                and c["symbol"] in {"SPCX", "NVDA", "TSM", "TSLA"}
+            ]
             if inject:
                 panel["companies"] = _merge_unique_companies(
-                    inject + (panel.get("companies") or []), limit=12
+                    inject + (panel.get("companies") or []), limit=_PANEL_CO_LIMIT
                 )
+    for panel in panels:
+        panel["companies"] = sort_companies(panel.get("companies") or [])
 
     # Cap node pills for readable UI.
     support_nodes = support_nodes[:4] or [{"id": "support_generic", "label": "上游支撑"}]
@@ -750,11 +769,14 @@ async def enrich_with_yahoo(chain: dict[str, Any], query: str) -> dict[str, Any]
         tone = panel.get("tone") or "core"
         extra = buckets.get(tone) or []
         panel["companies"] = _merge_unique_companies(
-            (panel.get("companies") or []) + extra, limit=10
+            (panel.get("companies") or []) + extra, limit=_PANEL_CO_LIMIT
         )
 
     # If still thin, append a Yahoo hits panel.
-    all_cos = _merge_unique_companies(found, limit=12)
+    all_cos = _merge_unique_companies(
+        [{**c, "core": c.get("symbol") in CORE_SYMBOLS} for c in found],
+        limit=_PANEL_CO_LIMIT,
+    )
     if all_cos:
         existing_ids = {p.get("id") for p in panels}
         if "yahoo_hits" not in existing_ids:
