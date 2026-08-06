@@ -773,14 +773,14 @@ async def fetch_intraday_snapshot(
                 headers=yahoo_headers,
                 follow_redirects=True,
                 trust_env=False,
-                timeout=httpx.Timeout(20.0, connect=5.0),
+                timeout=httpx.Timeout(12.0, connect=4.0),
             ) as yclient:
                 y_night = await fetch_yahoo_overnight_quote(
                     yclient,
                     sym,
                     allow_page=True,
-                    page_timeout=14.0,
-                    chart_timeout=3.0,
+                    page_timeout=10.0,
+                    chart_timeout=2.5,
                     bypass_cache=bool(force),
                 )
         except Exception:  # noqa: BLE001
@@ -2379,11 +2379,17 @@ async def build_sector_desk(
     if not picks_from_cache and pick_symbols:
         # Overnight page scrape only for the selected symbol — never N× Yahoo HTML.
         # At 夜盘 hydrate Overnight for the visible list (not only selected).
-        night_pri = (
-            list(pick_symbols[:12])
-            if session_from_clock()[0] == "night"
-            else ([selected] if selected else [])
-        )
+        if session_from_clock()[0] == "night":
+            night_pri = []
+            if selected:
+                night_pri.append(selected)
+            for sym in pick_symbols:
+                if sym not in night_pri:
+                    night_pri.append(sym)
+                if len(night_pri) >= 3:
+                    break
+        else:
+            night_pri = [selected] if selected else []
         day_quotes = await fetch_day_quotes(
             pick_symbols,
             overnight_priority=night_pri,
@@ -2420,11 +2426,17 @@ async def build_sector_desk(
         not picks_fresh or session_from_clock()[0] in {"night", "pre", "post"}
     ):
         # SWR / extended hours: reuse boards/charts; soft-refresh day + Overnight.
-        night_pri = (
-            list(pick_symbols[:12])
-            if session_from_clock()[0] == "night"
-            else ([selected] if selected else [])
-        )
+        if session_from_clock()[0] == "night":
+            night_pri = []
+            if selected:
+                night_pri.append(selected)
+            for sym in pick_symbols:
+                if sym not in night_pri:
+                    night_pri.append(sym)
+                if len(night_pri) >= 3:
+                    break
+        else:
+            night_pri = [selected] if selected else []
         day_quotes = await fetch_day_quotes(
             pick_symbols,
             overnight_priority=night_pri,
