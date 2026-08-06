@@ -773,13 +773,13 @@ async def fetch_intraday_snapshot(
                 headers=yahoo_headers,
                 follow_redirects=True,
                 trust_env=False,
-                timeout=httpx.Timeout(8.0, connect=3.0),
+                timeout=httpx.Timeout(20.0, connect=5.0),
             ) as yclient:
                 y_night = await fetch_yahoo_overnight_quote(
                     yclient,
                     sym,
                     allow_page=True,
-                    page_timeout=6.0,
+                    page_timeout=14.0,
                     chart_timeout=3.0,
                     bypass_cache=bool(force),
                 )
