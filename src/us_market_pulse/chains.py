@@ -5,19 +5,73 @@ from __future__ import annotations
 from typing import Any
 
 
+# Mega / chain-defining names — shown first with「核心」badge.
+CORE_SYMBOLS: set[str] = {
+    "SPCX",
+    "NVDA",
+    "AMD",
+    "AVGO",
+    "TSM",
+    "ASML",
+    "AMAT",
+    "LRCX",
+    "KLAC",
+    "AAPL",
+    "MSFT",
+    "AMZN",
+    "GOOGL",
+    "META",
+    "TSLA",
+    "MU",
+    "QCOM",
+    "INTC",
+    "ARM",
+    "RKLB",
+    "ASTS",
+    "PL",
+    "IRDM",
+    "TXN",
+    "NXPI",
+    "ON",
+    "CRWD",
+    "PANW",
+    "LLY",
+    "NVO",
+}
+
+
 def _co(
     symbol: str,
     name: str,
     *,
     note: str = "",
     sector: str = "technology",
+    core: bool | None = None,
 ) -> dict[str, Any]:
+    sym = symbol.upper()
+    is_core = bool(core) if core is not None else sym in CORE_SYMBOLS
     return {
-        "symbol": symbol.upper(),
+        "symbol": sym,
         "name": name,
         "note": note,
         "sector": sector,
+        "core": is_core,
     }
+
+
+def sort_companies(companies: list[dict[str, Any]] | None) -> list[dict[str, Any]]:
+    """Core names first, then the rest; stable within each group."""
+    items = list(companies or [])
+    for c in items:
+        sym = str(c.get("symbol") or "").upper()
+        if "core" not in c:
+            c["core"] = sym in CORE_SYMBOLS
+        elif c.get("core") is None:
+            c["core"] = sym in CORE_SYMBOLS
+    return sorted(
+        items,
+        key=lambda c: (0 if c.get("core") else 1, str(c.get("symbol") or "")),
+    )
 
 
 def _panel(
@@ -617,13 +671,17 @@ def resolve_chain(q: str | None = None, chain_id: str | None = None) -> dict[str
 
 
 def _public_chain(chain: dict[str, Any], *, q: str = "") -> dict[str, Any]:
+    panels = []
+    for panel in chain.get("panels") or []:
+        cos = sort_companies(panel.get("companies") or [])
+        panels.append({**panel, "companies": cos})
     return {
         "id": chain["id"],
         "label": chain["label"],
         "blurb": chain.get("blurb") or "",
         "top_flow": chain.get("top_flow") or [],
         "branches": chain.get("branches") or [],
-        "panels": chain.get("panels") or [],
+        "panels": panels,
         "q": q,
     }
 
