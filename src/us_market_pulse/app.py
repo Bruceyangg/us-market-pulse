@@ -43,6 +43,7 @@ from us_market_pulse.earnings_calendar import (
 )
 from us_market_pulse.market_map import build_market_map
 from us_market_pulse.sectors import build_sector_desk, fetch_intraday_snapshot
+from us_market_pulse.us_markets import build_us_markets_desk
 from us_market_pulse.symbol_lookup import resolve_holding_query, suggest_holdings
 from us_market_pulse.topics import build_war_desk
 from us_market_pulse.portfolio import (
@@ -278,7 +279,7 @@ async def api_sectors(
 
 @app.get("/api/quote/intraday")
 async def api_quote_intraday(
-    symbol: str = Query(..., min_length=1, max_length=16),
+    symbol: str = Query(..., min_length=1, max_length=24),
     refresh: bool = Query(default=False),
 ) -> dict[str, Any]:
     """Shared Yahoo-first 分时 snapshot for holdings + sectors auto-refresh."""
@@ -291,6 +292,12 @@ async def api_quote_intraday(
 @app.get("/api/sectors/map")
 async def api_sectors_map(refresh: bool = Query(default=False)) -> dict[str, Any]:
     return await build_market_map(force=refresh)
+
+
+@app.get("/api/us-markets")
+async def api_us_markets(refresh: bool = Query(default=False)) -> dict[str, Any]:
+    """US markets strip + NQ/ES/YM futures charts for the sectors page."""
+    return await build_us_markets_desk(force=refresh)
 
 
 @app.get("/api/earnings")
