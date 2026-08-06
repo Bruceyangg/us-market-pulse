@@ -73,7 +73,7 @@ if (!PORTFOLIO_TF_KEYS.includes(state.portfolioTf)) {
 let PAGE = document.body?.dataset?.page || "desk";
 const AUTHED = Boolean(document.getElementById("user-chip") || document.getElementById("btn-logout"));
 const pageTimers = [];
-const PAGE_DATA_TTL_MS = 3 * 60 * 1000;
+const PAGE_DATA_TTL_MS = 5 * 60 * 1000;
 
 const els = {
   status: document.getElementById("status-line"),
@@ -2189,6 +2189,7 @@ function syncHoldingSymbolsFromPortfolio(data) {
     .map((h) => String(h.symbol || "").toUpperCase())
     .filter(Boolean);
   state.holdingSymbols = new Set(symbols);
+  state._holdingSymbolsAt = Date.now();
   if (data) state.portfolio = data;
   return state.holdingSymbols;
 }
@@ -2205,19 +2206,43 @@ async function refreshHoldingSymbols({ force = false } = {}) {
     state.holdingSymbols = new Set();
     return state.holdingSymbols;
   }
-  if (state.holdingSymbols && !force && state.portfolio) {
+  if (
+    !force &&
+    state.holdingSymbols instanceof Set &&
+    state._holdingSymbolsAt &&
+    Date.now() - state._holdingSymbolsAt < 60_000
+  ) {
     return state.holdingSymbols;
   }
   try {
-    const res = await fetch("/api/portfolio", { credentials: "same-origin" });
+    // Symbols-only — never block sectors/map on full portfolio quote builds.
+    const res = await fetch("/api/portfolio/symbols", {
+      credentials: "same-origin",
+    });
     if (res.status === 401) {
       state.holdingSymbols = new Set();
       return state.holdingSymbols;
     }
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     const data = await res.json();
-    return syncHoldingSymbolsFromPortfolio(data);
+    const symbols = (data?.symbols || [])
+      .map((s) => String(s || "").toUpperCase())
+      .filter(Boolean);
+    state.holdingSymbols = new Set(symbols);
+    state._holdingSymbolsAt = Date.now();
+    return state.holdingSymbols;
   } catch {
+    try {
+      const res = await fetch("/api/portfolio", { credentials: "same-origin" });
+      if (res.ok) {
+        const data = await res.json();
+        syncHoldingSymbolsFromPortfolio(data);
+        state._holdingSymbolsAt = Date.now();
+        return state.holdingSymbols;
+      }
+    } catch {
+      /* ignore */
+    }
     if (!state.holdingSymbols) state.holdingSymbols = new Set();
     return state.holdingSymbols;
   }
@@ -4676,7 +4701,8 @@ function syncSectorQuery() {
 function sectorCacheGet(id) {
   const row = state.sectorCache?.[id];
   if (!row?.data) return null;
-  if (Date.now() - Number(row.at || 0) > 45_000) return null;
+  // Keep optimistic sector paint warm across tab switches / hover.
+  if (Date.now() - Number(row.at || 0) > 120_000) return null;
   return row.data;
 }
 
@@ -6478,6 +6504,8 @@ function persistPageDataCache() {
           sectorSymbol: state.sectorSymbol,
           sectorTf: state.sectorTf,
           sectorCache: state.sectorCache || {},
+          usMarkets: state.usMarkets || null,
+          usFuturesTf: state.usFuturesTf || "intraday",
         })
       );
     }
@@ -6526,6 +6554,10 @@ function paintFromPageDataCache(page = PAGE) {
     if (row.sectorTf) state.sectorTf = row.sectorTf;
     if (row.sectorCache) state.sectorCache = row.sectorCache;
     renderSectorDesk(row.sectors);
+    if (row.usMarkets) {
+      if (row.usFuturesTf) state.usFuturesTf = row.usFuturesTf;
+      renderUsMarketsDesk(row.usMarkets);
+    }
     return true;
   }
   if (page === "markets" && row.markets) {
@@ -6590,17 +6622,21 @@ function bootPage() {
       setStatus("已恢复板块缓存 · 后台刷新中…");
     }
     bindSectorDesk();
-    loadUsMarketsDesk();
-    refreshHoldingSymbols().finally(() =>
-      loadSectorDesk().then(() => {
-        if (state.sectorTf === "intraday") refreshActiveIntraday();
-        if (!pickHasChart(state.sectors?.selected_pick)) {
-          ensureMultiTfChartUpgrade();
-        }
-      })
-    );
+    // Parallel: desk / US markets / hold-tags — never wait on full portfolio quotes.
+    void loadUsMarketsDesk().then(() => persistPageDataCache());
+    void refreshHoldingSymbols().then(() => {
+      if (state.sectors) renderSectorPicks(state.sectors);
+    });
+    void loadSectorDesk().then(() => {
+      if (state.sectorTf === "intraday") refreshActiveIntraday();
+      if (!pickHasChart(state.sectors?.selected_pick)) {
+        ensureMultiTfChartUpgrade();
+      }
+      persistPageDataCache();
+    });
     trackPageInterval(() => loadSectorDesk(), 90 * 1000);
-    trackPageInterval(() => loadUsMarketsDesk(), 90 * 1000);
+    trackPageInterval(() => loadUsMarketsDesk(), 120 * 1000);
+    trackPageInterval(() => refreshHoldingSymbols({ force: true }), 120 * 1000);
     trackPageInterval(() => refreshActiveIntraday(), 1000);
   } else if (PAGE === "earnings") {
     bindEarningsDesk();
