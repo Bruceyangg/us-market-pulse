@@ -15,6 +15,33 @@
       </section>
 
       <div class="sectors-board" id="sectors-board">
+        <section class="us-markets-pane" id="us-markets" aria-label="美国市场">
+          <div class="us-markets-head">
+            <div>
+              <h2>美国市场</h2>
+              <p id="us-markets-blurb">期货主连与宏观条 · 红涨绿跌 · 与下方板块台同步刷新</p>
+            </div>
+          </div>
+          <div class="us-markets-strip-wrap">
+            <button type="button" class="us-markets-nav" id="us-markets-strip-prev" aria-label="向左">‹</button>
+            <div class="us-markets-strip" id="us-markets-strip" tabindex="0" aria-label="美国市场行情条">
+              <p class="empty">加载美国市场…</p>
+            </div>
+            <button type="button" class="us-markets-nav" id="us-markets-strip-next" aria-label="向右">›</button>
+          </div>
+          <div class="us-futures-toolbar">
+            <div class="tf-filters" id="us-futures-tf-filters" role="tablist" aria-label="指数期货周期">
+              <button type="button" class="filter is-active" data-uftf="intraday" aria-selected="true">分时</button>
+              <button type="button" class="filter" data-uftf="day" aria-selected="false">日图</button>
+              <button type="button" class="filter" data-uftf="month" aria-selected="false">月图</button>
+              <button type="button" class="filter" data-uftf="quarter" aria-selected="false">季图</button>
+            </div>
+          </div>
+          <div class="us-futures-grid" id="us-futures-grid" aria-label="纳指/标普/道指期货主连">
+            <p class="empty">加载指数期货走势…</p>
+          </div>
+        </section>
+
         <section class="sector-map-pane" id="sector-map" aria-label="全板块涨跌图">
           <div class="sector-map-head">
             <div>
