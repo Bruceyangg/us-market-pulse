@@ -28,11 +28,11 @@ from us_market_pulse.quotes import (
     apply_list_quote_fields,
     build_nasdaq_ohlc_series,
     derive_list_realtime,
+    fetch_cnbc_quotes,
     fetch_day_quotes,
     fetch_nasdaq_daily_bars,
     fetch_nasdaq_intraday,
     fetch_nasdaq_intraday_many,
-    fetch_yahoo_overnight_quote,
     resolve_list_session,
     session_from_clock,
 )
@@ -765,32 +765,25 @@ async def fetch_intraday_snapshot(
     day_change_pct = change_pct if isinstance(change_pct, (int, float)) else None
     prev_num = prev_close if isinstance(prev_close, (int, float)) else None
 
-    # 夜盘: Yahoo Overnight is quote-only — never invent 夜盘 tape points.
-    # Chart series remain 盘前+盘中+盘后; list RT syncs Yahoo overnight numbers.
+    # 夜盘: CNBC extended quote (same as list); never invent 夜盘 tape points.
+    # Chart series remain 盘前+盘中+盘后.
     if sid == "night":
         rt_fields: dict[str, Any] = {}
         try:
             async with httpx.AsyncClient(
-                headers=yahoo_headers,
                 follow_redirects=True,
                 trust_env=False,
-                timeout=httpx.Timeout(12.0, connect=3.0),
-            ) as yclient:
-                # Page scrape only on explicit refresh — 1s polls must stay light.
-                y_night = await fetch_yahoo_overnight_quote(
-                    yclient,
-                    sym,
-                    allow_page=bool(force),
-                    page_timeout=6.0,
-                    chart_timeout=3.0,
-                )
+                timeout=httpx.Timeout(4.0, connect=2.0),
+            ) as qclient:
+                cnbc = await fetch_cnbc_quotes(qclient, [sym])
+            row = cnbc.get(sym) if isinstance(cnbc, dict) else None
         except Exception:  # noqa: BLE001
-            y_night = None
-        if isinstance(y_night, dict):
-            if day_price is None and y_night.get("price") is not None:
-                price = y_night.get("price")
-                change = y_night.get("change")
-                change_pct = y_night.get("change_pct")
+            row = None
+        if isinstance(row, dict):
+            if day_price is None and row.get("price") is not None:
+                price = row.get("price")
+                change = row.get("change")
+                change_pct = row.get("change_pct")
                 day_price = price if isinstance(price, (int, float)) else day_price
                 day_change = change if isinstance(change, (int, float)) else day_change
                 day_change_pct = (
@@ -798,14 +791,14 @@ async def fetch_intraday_snapshot(
                     if isinstance(change_pct, (int, float))
                     else day_change_pct
                 )
-            if y_night.get("previous_close") is not None:
-                prev_close = y_night.get("previous_close")
+            if row.get("previous_close") is not None:
+                prev_close = row.get("previous_close")
                 prev_num = (
                     prev_close if isinstance(prev_close, (int, float)) else prev_num
                 )
             for key in ("rt_price", "rt_change", "rt_change_pct"):
-                if y_night.get(key) is not None:
-                    rt_fields[key] = y_night[key]
+                if row.get(key) is not None:
+                    rt_fields[key] = row[key]
         if not rt_fields:
             rt_fields = derive_list_realtime(
                 session="night",
@@ -2417,8 +2410,10 @@ async def build_sector_desk(
             and selected not in universe
         ):
             selected = pick_rows[0]["symbol"] if pick_rows else selected
-    elif picks_stale_ok and not picks_fresh and pick_symbols:
-        # SWR: reuse boards/charts, soft-refresh day tape only.
+    elif picks_from_cache and pick_symbols and (
+        not picks_fresh or session_from_clock()[0] in {"night", "pre", "post"}
+    ):
+        # SWR / extended hours: reuse boards/charts, soft-refresh day + 夜盘 RT.
         day_quotes = await fetch_day_quotes(
             pick_symbols,
             overnight_priority=[selected] if selected else [],
