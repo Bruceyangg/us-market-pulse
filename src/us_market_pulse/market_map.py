@@ -440,7 +440,8 @@ async def build_market_map(*, force: bool = False) -> dict[str, Any]:
         return payload
 
     symbols = _map_symbols()
-    quotes = await fetch_day_quotes(symbols)
+    # Map has dozens of tickers — never block on Yahoo Overnight HTML scrapes.
+    quotes = await fetch_day_quotes(symbols, overnight_priority=[])
     errors = [f"{sym}: quote failed" for sym in symbols if sym not in quotes]
 
     sectors_out: list[dict[str, Any]] = []
