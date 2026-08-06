@@ -269,67 +269,199 @@ def _yahoo_meta_extended(
     }
 
 
+# Yahoo quote page shows Overnight as a numeric box (no tape), e.g.
+#   220.29 +1.07 (+0.49%)
+#   Overnight: 10:44:05 PM EDT
+_YAHOO_OVERNIGHT_RE = re.compile(
+    r"(?P<price>\d+(?:\.\d+)?)\s+"
+    r"(?P<change>[+\-]?\d+(?:\.\d+)?)\s+"
+    r"\((?P<pct>[+\-]?\d+(?:\.\d+)?)%\)\s*"
+    r"(?:Overnight|夜盘)\s*:",
+    re.I,
+)
+_YAHOO_CLOSE_RE = re.compile(
+    r"(?P<price>\d+(?:\.\d+)?)\s+"
+    r"(?P<change>[+\-]?\d+(?:\.\d+)?)\s+"
+    r"\((?P<pct>[+\-]?\d+(?:\.\d+)?)%\)\s*"
+    r"(?:At close|收盘)",
+    re.I,
+)
+_YAHOO_JSON_RAW_RE = re.compile(
+    r'"(?P<key>overnightMarketPrice|overnightMarketChange|'
+    r'overnightMarketChangePercent|regularMarketPrice|'
+    r'regularMarketChange|regularMarketChangePercent)"\s*:\s*'
+    r'(?:\{[^}]*?"raw"\s*:\s*(?P<raw>-?\d+(?:\.\d+)?)[^}]*?\}|(?P<num>-?\d+(?:\.\d+)?))',
+    re.I,
+)
+
+
+def _overnight_from_yahoo_html(html: str) -> dict[str, float | None] | None:
+    if not html:
+        return None
+    text = (
+        html.replace("\u2212", "-")
+        .replace("&nbsp;", " ")
+        .replace("\xa0", " ")
+    )
+    overnight_px = overnight_chg = overnight_pct = None
+    close_px = close_chg = close_pct = None
+
+    # Structured quoteSummary / Store blobs (preferred when present).
+    blob: dict[str, float] = {}
+    for m in _YAHOO_JSON_RAW_RE.finditer(text):
+        key = m.group("key")
+        raw = m.group("raw") if m.group("raw") is not None else m.group("num")
+        num = _parse_number(raw)
+        if num is not None and key not in blob:
+            blob[key] = num
+    if "overnightMarketPrice" in blob:
+        overnight_px = blob.get("overnightMarketPrice")
+        overnight_chg = blob.get("overnightMarketChange")
+        overnight_pct = blob.get("overnightMarketChangePercent")
+        # Yahoo sometimes stores percent as fraction (0.0049).
+        if overnight_pct is not None and abs(overnight_pct) < 1:
+            overnight_pct *= 100.0
+        close_px = blob.get("regularMarketPrice")
+        close_chg = blob.get("regularMarketChange")
+        close_pct = blob.get("regularMarketChangePercent")
+        if close_pct is not None and abs(close_pct) < 1:
+            close_pct *= 100.0
+
+    if overnight_px is None:
+        m_on = _YAHOO_OVERNIGHT_RE.search(text)
+        if not m_on:
+            return None
+        overnight_px = _parse_number(m_on.group("price"))
+        overnight_chg = _parse_number(m_on.group("change"))
+        overnight_pct = _parse_pct(m_on.group("pct"))
+        m_close = _YAHOO_CLOSE_RE.search(text)
+        if m_close:
+            close_px = _parse_number(m_close.group("price"))
+            close_chg = _parse_number(m_close.group("change"))
+            close_pct = _parse_pct(m_close.group("pct"))
+
+    if overnight_px is None:
+        return None
+    if overnight_pct is None and close_px not in (None, 0):
+        overnight_chg, overnight_pct = _change_vs_basis(overnight_px, close_px)
+    return {
+        "rt_price": overnight_px,
+        "rt_change": overnight_chg,
+        "rt_change_pct": overnight_pct,
+        "price": close_px,
+        "change": close_chg,
+        "change_pct": close_pct,
+    }
+
+
 async def fetch_yahoo_overnight_quote(
     client: httpx.AsyncClient, symbol: str
 ) -> dict[str, Any] | None:
     """
     Yahoo overnight is numeric only (no 夜盘 tape).
 
-    Uses chart meta postMarket* which Yahoo shows as Overnight during PREPRE/
-    POSTPOST windows. Chart series stay pre+regular+post elsewhere.
+    Only accept true Overnight fields (page box / overnightMarket*).
+    Never reuse postMarket* — that is 盘后 and mismatches Yahoo Overnight.
     """
     sym = (symbol or "").strip().upper()
     if not sym:
         return None
     enc = quote(sym, safe="")
-    url = (
-        f"https://query1.finance.yahoo.com/v8/finance/chart/{enc}"
-        f"?range=1d&interval=1m&includePrePost=false"
+    headers = {
+        **_yahoo_chart_headers(),
+        "Accept": "text/html,application/xhtml+xml,application/json;q=0.9,*/*;q=0.8",
+    }
+    overnight_px = overnight_chg = overnight_pct = None
+    price = change = change_pct = prev = None
+    market_state = None
+
+    # Quote page — source of truth for Yahoo "Overnight" numbers.
+    page_urls = (
+        f"https://finance.yahoo.com/quote/{enc}/",
+        f"https://finance.yahoo.com/quote/{enc}",
     )
-    try:
-        resp = await client.get(url, timeout=12.0, headers=_yahoo_chart_headers())
-        if resp.status_code >= 400:
-            return None
-        result = ((resp.json().get("chart") or {}).get("result") or [None])[0]
-        if not result:
-            return None
-        meta = result.get("meta") or {}
-        price = _parse_number(meta.get("regularMarketPrice"))
-        prev = _parse_number(
-            meta.get("chartPreviousClose") or meta.get("previousClose")
-        )
-        change = _parse_number(meta.get("regularMarketChange"))
-        change_pct = _parse_pct(meta.get("regularMarketChangePercent"))
-        if change_pct is None and price is not None and prev not in (None, 0):
-            change, change_pct = _change_vs_basis(price, prev)
-        overnight_px = _parse_number(meta.get("postMarketPrice"))
-        # Yahoo Overnight % is vs regular close (same as the website Overnight box).
-        overnight_chg = overnight_pct = None
-        if overnight_px is not None:
-            basis = price if price not in (None, 0) else prev
-            overnight_chg, overnight_pct = _change_vs_basis(overnight_px, basis)
-        if overnight_px is None and price is None:
-            return None
-        out: dict[str, Any] = {
-            "symbol": sym,
-            "price": round(float(price), 2) if price is not None else None,
-            "change": round(float(change), 4) if change is not None else None,
-            "change_pct": round(float(change_pct), 3) if change_pct is not None else None,
-            "previous_close": round(float(prev), 6) if prev not in (None, 0) else None,
-            "source": "yahoo",
-            "session": "night",
-            "session_label": "夜盘",
-            "market_state": meta.get("marketState"),
-        }
-        if overnight_px is not None:
-            out["rt_price"] = round(float(overnight_px), 2)
-        if overnight_chg is not None:
-            out["rt_change"] = round(float(overnight_chg), 4)
-        if overnight_pct is not None:
-            out["rt_change_pct"] = round(float(overnight_pct), 3)
-        return out
-    except Exception:  # noqa: BLE001
+    for page_url in page_urls:
+        try:
+            page = await client.get(page_url, timeout=14.0, headers=headers)
+            if page.status_code >= 400 or not page.text:
+                continue
+            parsed = _overnight_from_yahoo_html(page.text)
+            if not parsed:
+                continue
+            overnight_px = parsed.get("rt_price")
+            overnight_chg = parsed.get("rt_change")
+            overnight_pct = parsed.get("rt_change_pct")
+            price = parsed.get("price")
+            change = parsed.get("change")
+            change_pct = parsed.get("change_pct")
+            if overnight_px is not None:
+                break
+        except Exception:  # noqa: BLE001
+            continue
+
+    # Optional close/prev from chart meta (never take postMarket* as 夜盘).
+    if price is None or prev is None:
+        for host in ("query1", "query2"):
+            url = (
+                f"https://{host}.finance.yahoo.com/v8/finance/chart/{enc}"
+                f"?range=1d&interval=1m&includePrePost=false"
+            )
+            try:
+                resp = await client.get(
+                    url, timeout=12.0, headers=_yahoo_chart_headers()
+                )
+                if resp.status_code >= 400:
+                    continue
+                result = ((resp.json().get("chart") or {}).get("result") or [None])[0]
+                if not result:
+                    continue
+                meta = result.get("meta") or {}
+                market_state = meta.get("marketState")
+                price = price or _parse_number(meta.get("regularMarketPrice"))
+                prev = prev or _parse_number(
+                    meta.get("chartPreviousClose") or meta.get("previousClose")
+                )
+                change = change or _parse_number(meta.get("regularMarketChange"))
+                change_pct = change_pct or _parse_pct(
+                    meta.get("regularMarketChangePercent")
+                )
+                # overnightMarket* on meta when Yahoo exposes it (rare).
+                if overnight_px is None:
+                    overnight_px = _parse_number(meta.get("overnightMarketPrice"))
+                    overnight_chg = _parse_number(meta.get("overnightMarketChange"))
+                    overnight_pct = _parse_pct(
+                        meta.get("overnightMarketChangePercent")
+                    )
+                    if overnight_px is not None and overnight_pct is None:
+                        basis = price if price not in (None, 0) else prev
+                        overnight_chg, overnight_pct = _change_vs_basis(
+                            overnight_px, basis
+                        )
+                break
+            except Exception:  # noqa: BLE001
+                continue
+
+    if change_pct is None and price is not None and prev not in (None, 0):
+        change, change_pct = _change_vs_basis(price, prev)
+    if overnight_px is None:
         return None
+    out: dict[str, Any] = {
+        "symbol": sym,
+        "price": round(float(price), 2) if price is not None else None,
+        "change": round(float(change), 4) if change is not None else None,
+        "change_pct": round(float(change_pct), 3) if change_pct is not None else None,
+        "previous_close": round(float(prev), 6) if prev not in (None, 0) else None,
+        "source": "yahoo",
+        "session": "night",
+        "session_label": "夜盘",
+        "market_state": market_state,
+        "rt_price": round(float(overnight_px), 2),
+    }
+    if overnight_chg is not None:
+        out["rt_change"] = round(float(overnight_chg), 4)
+    if overnight_pct is not None:
+        out["rt_change_pct"] = round(float(overnight_pct), 3)
+    return out
 
 
 async def overlay_yahoo_overnight_quotes(
@@ -337,9 +469,9 @@ async def overlay_yahoo_overnight_quotes(
     quotes: dict[str, dict[str, Any]],
     symbols: list[str],
     *,
-    concurrency: int = 4,
+    concurrency: int = 3,
 ) -> dict[str, dict[str, Any]]:
-    """Stamp Yahoo overnight price/% onto list quotes (holdings + sectors)."""
+    """Stamp Yahoo Overnight price/% onto list quotes (holdings + sectors)."""
     import asyncio
 
     sem = asyncio.Semaphore(max(1, concurrency))
@@ -354,25 +486,25 @@ async def overlay_yahoo_overnight_quotes(
     async def one(sym: str) -> None:
         async with sem:
             row = await fetch_yahoo_overnight_quote(client, sym)
-            if not row:
-                return
             base = dict(quotes.get(sym) or {})
+            base["session"] = "night"
+            base["session_label"] = "夜盘"
+            if not row or row.get("rt_price") is None:
+                # Never keep CNBC 盘后 as fake 夜盘 when Yahoo Overnight is missing.
+                base.pop("rt_price", None)
+                base.pop("rt_change", None)
+                base.pop("rt_change_pct", None)
+                quotes[sym] = base
+                return
             if base.get("price") is None and row.get("price") is not None:
                 base["price"] = row["price"]
                 base["change"] = row.get("change")
                 base["change_pct"] = row.get("change_pct")
                 base["previous_close"] = row.get("previous_close")
-            base["session"] = "night"
-            base["session_label"] = "夜盘"
             for key in ("rt_price", "rt_change", "rt_change_pct"):
                 if row.get(key) is not None:
                     base[key] = row[key]
-            if row.get("rt_price") is None:
-                # Clear stale AH clone so UI does not show fake 夜盘 = 收盘.
-                base.pop("rt_price", None)
-                base.pop("rt_change", None)
-                base.pop("rt_change_pct", None)
-            base["source"] = base.get("source") or "yahoo"
+            base["source"] = "yahoo"
             quotes[sym] = base
 
     await asyncio.gather(*(one(s) for s in uniq))
@@ -388,9 +520,17 @@ def apply_list_quote_fields(
     for key in ("price", "change", "change_pct", "as_of", "previous_close"):
         if quote.get(key) is not None:
             row[key] = quote[key]
-    for key in LIST_QUOTE_RT_KEYS:
+    for key in ("session", "session_label"):
         if quote.get(key) is not None:
             row[key] = quote[key]
+    night = str(quote.get("session") or row.get("session") or "") == "night"
+    has_night_rt = any(quote.get(k) is not None for k in ("rt_price", "rt_change", "rt_change_pct"))
+    for key in ("rt_price", "rt_change", "rt_change_pct"):
+        if quote.get(key) is not None:
+            row[key] = quote[key]
+        elif night and not has_night_rt:
+            # Propagate "no Yahoo Overnight" so cards never keep CNBC 盘后 %.
+            row.pop(key, None)
     return row
 
 
@@ -408,15 +548,17 @@ def _with_session_and_realtime(
     base["session"] = sid
     base["session_label"] = label
 
-    rt_price = _parse_number((extended or {}).get("last")) if extended else None
-    rt_change = _parse_number((extended or {}).get("change")) if extended else None
-    rt_pct = _parse_pct((extended or {}).get("change_pct")) if extended else None
+    # CNBC ExtendedMktQuote is 盘前/盘后 only — never treat POST_MKT as Yahoo 夜盘.
+    use_extended = isinstance(extended, dict) and sid in {"pre", "post"}
+    rt_price = _parse_number(extended.get("last")) if use_extended else None
+    rt_change = _parse_number(extended.get("change")) if use_extended else None
+    rt_pct = _parse_pct(extended.get("change_pct")) if use_extended else None
 
     # Normalize extended % to the session basis so vendors never leak full-day %.
     if rt_price is not None:
         if sid == "pre":
             chg, pct = _change_vs_basis(rt_price, base.get("previous_close"))
-        elif sid in {"post", "night"}:
+        elif sid == "post":
             chg, pct = _change_vs_basis(rt_price, base.get("price"))
         else:
             chg, pct = None, None
@@ -435,6 +577,11 @@ def _with_session_and_realtime(
         rt_change=rt_change,
         rt_change_pct=rt_pct,
     )
+    # Explicitly drop stale rt_* when night has no Yahoo overnight yet.
+    if sid == "night":
+        for key in ("rt_price", "rt_change", "rt_change_pct"):
+            if key not in rt_fields:
+                base.pop(key, None)
     base.update(rt_fields)
     return base
 
