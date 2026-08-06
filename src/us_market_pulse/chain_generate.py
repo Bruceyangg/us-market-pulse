@@ -15,7 +15,7 @@ from us_market_pulse.chains import CORE_SYMBOLS, _co, _panel, sort_companies
 
 _CACHE: dict[str, tuple[float, dict[str, Any]]] = {}
 _CACHE_TTL = 30 * 60  # shorter: new IPOs (e.g. SPCX) should surface faster
-_CACHE_VER = "v4"
+_CACHE_VER = "v6"
 _PANEL_CO_LIMIT = 28
 _WS = re.compile(r"[\s\-_/·•,+]+")
 
@@ -31,15 +31,161 @@ QUERY_SEARCH_ALIASES: dict[str, list[str]] = {
     "航天": ["SPCX", "SpaceX", "aerospace"],
     "星链": ["SPCX", "Starlink", "SpaceX"],
     "spacex": ["SPCX", "SpaceX"],
+    "飞机": ["aircraft", "airline", "aviation", "Boeing", "Airbus"],
+    "航空": ["aviation", "airline", "aerospace", "Boeing"],
+    "民航": ["airline", "commercial aviation"],
+    "航司": ["airline stocks"],
+    "军工": ["defense", "aerospace defense", "Lockheed", "Raytheon"],
+    "国防": ["defense contractors", "Lockheed Martin"],
+    "银行": ["bank", "banking", "JPMorgan"],
+    "白酒": ["liquor", "spirits", "beverage"],
+    "光伏": ["solar", "First Solar", "clean energy"],
+    "芯片": ["semiconductor", "chip", "TSMC", "NVIDIA"],
+    "半导体": ["semiconductor", "chip stocks"],
     "人工智能": ["NVDA", "artificial intelligence", "AI chip"],
     "新能源车": ["EV", "electric vehicle", "TSLA"],
     "网络安全": ["cybersecurity", "CRWD"],
     "人形机器人": ["humanoid robot", "robotics"],
+    "医疗": ["healthcare", "biotech", "pharma"],
+    "医药": ["pharmaceutical", "biotech"],
 }
+
+
+def resolve_search_aliases(query: str) -> list[str]:
+    """Map free-form (esp. Chinese) keywords to English Yahoo search seeds."""
+    qn = _norm(query)
+    out: list[str] = []
+    if qn in QUERY_SEARCH_ALIASES:
+        out.extend(QUERY_SEARCH_ALIASES[qn])
+    # Substring / containment match for compounds like「民用飞机」.
+    for key, terms in QUERY_SEARCH_ALIASES.items():
+        if key == qn:
+            continue
+        if key in qn or qn in key:
+            out.extend(terms)
+    # Dedup
+    seen: set[str] = set()
+    uniq: list[str] = []
+    for t in out:
+        k = t.strip().lower()
+        if not k or k in seen:
+            continue
+        seen.add(k)
+        uniq.append(t.strip())
+    return uniq
 
 
 # Theme packs compose into a panorama when keywords hit.
 THEME_PACKS: list[dict[str, Any]] = [
+    {
+        "id": "aviation",
+        "label": "飞机 / 航空",
+        "keywords": [
+            "飞机",
+            "航空",
+            "民航",
+            "航司",
+            "客机",
+            "airline",
+            "aviation",
+            "aircraft",
+            "airplane",
+            "波音",
+            "空客",
+        ],
+        "search_terms": [
+            "Boeing",
+            "airline",
+            "aviation",
+            "aircraft",
+            "aerospace defense",
+        ],
+        "must_include": [
+            _co("BA", "波音", note="民用飞机 / 防务", core=True),
+            _co("GE", "通用电气", note="航空发动机", core=True, sector="industrials"),
+            _co("RTX", "RTX", note="发动机 / 航电", core=True, sector="industrials"),
+        ],
+        "support_nodes": ["航空材料", "发动机 / 航电"],
+        "core_nodes": ["飞机制造", "航空公司"],
+        "app_nodes": ["空港物流", "国防航空"],
+        "panels": [
+            _panel(
+                "airframe",
+                "飞机制造",
+                tone="core",
+                branch="airframe",
+                blurb="整机与机体结构",
+                companies=[
+                    _co("BA", "波音", note="民用 / 军用飞机", core=True),
+                    _co("SPR", "Spirit AeroSystems", note="机身结构件"),
+                    _co("TXT", "德事隆", note="公务机 / 航空", sector="industrials"),
+                    _co("HEI", "HEICO", note="航空零部件", sector="industrials"),
+                ],
+            ),
+            _panel(
+                "engines",
+                "发动机 / 航电",
+                tone="support",
+                branch="engines",
+                companies=[
+                    _co("GE", "通用电气", note="GE Aerospace", core=True, sector="industrials"),
+                    _co("RTX", "RTX", note="普惠发动机", core=True, sector="industrials"),
+                    _co("HON", "霍尼韦尔", note="航电与系统", core=True),
+                    _co("TDG", "TransDigm", note="航空零部件", sector="industrials"),
+                    _co("CW", "Curtiss-Wright", note="航空系统", sector="industrials"),
+                ],
+            ),
+            _panel(
+                "materials_av",
+                "航空材料 / 复材",
+                tone="support",
+                branch="materials_av",
+                companies=[
+                    _co("DD", "杜邦", note="特种材料"),
+                    _co("ATI", "ATI", note="高温合金", sector="materials"),
+                    _co("HXL", "Hexcel", note="航空复合材料", sector="industrials"),
+                ],
+            ),
+            _panel(
+                "airlines",
+                "航空公司",
+                tone="core",
+                branch="airlines",
+                companies=[
+                    _co("DAL", "达美航空", note="全美航司", core=True, sector="industrials"),
+                    _co("UAL", "美联航", note="全美航司", core=True, sector="industrials"),
+                    _co("AAL", "美国航空", note="全美航司", sector="industrials"),
+                    _co("LUV", "西南航空", note="低成本航司", sector="industrials"),
+                    _co("ALK", "阿拉斯加航空", note="区域航司", sector="industrials"),
+                    _co("RYAAY", "Ryanair", note="欧洲低成本", sector="industrials"),
+                ],
+            ),
+            _panel(
+                "defense_av",
+                "国防航空",
+                tone="app",
+                branch="defense_av",
+                companies=[
+                    _co("LMT", "洛克希德马丁", note="战机 / 防务", core=True, sector="industrials"),
+                    _co("NOC", "诺斯罗普格鲁曼", note="航空防务", core=True, sector="industrials"),
+                    _co("GD", "通用动力", note="航电 / 防务", sector="industrials"),
+                    _co("BA", "波音", note="军机与防务", core=True),
+                    _co("HII", "亨廷顿英格尔斯", note="舰船 / 防务", sector="industrials"),
+                ],
+            ),
+            _panel(
+                "airport_logistics",
+                "空港 / 物流",
+                tone="app",
+                branch="airport_logistics",
+                companies=[
+                    _co("FDX", "联邦快递", note="航空物流", sector="industrials"),
+                    _co("UPS", "联合包裹", note="航空物流", sector="industrials"),
+                    _co("BA", "波音", note="货机需求"),
+                ],
+            ),
+        ],
+    },
     {
         "id": "space",
         "label": "太空 / 航天",
@@ -185,6 +331,97 @@ THEME_PACKS: list[dict[str, Any]] = [
                 companies=[
                     _co("SPCH", "2x Long SPCX", note="2x 做多 SpaceX ETF"),
                     _co("SPAX", "T-REX 2X SPCX", note="2x 做多 SpaceX ETF"),
+                ],
+            ),
+        ],
+    },
+    {
+        "id": "defense",
+        "label": "军工 / 国防",
+        "keywords": ["军工", "国防", "防务", "defense", "military", "武器"],
+        "search_terms": ["defense", "Lockheed", "Raytheon", "Northrop"],
+        "must_include": [
+            _co("LMT", "洛克希德马丁", note="防务龙头", core=True, sector="industrials"),
+            _co("RTX", "RTX", note="导弹 / 航电", core=True, sector="industrials"),
+            _co("NOC", "诺斯罗普格鲁曼", note="航空航天防务", core=True, sector="industrials"),
+        ],
+        "support_nodes": ["材料部件", "电子系统"],
+        "core_nodes": ["主承包商", "导弹防空"],
+        "app_nodes": ["海空军平台"],
+        "panels": [
+            _panel(
+                "primes",
+                "主承包商",
+                tone="core",
+                branch="primes",
+                companies=[
+                    _co("LMT", "洛克希德马丁", note="战机 / 导弹", core=True, sector="industrials"),
+                    _co("RTX", "RTX", note="雷神业务", core=True, sector="industrials"),
+                    _co("NOC", "诺斯罗普格鲁曼", note="B-21 / 太空", core=True, sector="industrials"),
+                    _co("GD", "通用动力", note="潜艇 / 战车", sector="industrials"),
+                    _co("BA", "波音", note="军机防务", core=True),
+                ],
+            ),
+            _panel(
+                "defense_electronics",
+                "防务电子",
+                tone="support",
+                branch="defense_electronics",
+                companies=[
+                    _co("LHX", "L3Harris", note="通信与电子", sector="industrials"),
+                    _co("HII", "亨廷顿英格尔斯", note="舰船", sector="industrials"),
+                    _co("TDG", "TransDigm", note="航空部件", sector="industrials"),
+                ],
+            ),
+        ],
+    },
+    {
+        "id": "banks",
+        "label": "银行 / 金融",
+        "keywords": ["银行", "金融", "投行", "bank", "banking", "finance"],
+        "search_terms": ["bank", "JPMorgan", "banking"],
+        "must_include": [
+            _co("JPM", "摩根大通", note="全能银行", core=True, sector="financials"),
+            _co("BAC", "美国银行", note="零售 / 对公", core=True, sector="financials"),
+            _co("GS", "高盛", note="投行", core=True, sector="financials"),
+        ],
+        "support_nodes": ["支付清算", "数据风控"],
+        "core_nodes": ["全能银行", "投行券商"],
+        "app_nodes": ["财富管理", "消费金融"],
+        "panels": [
+            _panel(
+                "money_center",
+                "全能银行",
+                tone="core",
+                branch="money_center",
+                companies=[
+                    _co("JPM", "摩根大通", note="美国银行龙头", core=True, sector="financials"),
+                    _co("BAC", "美国银行", note="零售银行", core=True, sector="financials"),
+                    _co("C", "花旗", note="跨境银行", sector="financials"),
+                    _co("WFC", "富国银行", note="零售信贷", sector="financials"),
+                    _co("USB", "美国合众银行", note="区域银行", sector="financials"),
+                ],
+            ),
+            _panel(
+                "ib_markets",
+                "投行 / 市场",
+                tone="core",
+                branch="ib_markets",
+                companies=[
+                    _co("GS", "高盛", note="投行与交易", core=True, sector="financials"),
+                    _co("MS", "摩根士丹利", note="财富 + 投行", core=True, sector="financials"),
+                    _co("SCHW", "嘉信理财", note="经纪平台", sector="financials"),
+                ],
+            ),
+            _panel(
+                "payments",
+                "支付",
+                tone="app",
+                branch="payments",
+                companies=[
+                    _co("V", "Visa", note="卡组织", core=True, sector="financials"),
+                    _co("MA", "万事达", note="卡组织", core=True, sector="financials"),
+                    _co("AXP", "美国运通", note="卡与消费", sector="financials"),
                 ],
             ),
         ],
@@ -720,8 +957,8 @@ async def enrich_with_yahoo(chain: dict[str, Any], query: str) -> dict[str, Any]
     themes = chain.get("themes") or []
     terms: list[str] = []
     raw = query.strip()
-    # Alias seeds first (e.g. 太空AI → SPCX / SpaceX).
-    terms.extend(QUERY_SEARCH_ALIASES.get(_norm(raw), []))
+    # Alias seeds first (e.g. 飞机 → aircraft / Boeing).
+    terms.extend(resolve_search_aliases(raw))
     # Prefer English search terms from matched themes + original query.
     for theme in THEME_PACKS:
         if theme.get("id") in themes:
@@ -733,6 +970,7 @@ async def enrich_with_yahoo(chain: dict[str, Any], query: str) -> dict[str, Any]
     if re.search(r"[A-Za-z]", raw):
         terms.insert(0, raw)
     else:
+        # Keep Chinese query as a last resort; Yahoo mainly hits English seeds.
         terms.append(raw)
     # Dedupe terms
     uniq_terms: list[str] = []
@@ -811,9 +1049,9 @@ async def generate_chain(query: str) -> dict[str, Any] | None:
         chain = _generic_skeleton(q)
     chain = await enrich_with_yahoo(chain, q)
 
-    # Require at least some companies to count as a successful generation.
+    # Accept thin Yahoo-only maps — better than empty for long-tail keywords.
     total = sum(len(p.get("companies") or []) for p in chain.get("panels") or [])
-    if total < 3 and not themes:
+    if total < 1 and not themes:
         return None
 
     _CACHE[cache_key] = (now, chain)
