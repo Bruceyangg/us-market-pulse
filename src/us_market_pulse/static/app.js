@@ -809,18 +809,6 @@ function renderFuturesIntradaySvg(
   const stroke = up ? TAPE_UP : TAPE_DOWN;
   const fill = up ? TAPE_UP_SOFT : TAPE_DOWN_SOFT;
   const muted = themeMutedFill();
-  const grid = "rgba(148,163,184,0.28)";
-
-  const hGrid = [0.2, 0.4, 0.6, 0.8]
-    .map((t) => {
-      const y = padTop + t * plotH;
-      return `<line x1="${padL}" y1="${y.toFixed(1)}" x2="${(
-        padL + plotW
-      ).toFixed(1)}" y2="${y.toFixed(
-        1
-      )}" stroke="${grid}" stroke-width="1" stroke-dasharray="2 3"></line>`;
-    })
-    .join("");
 
   const tickTs = FUTURES_BJ_TICK_HOURS.map((h) => {
     // Offset from session open (06:00): wrap past midnight for 02:00 / 05:00.
@@ -828,17 +816,6 @@ function renderFuturesIntradaySvg(
     if (hoursFromOpen < 0) hoursFromOpen += 24;
     return { h, t: start + hoursFromOpen * 3600 };
   });
-
-  const vGrid = tickTs
-    .map(({ t }) => {
-      const x = xOfT(t);
-      return `<line x1="${x.toFixed(1)}" y1="${padTop}" x2="${x.toFixed(
-        1
-      )}" y2="${(padTop + plotH).toFixed(
-        1
-      )}" stroke="${grid}" stroke-width="1" stroke-dasharray="2 3"></line>`;
-    })
-    .join("");
 
   const timeLabels = tickTs
     .map(({ h, t }) => {
@@ -893,8 +870,6 @@ function renderFuturesIntradaySvg(
 
   const html = `
     <svg class="session-intraday-svg futures-intraday-svg" viewBox="0 0 ${width} ${height}" preserveAspectRatio="none" role="img" aria-label="指数期货主连分时">
-      ${hGrid}
-      ${vGrid}
       ${prevLine}
       <path class="intraday-area" d="${area}" fill="${fill}"></path>
       <path class="intraday-line" d="${line}" fill="none" stroke="${stroke}" stroke-width="0.6" stroke-linecap="round" stroke-linejoin="round" vector-effect="non-scaling-stroke"></path>
@@ -952,7 +927,6 @@ function renderSessionIntradaySvg(
   const stroke = up ? TAPE_UP : TAPE_DOWN;
   const fill = up ? TAPE_UP_SOFT : TAPE_DOWN_SOFT;
   const muted = themeMutedFill();
-  const grid = "rgba(148,163,184,0.28)";
   // Yahoo-style extended-hours bands (avoid red/green so they never clash with tape).
   const PRE_OPEN = 9 * 60 + 30;
   const POST_OPEN = 16 * 60;
@@ -972,37 +946,6 @@ function renderSessionIntradaySvg(
         2
       )}" height="${plotH.toFixed(2)}"></rect>
     </g>`;
-
-  const hGrid = [0.2, 0.4, 0.6, 0.8]
-    .map((t) => {
-      const y = padTop + t * plotH;
-      return `<line x1="${padL}" y1="${y.toFixed(1)}" x2="${(
-        padL + plotW
-      ).toFixed(1)}" y2="${y.toFixed(
-        1
-      )}" stroke="${grid}" stroke-width="1" stroke-dasharray="2 3"></line>`;
-    })
-    .join("");
-
-  const vGrid = YAHOO_TIME_TICKS.map((mins) => {
-    const x = xOfMins(mins);
-    return `<line x1="${x.toFixed(1)}" y1="${padTop}" x2="${x.toFixed(
-      1
-    )}" y2="${(padTop + plotH).toFixed(
-      1
-    )}" stroke="${grid}" stroke-width="1" stroke-dasharray="2 3"></line>`;
-  }).join("");
-
-  const sessionGuides = [PRE_OPEN, POST_OPEN]
-    .map((mins) => {
-      const x = xOfMins(mins);
-      return `<line x1="${x.toFixed(1)}" y1="${padTop}" x2="${x.toFixed(
-        1
-      )}" y2="${(padTop + plotH).toFixed(
-        1
-      )}" stroke="rgba(148,163,184,0.55)" stroke-width="1"></line>`;
-    })
-    .join("");
 
   const timeLabels = YAHOO_TIME_TICKS.map((mins) => {
     const x = xOfMins(mins);
@@ -1055,9 +998,6 @@ function renderSessionIntradaySvg(
   const html = `
     <svg class="session-intraday-svg yahoo-intraday-svg" viewBox="0 0 ${width} ${height}" preserveAspectRatio="none" role="img" aria-label="Yahoo 1D 分时">
       ${sessionBands}
-      ${hGrid}
-      ${vGrid}
-      ${sessionGuides}
       ${prevLine}
       <path class="intraday-area" d="${area}" fill="${fill}"></path>
       <path class="intraday-line" d="${line}" fill="none" stroke="${stroke}" stroke-width="0.6" stroke-linecap="round" stroke-linejoin="round" vector-effect="non-scaling-stroke"></path>
