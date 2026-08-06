@@ -8129,6 +8129,79 @@ function bindThemeChrome() {
   scheduleAutoThemeRefresh();
 }
 
+function isCompactViewport() {
+  return (
+    window.matchMedia("(max-width: 720px)").matches ||
+    document.documentElement.classList.contains("pulse-native-phone")
+  );
+}
+
+function bindMobileMoreSheet() {
+  const btn = document.getElementById("btn-mobile-more");
+  const sheet = document.getElementById("mobile-more-sheet");
+  const closeBtn = document.getElementById("btn-mobile-more-close");
+  if (!btn || !sheet) return;
+
+  const setOpen = (open) => {
+    sheet.hidden = !open;
+    btn.setAttribute("aria-expanded", open ? "true" : "false");
+    document.body.classList.toggle("mobile-more-open", open);
+  };
+
+  btn.addEventListener("click", () => setOpen(sheet.hidden));
+  closeBtn?.addEventListener("click", () => setOpen(false));
+  sheet.querySelectorAll("a[href]").forEach((a) => {
+    a.addEventListener("click", (event) => {
+      const href = a.getAttribute("href");
+      if (!href) return;
+      event.preventDefault();
+      setOpen(false);
+      navigateToHref(href);
+    });
+  });
+  window.addEventListener("keydown", (event) => {
+    if (event.key === "Escape" && !sheet.hidden) setOpen(false);
+  });
+}
+
+function bindSectorsDepthToggles() {
+  const futuresBlock = document.getElementById("us-futures-block");
+  const futuresBtn = document.getElementById("btn-us-futures-toggle");
+  const mapPane = document.getElementById("sector-map");
+  const mapCanvas = document.getElementById("sector-map-canvas");
+  const mapBtn = document.getElementById("btn-sector-map-toggle");
+  if (!futuresBlock && !mapPane) return;
+
+  const compact = isCompactViewport();
+
+  if (futuresBlock && futuresBtn) {
+    const setFutures = (open) => {
+      futuresBlock.hidden = !open;
+      futuresBtn.setAttribute("aria-expanded", open ? "true" : "false");
+      futuresBtn.textContent = open ? "收起期货" : "期货图";
+    };
+    // Phone: strip first, charts on demand. Desktop/tablet: keep charts open.
+    setFutures(!compact);
+    futuresBtn.addEventListener("click", () => setFutures(futuresBlock.hidden));
+  }
+
+  if (mapPane && mapCanvas && mapBtn) {
+    const setMap = (open) => {
+      mapPane.classList.toggle("is-map-collapsed", !open);
+      mapBtn.setAttribute("aria-expanded", open ? "true" : "false");
+      mapBtn.textContent = open ? "收起" : "涨跌图";
+    };
+    // Phone native: collapse map by default to reach desk faster.
+    const phoneApp = document.documentElement.classList.contains("pulse-native-phone");
+    setMap(!phoneApp);
+    mapBtn.addEventListener("click", () =>
+      setMap(mapPane.classList.contains("is-map-collapsed")),
+    );
+  }
+}
+
 bootPage();
 bindStickyNavChrome();
 bindThemeChrome();
+bindMobileMoreSheet();
+bindSectorsDepthToggles();
