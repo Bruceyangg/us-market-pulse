@@ -505,34 +505,41 @@ async def _fetch_yahoo_series(
 
     try:
         resp = await client.get(url, timeout=25.0, headers=headers)
+
+        async def _get(u: str):
+            return await client.get(u, timeout=25.0, headers=headers)
+
         # Soft-fallback: Yahoo often 429s on 1m — retry coarser 5m / alternate host.
         if resp.status_code == 429 and str(tf.get("chart") or "line") == "line":
             for interval in ("5m", "2m"):
                 if str(tf.get("interval")) == interval:
                     continue
-                resp = await client.get(
+                resp = await _get(
                     _yahoo_chart_url(
                         spec["symbol"],
                         range_=str(tf.get("range") or "1d"),
                         interval=interval,
                         prepost=bool(tf.get("prepost")),
-                    ),
-                    timeout=25.0,
-                    headers=headers,
+                    )
                 )
                 if resp.status_code < 400:
                     break
         if resp.status_code == 429 and use_session and str(tf.get("range")) != "1d":
-            resp = await client.get(
+            resp = await _get(
                 _yahoo_chart_url(
                     spec["symbol"],
                     range_="1d",
                     interval=tf["interval"],
                     prepost=bool(tf.get("prepost")),
-                ),
-                timeout=25.0,
-                headers=headers,
+                )
             )
+        # query1 403 → query2 (common on datacenter / residential IP splits).
+        if resp.status_code in {403, 429}:
+            alt = url.replace("://query1.", "://query2.")
+            if alt != url:
+                resp2 = await _get(alt)
+                if resp2.status_code < 400:
+                    resp = resp2
         resp.raise_for_status()
         payload = resp.json()
         result = ((payload.get("chart") or {}).get("result") or [None])[0]
