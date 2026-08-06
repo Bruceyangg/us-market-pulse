@@ -53,7 +53,7 @@
       href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,500;9..144,700&family=Sora:wght@400;500;600;700&display=swap"
       rel="stylesheet"
     />
-    <link rel="stylesheet" href="/static/styles.css?v=20260806d3" />
+    <link rel="stylesheet" href="/static/styles.css?v=20260806d4" />
     {% block head %}{% endblock %}
   </head>
   <body class="page-{{ page }}" data-page="{{ page }}">
@@ -79,6 +79,7 @@
         <a href="/sectors" data-nav="sectors" class="{% if page == 'sectors' %}is-active{% endif %}">板块</a>
         <a href="/earnings" data-nav="earnings" class="{% if page == 'earnings' %}is-active{% endif %}">财报</a>
         <a href="/intel" data-nav="intel" class="{% if page == 'intel' %}is-active{% endif %}">情报</a>
+        <a href="/chains" data-nav="chains" class="{% if page == 'chains' %}is-active{% endif %}">产业链</a>
         <a href="/settings" data-nav="settings" class="{% if page == 'settings' %}is-active{% endif %}">设置</a>
       </nav>
       <div class="header-meta">
@@ -123,6 +124,9 @@
       <a href="/intel" data-nav="intel" class="{% if page == 'intel' %}is-active{% endif %}">
         <span class="tab-label">情报</span>
       </a>
+      <a href="/chains" data-nav="chains" class="{% if page == 'chains' %}is-active{% endif %}">
+        <span class="tab-label">产业链</span>
+      </a>
       {% if user %}
       <a href="/settings" data-nav="settings" class="{% if page == 'settings' %}is-active{% endif %}">
         <span class="tab-label">设置</span>
@@ -159,7 +163,7 @@
     </div>
     {% endblock %}
 
-    <script src="/static/app.js?v=20260806d3" type="module"></script>
+    <script src="/static/app.js?v=20260806d4" type="module"></script>
     <script>
       if ("serviceWorker" in navigator) {
         window.addEventListener("load", function () {
