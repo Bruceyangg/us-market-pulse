@@ -33,6 +33,8 @@ from us_market_pulse.quotes import (
     fetch_nasdaq_intraday,
     fetch_nasdaq_intraday_many,
     fetch_yahoo_overnight_quote,
+    peek_overnight_quote,
+    _schedule_overnight_refresh,
     resolve_list_session,
     session_from_clock,
 )
@@ -769,20 +771,10 @@ async def fetch_intraday_snapshot(
     if sid == "night":
         rt_fields: dict[str, Any] = {}
         try:
-            async with httpx.AsyncClient(
-                headers=yahoo_headers,
-                follow_redirects=True,
-                trust_env=False,
-                timeout=httpx.Timeout(12.0, connect=4.0),
-            ) as yclient:
-                y_night = await fetch_yahoo_overnight_quote(
-                    yclient,
-                    sym,
-                    allow_page=True,
-                    page_timeout=10.0,
-                    chart_timeout=2.5,
-                    bypass_cache=bool(force),
-                )
+            # Cache-first; kick a background refresh so polls stay snappy.
+            y_night = peek_overnight_quote(sym)
+            if not y_night or y_night.get("rt_price") is None:
+                _schedule_overnight_refresh([sym])
         except Exception:  # noqa: BLE001
             y_night = None
         if isinstance(y_night, dict) and y_night.get("overnight"):
