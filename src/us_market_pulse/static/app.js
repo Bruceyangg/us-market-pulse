@@ -7049,20 +7049,6 @@ function renderChainsMindmap(chain) {
         <span class="chains-mm-root-kicker">产业逻辑脑图</span>
         <strong>${escapeHtml(rootLabel)}</strong>
       </div>
-      <div class="chains-mm-flow" aria-hidden="true">
-        ${stages
-          .map((s, i) => {
-            const box = `<span class="chains-mm-flow-box tone-${escapeHtml(
-              s.tone
-            )}">${escapeHtml(s.label)}</span>`;
-            const arrow =
-              i < stages.length - 1
-                ? '<span class="chains-mm-flow-arrow">→</span>'
-                : "";
-            return box + arrow;
-          })
-          .join("")}
-      </div>
       <div class="chains-mm-stages" style="grid-template-columns: repeat(${Math.max(
         1,
         Math.min(stages.length, 3)
