@@ -5060,16 +5060,32 @@ function syncSectorQuery() {
   }
 }
 
+function sectorDeskQuoteCoverage(data) {
+  const picks = data?.picks || [];
+  if (!picks.length) return 0;
+  const priced = picks.filter(
+    (p) =>
+      typeof p?.price === "number" || typeof p?.change_pct === "number"
+  ).length;
+  return priced / picks.length;
+}
+
 function sectorCacheGet(id) {
   const row = state.sectorCache?.[id];
   if (!row?.data) return null;
   // Keep optimistic sector paint warm across tab switches / hover.
   if (Date.now() - Number(row.at || 0) > 120_000) return null;
+  // Drop spark-only shells that lost day quotes (shows "—" for the whole list).
+  if (sectorDeskQuoteCoverage(row.data) < 0.4) {
+    delete state.sectorCache[id];
+    return null;
+  }
   return row.data;
 }
 
 function sectorCachePut(id, data) {
   if (!id || !data) return;
+  if (sectorDeskQuoteCoverage(data) < 0.4) return;
   state.sectorCache[id] = { at: Date.now(), data };
 }
 
@@ -6420,7 +6436,20 @@ async function loadSectorDesk({ force = false } = {}) {
     if (seq === state.sectorsLoadSeq) {
       const msg = err?.name === "TimeoutError" ? "请求超时" : err.message || err;
       setStatus(`板块加载失败：${msg}`);
-      paintSectorDeskError(msg);
+      // One automatic retry on gateway blips (Render cold restart / 502).
+      const transient =
+        /HTTP 502|HTTP 503|HTTP 504|TimeoutError|Failed to fetch|NetworkError/i.test(
+          String(msg)
+        );
+      if (transient && !force) {
+        window.setTimeout(() => {
+          if (PAGE === "sectors" && state.sectorsLoadSeq === seq) {
+            void loadSectorDesk({ force: true });
+          }
+        }, 1200);
+      } else {
+        paintSectorDeskError(msg);
+      }
     }
     void mapPromise;
     return null;
