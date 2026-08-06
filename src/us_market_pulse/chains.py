@@ -628,34 +628,60 @@ def _public_chain(chain: dict[str, Any], *, q: str = "") -> dict[str, Any]:
     }
 
 
-def build_chains_desk(
+async def build_chains_desk(
     *,
     chain_id: str | None = None,
     q: str | None = None,
     node_id: str | None = None,  # kept for URL compat; unused in panorama mode
 ) -> dict[str, Any]:
     del node_id  # panorama mode does not focus a single node
+    from us_market_pulse.chain_generate import generate_chain, match_themes
+
     query = (q or "").strip()
     catalog = list_chain_catalog()
-    chain = resolve_chain(query, chain_id)
+    chain: dict[str, Any] | None = None
+    generated = False
+
+    # Explicit catalog id still wins (chip click).
+    if chain_id:
+        chain = resolve_chain(query, chain_id)
+    elif query:
+        themes = match_themes(query)
+        # Compound keywords like「太空AI」should compose themes, not collapse
+        # into a single curated pack that only matched a substring.
+        if len(themes) >= 2:
+            chain = await generate_chain(query)
+            generated = bool(chain)
+        if not chain:
+            chain = resolve_chain(query, None)
+        if not chain:
+            chain = await generate_chain(query)
+            generated = bool(chain)
+
     if not chain:
         return {
             "ok": True,
             "matched": False,
+            "generated": False,
             "q": query,
             "catalog": catalog,
             "chain": None,
             "message": (
-                "输入行业关键词生成全产业链逻辑图，例如：半导体、AI、新能源车"
+                "输入任意行业关键词，自动生成全产业链逻辑图与相关美股"
                 if not query
-                else f"未匹配到「{query}」相关产业链，可试：半导体、AI、新能源车"
+                else f"暂时无法根据「{query}」生成产业链，请换更具体的行业词试试"
             ),
         }
+    public = _public_chain(chain, q=query or chain["label"])
+    if generated or chain.get("generated"):
+        public["generated"] = True
+        public["themes"] = chain.get("themes") or []
     return {
         "ok": True,
         "matched": True,
+        "generated": bool(public.get("generated")),
         "q": query or chain["label"],
         "catalog": catalog,
-        "chain": _public_chain(chain, q=query or chain["label"]),
+        "chain": public,
         "message": "",
     }
