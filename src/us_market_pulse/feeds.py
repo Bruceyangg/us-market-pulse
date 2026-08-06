@@ -210,7 +210,7 @@ _CACHE: dict[str, Any] = {
     "errors": [],
 }
 _CACHE_TTL = 300  # seconds (intel / RSS)
-_MARKETS_TTL = 90  # fresher tape for intraday charts
+_MARKETS_TTL = 2  # near-real-time for 分时 charts (same sources)
 _FRED_TTL = 300  # FRED indicators on the markets page
 
 
