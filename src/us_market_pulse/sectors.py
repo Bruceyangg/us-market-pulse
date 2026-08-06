@@ -1472,15 +1472,29 @@ async def _hydrate_sector_symbol_news(
         if symbol_q
         else _empty_news()
     )
-    sector_gn, symbol_gn = await asyncio.gather(sector_gn_task, symbol_gn_task)
+    try:
+        sector_gn, symbol_gn = await asyncio.wait_for(
+            asyncio.gather(sector_gn_task, symbol_gn_task),
+            timeout=4.5,
+        )
+    except asyncio.TimeoutError:
+        sector_gn, symbol_gn = [], []
     sector_news = _merge_news_latest(sector_gn, sector_matched, limit=12)
     symbol_news = (
         _merge_news_latest(symbol_gn, symbol_matched, limit=8) if symbol_q else []
     )
-    sector_news, symbol_news = await asyncio.gather(
-        _polish_desk_news(sector_news, online_limit=12),
-        _polish_desk_news(symbol_news, online_limit=10),
-    )
+    try:
+        sector_news, symbol_news = await asyncio.wait_for(
+            asyncio.gather(
+                _polish_desk_news(sector_news, online_limit=8),
+                _polish_desk_news(symbol_news, online_limit=6),
+            ),
+            timeout=3.5,
+        )
+    except asyncio.TimeoutError:
+        # Keep headlines without waiting on translation.
+        sector_news = [_slim_news_item(dict(r)) for r in enrich_sentiment(sector_news)]
+        symbol_news = [_slim_news_item(dict(r)) for r in enrich_sentiment(symbol_news)]
     return sector_news, symbol_news
 
 
@@ -2890,14 +2904,32 @@ async def build_sector_desk(
         if str(row.get("symbol") or "").upper() == str(selected or "").upper():
             selected_name = str(row.get("name") or "") or None
             break
-    sector_news_slim, selected_symbol_news = await _hydrate_sector_symbol_news(
-        news_items,
-        topic_id=topic_key,
-        sector_label=str((active or {}).get("label") or sector_id or ""),
-        selected_symbol=str(selected or ""),
-        selected_name=selected_name,
-        force=force,
-    )
+    try:
+        sector_news_slim, selected_symbol_news = await asyncio.wait_for(
+            _hydrate_sector_symbol_news(
+                news_items,
+                topic_id=topic_key,
+                sector_label=str((active or {}).get("label") or sector_id or ""),
+                selected_symbol=str(selected or ""),
+                selected_name=selected_name,
+                force=force,
+            ),
+            timeout=8.0,
+        )
+    except asyncio.TimeoutError:
+        sector_news_slim = [
+            _slim_news_item(dict(i))
+            for i in _match_sector_news(news_items, topic_key)[:12]
+        ]
+        selected_symbol_news = [
+            _slim_news_item(dict(i))
+            for i in _match_symbol_news(
+                news_items,
+                str(selected or ""),
+                name=selected_name,
+                limit=8,
+            )
+        ]
     sector_news = sector_news_slim
     # Enrich move analysis + per-symbol news once news is available
     for row in pick_rows:
