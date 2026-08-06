@@ -420,9 +420,12 @@ function panChartWindow(key, deltaBars) {
   paintZoomableChart(key);
 }
 
-function chartZoomControlsHtml(zoomed) {
+function chartZoomControlsHtml(zoomed, { showLiveRefresh = false } = {}) {
   return `
     <div class="chart-zoom-bar">
+      <button type="button" class="chart-live-refresh${
+        showLiveRefresh ? "" : " is-hidden"
+      }" data-zoom-act="live-refresh" title="实时刷新分时" aria-label="实时刷新分时">刷新</button>
       <span class="chart-zoom-hint">缩放</span>
       <div class="chart-zoom-controls" role="group" aria-label="图表缩放">
         <button type="button" class="chart-zoom-btn" data-zoom-act="out" title="缩小" aria-label="缩小">−</button>
@@ -433,6 +436,28 @@ function chartZoomControlsHtml(zoomed) {
       </div>
     </div>
   `;
+}
+
+async function refreshChartLive(key) {
+  const meta = chartZoomData.get(key);
+  if (!meta || meta.tf !== "intraday") return;
+  const btn = meta.root?.querySelector('[data-zoom-act="live-refresh"]');
+  if (btn) {
+    btn.classList.add("is-busy");
+    btn.disabled = true;
+  }
+  try {
+    if (String(key || "").startsWith("us-fut-")) {
+      await loadUsMarketsDesk({ force: true });
+    } else {
+      await refreshActiveIntraday({ force: true });
+    }
+  } finally {
+    if (btn) {
+      btn.classList.remove("is-busy");
+      btn.disabled = false;
+    }
+  }
 }
 
 function renderChartSvg(points, { up = true, viewStart = 0, viewEnd = null } = {}) {
@@ -1182,6 +1207,8 @@ function paintZoomableChart(key) {
   const full = defaultChartZoom(len, tf, kind);
   const zoomed = z.count < len || z.start !== full.start;
   if (resetBtn) resetBtn.classList.toggle("is-hidden", !zoomed);
+  const liveBtn = root.querySelector('[data-zoom-act="live-refresh"]');
+  if (liveBtn) liveBtn.classList.toggle("is-hidden", tf !== "intraday");
   if (zoomRoot) zoomRoot.classList.toggle("is-zoomed", zoomed);
   root.querySelectorAll(":scope > .ma-legend").forEach((el) => el.remove());
   // 分时 always uses the session line renderer, even if a stale kind says candle.
@@ -1454,7 +1481,7 @@ function bindZoomableChart(
   const zoomed = z.count < len || z.start !== full.start;
   canvasEl.innerHTML = `
     <div class="chart-zoom" data-zoom-key="${escapeHtml(key)}" tabindex="0" aria-label="可缩放图表：触控板捏合或使用上方缩放按钮">
-      ${chartZoomControlsHtml(zoomed)}
+      ${chartZoomControlsHtml(zoomed, { showLiveRefresh: tf === "intraday" })}
       <div class="chart-zoom-stage"></div>
       <div class="chart-crosshair-tip is-hidden" aria-live="polite"></div>
     </div>
@@ -1472,6 +1499,10 @@ function bindZoomableChart(
     if (act === "in") zoomChartWindow(key, CHART_ZOOM_STEP, 0.85);
     else if (act === "out") zoomChartWindow(key, 1 / CHART_ZOOM_STEP, 0.85);
     else if (act === "reset") zoomChartWindow(key, 1);
+    else if (act === "live-refresh") {
+      event.preventDefault();
+      void refreshChartLive(key);
+    }
   });
 
   zoomRoot.addEventListener(
@@ -5247,7 +5278,8 @@ async function refreshActiveIntraday({ force = false } = {}) {
     PAGE === "desk"
       ? state.portfolioPreview || state.portfolio?.selected || ""
       : state.sectorSymbol || state.sectors?.selected_symbol || "";
-  if (!sym || state.intradayPollBusy) return;
+  // Auto-poll skips when busy; manual 刷新 bypasses as a backup.
+  if (!sym || (state.intradayPollBusy && !force)) return;
   state.intradayPollBusy = true;
   try {
     const url = `/api/quote/intraday?symbol=${encodeURIComponent(sym)}${
@@ -6369,7 +6401,7 @@ function renderUsMarketsDesk(data) {
 
 async function loadUsMarketsDesk({ force = false } = {}) {
   if (PAGE !== "sectors") return null;
-  if (state.usMarketsPollBusy) return null;
+  if (state.usMarketsPollBusy && !force) return null;
   state.usMarketsPollBusy = true;
   try {
     const res = await fetch(
