@@ -3846,6 +3846,27 @@ html[data-theme="dark"] .sector-pick-list .sector-hold-btn.is-held:hover {
   stroke-width: 0.6px;
 }
 
+/* Extended-hours ghost bands (blue pre / violet post — never red/green). */
+.session-intraday-svg .band-pre,
+.yahoo-intraday-svg .band-pre {
+  fill: rgba(70, 120, 190, 0.14);
+}
+
+.session-intraday-svg .band-post,
+.yahoo-intraday-svg .band-post {
+  fill: rgba(140, 105, 200, 0.14);
+}
+
+html[data-theme="dark"] .session-intraday-svg .band-pre,
+html[data-theme="dark"] .yahoo-intraday-svg .band-pre {
+  fill: rgba(78, 130, 200, 0.18);
+}
+
+html[data-theme="dark"] .session-intraday-svg .band-post,
+html[data-theme="dark"] .yahoo-intraday-svg .band-post {
+  fill: rgba(150, 115, 210, 0.18);
+}
+
 .portfolio-chart .session-intraday-svg .intraday-area,
 .sector-chart .session-intraday-svg .intraday-area,
 .chart-card .session-intraday-svg .intraday-area,
