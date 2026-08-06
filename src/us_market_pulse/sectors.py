@@ -2653,44 +2653,56 @@ async def build_sector_desk(
             and selected not in universe
         ):
             selected = pick_rows[0]["symbol"] if pick_rows else selected
-    elif picks_from_cache and pick_symbols and (
-        not picks_fresh or session_from_clock()[0] in {"night", "pre", "post"}
-    ):
-        # Soft-refresh day tape with a hard budget — never stall the list paint.
-        if session_from_clock()[0] == "night":
-            night_pri = []
-            if selected:
-                night_pri.append(selected)
-            for sym in pick_symbols:
-                if sym not in night_pri:
-                    night_pri.append(sym)
-                if len(night_pri) >= 3:
-                    break
-        else:
-            night_pri = [selected] if selected else []
-        try:
-            day_quotes = await asyncio.wait_for(
-                fetch_day_quotes(
-                    pick_symbols,
-                    overnight_priority=night_pri,
-                ),
-                timeout=1.4,
-            )
-        except asyncio.TimeoutError:
-            day_quotes = {}
-        for row in pick_rows:
-            sym = str(row.get("symbol") or "").upper()
-            quote = day_quotes.get(sym)
-            if not quote:
-                continue
-            apply_list_quote_fields(row, quote)
-            if quote.get("price") is not None:
-                row["price"] = quote.get("price")
-            if quote.get("change") is not None:
-                row["change"] = quote.get("change")
-            if quote.get("change_pct") is not None:
-                row["change_pct"] = quote.get("change_pct")
-                row["momentum"] = float(quote["change_pct"] or 0)
+    else:
+        priced = sum(
+            1
+            for r in pick_rows
+            if isinstance(r.get("price"), (int, float))
+            or isinstance(r.get("change_pct"), (int, float))
+        )
+        missing_prices = bool(pick_rows) and priced < max(3, len(pick_rows) // 2)
+        soft_refresh = picks_from_cache and pick_symbols and (
+            not picks_fresh
+            or missing_prices
+            or session_from_clock()[0] in {"night", "pre", "post"}
+        )
+        if soft_refresh:
+            # Soft-refresh day tape with a hard budget — never stall the list paint.
+            # Also repair caches that kept sparks but lost price/% after a quote timeout.
+            if session_from_clock()[0] == "night":
+                night_pri = []
+                if selected:
+                    night_pri.append(selected)
+                for sym in pick_symbols:
+                    if sym not in night_pri:
+                        night_pri.append(sym)
+                    if len(night_pri) >= 3:
+                        break
+            else:
+                night_pri = [selected] if selected else []
+            try:
+                day_quotes = await asyncio.wait_for(
+                    fetch_day_quotes(
+                        pick_symbols,
+                        overnight_priority=night_pri,
+                    ),
+                    timeout=3.2 if missing_prices else 1.4,
+                )
+            except asyncio.TimeoutError:
+                day_quotes = {}
+            for row in pick_rows:
+                sym = str(row.get("symbol") or "").upper()
+                quote = day_quotes.get(sym)
+                if not quote:
+                    continue
+                apply_list_quote_fields(row, quote)
+                if quote.get("price") is not None:
+                    row["price"] = quote.get("price")
+                if quote.get("change") is not None:
+                    row["change"] = quote.get("change")
+                if quote.get("change_pct") is not None:
+                    row["change_pct"] = quote.get("change_pct")
+                    row["momentum"] = float(quote["change_pct"] or 0)
 
     # List first: sparks from cache. Selected chart races briefly (≤2s), then
     # continues in background so 成分股 never waits on a full multi-TF fetch.
