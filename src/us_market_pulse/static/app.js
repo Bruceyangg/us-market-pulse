@@ -522,6 +522,59 @@ function formatEtClockLabel(mins) {
   return `${h12}${mm} ${am ? "AM" : "PM"}`;
 }
 
+/** CME equity-index futures 1D: Beijing 06:00 → next day 05:00. */
+const FUTURES_BJ_TICK_HOURS = [6, 10, 14, 18, 22, 2, 5];
+
+function bjParts(ts) {
+  const parts = new Intl.DateTimeFormat("en-US", {
+    timeZone: "Asia/Shanghai",
+    hour: "2-digit",
+    minute: "2-digit",
+    hourCycle: "h23",
+  }).formatToParts(new Date(Number(ts) * 1000));
+  let hour = Number(parts.find((p) => p.type === "hour")?.value || 0);
+  const minute = Number(parts.find((p) => p.type === "minute")?.value || 0);
+  if (hour === 24) hour = 0;
+  return { hour, minute, mins: hour * 60 + minute };
+}
+
+function formatBjClockLabel(hour) {
+  return `${String(hour % 24).padStart(2, "0")}:00`;
+}
+
+function futuresCycleBounds(points, cycleStart, cycleEnd) {
+  const start = Number(cycleStart);
+  const end = Number(cycleEnd);
+  if (Number.isFinite(start) && Number.isFinite(end) && end > start) {
+    return { start, end };
+  }
+  const ts = (points || [])
+    .map((p) => Number(p?.t))
+    .filter((t) => Number.isFinite(t));
+  if (!ts.length) return null;
+  const last = Math.max(...ts);
+  // Walk back to the active 06:00 BJ open for this tape.
+  const d = new Date(last * 1000);
+  const parts = new Intl.DateTimeFormat("en-CA", {
+    timeZone: "Asia/Shanghai",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    hourCycle: "h23",
+  }).formatToParts(d);
+  const y = Number(parts.find((p) => p.type === "year")?.value);
+  const mo = Number(parts.find((p) => p.type === "month")?.value);
+  const day = Number(parts.find((p) => p.type === "day")?.value);
+  const hour = Number(parts.find((p) => p.type === "hour")?.value);
+  // Approximate BJ midnight UTC offset (+8); then add 06:00.
+  let openMs = Date.UTC(y, mo - 1, day, 6 - 8, 0, 0);
+  if (hour < 6) openMs -= 24 * 3600 * 1000;
+  const open = Math.floor(openMs / 1000);
+  return { start: open, end: open + 23 * 3600 };
+}
+
 function formatPriceTick(v) {
   const n = Number(v);
   if (!Number.isFinite(n)) return "";
@@ -642,6 +695,225 @@ function buildIntradayHitModel(
     xOfMins,
     samples,
   };
+}
+
+/**
+ * Index-futures 主连 1D: chronological X on Beijing 06:00→05:00 axis.
+ * Do not reuse equity ET clock mapping (that draws the diagonal slash).
+ */
+function buildFuturesHitModel(
+  points,
+  {
+    viewStart = 0,
+    viewEnd = null,
+    previousClose = null,
+    cycleStart = null,
+    cycleEnd = null,
+  } = {}
+) {
+  const { width, height, padL, padR, padTop, padBottom } = INTRADAY_VB;
+  const plotW = width - padL - padR;
+  const plotH = height - padTop - padBottom;
+  let view = (points || [])
+    .filter((p) => p && Number.isFinite(Number(p.v ?? p.c)) && p.t != null)
+    .map((p) => ({ ...p, t: Number(p.t), v: Number(p.v ?? p.c) }))
+    .sort((a, b) => a.t - b.t);
+  const bounds = futuresCycleBounds(view, cycleStart, cycleEnd);
+  if (!bounds) return null;
+  const { start, end } = bounds;
+  view = view.filter((p) => p.t >= start && p.t <= end);
+  const sliceEnd = viewEnd == null ? view.length : Math.min(view.length, viewEnd);
+  const sliceStart = clamp(viewStart, 0, Math.max(0, sliceEnd));
+  if (!(sliceStart === 0 && sliceEnd >= view.length)) {
+    view = view.slice(sliceStart, sliceEnd);
+  }
+  if (view.length < 2) return null;
+
+  const prev =
+    previousClose != null && Number.isFinite(Number(previousClose))
+      ? Number(previousClose)
+      : null;
+  const vals = view.map((p) => p.v);
+  let min = Math.min(...vals);
+  let max = Math.max(...vals);
+  if (prev != null) {
+    min = Math.min(min, prev);
+    max = Math.max(max, prev);
+  }
+  const pad = (max - min) * 0.06 || Math.abs(max) * 0.002 || 0.01;
+  min -= pad;
+  max += pad;
+  const span = max - min || 1;
+  const axisSpan = Math.max(1, end - start);
+  const yOf = (v) => padTop + (1 - (v - min) / span) * plotH;
+  const xOfT = (t) =>
+    padL + (clamp(Number(t), start, end) - start) / axisSpan * plotW;
+
+  const samples = view.map((p) => ({
+    t: p.t,
+    price: p.v,
+    mins: bjParts(p.t).mins,
+    x: xOfT(p.t),
+    y: yOf(p.v),
+  }));
+
+  return {
+    width,
+    height,
+    padL,
+    padR,
+    padTop,
+    padBottom,
+    plotW,
+    plotH,
+    min,
+    max,
+    prev,
+    yOf,
+    xOfT,
+    samples,
+    cycleStart: start,
+    cycleEnd: end,
+  };
+}
+
+function renderFuturesIntradaySvg(
+  points,
+  {
+    up = true,
+    viewStart = 0,
+    viewEnd = null,
+    previousClose = null,
+    cycleStart = null,
+    cycleEnd = null,
+  } = {}
+) {
+  const model = buildFuturesHitModel(points, {
+    viewStart,
+    viewEnd,
+    previousClose,
+    cycleStart,
+    cycleEnd,
+  });
+  const { width, height, padL, padTop, padBottom, padR } = INTRADAY_VB;
+  const plotW = width - padL - padR;
+  const plotH = height - padTop - padBottom;
+  if (!model) {
+    return {
+      html: `<svg viewBox="0 0 ${width} ${height}" role="img" aria-label="暂无走势"><text x="16" y="96" fill="${themeMutedFill()}" font-size="13">暂无分时数据</text></svg>`,
+      hit: null,
+    };
+  }
+
+  const { prev, min, max, yOf, xOfT, samples, cycleStart: start } = model;
+  const coords = samples.map((s) => [s.x, s.y]);
+  const stroke = up ? TAPE_UP : TAPE_DOWN;
+  const fill = up ? TAPE_UP_SOFT : TAPE_DOWN_SOFT;
+  const muted = themeMutedFill();
+  const grid = "rgba(148,163,184,0.28)";
+
+  const hGrid = [0.2, 0.4, 0.6, 0.8]
+    .map((t) => {
+      const y = padTop + t * plotH;
+      return `<line x1="${padL}" y1="${y.toFixed(1)}" x2="${(
+        padL + plotW
+      ).toFixed(1)}" y2="${y.toFixed(
+        1
+      )}" stroke="${grid}" stroke-width="1" stroke-dasharray="2 3"></line>`;
+    })
+    .join("");
+
+  const tickTs = FUTURES_BJ_TICK_HOURS.map((h) => {
+    // Offset from session open (06:00): wrap past midnight for 02:00 / 05:00.
+    let hoursFromOpen = h - 6;
+    if (hoursFromOpen < 0) hoursFromOpen += 24;
+    return { h, t: start + hoursFromOpen * 3600 };
+  });
+
+  const vGrid = tickTs
+    .map(({ t }) => {
+      const x = xOfT(t);
+      return `<line x1="${x.toFixed(1)}" y1="${padTop}" x2="${x.toFixed(
+        1
+      )}" y2="${(padTop + plotH).toFixed(
+        1
+      )}" stroke="${grid}" stroke-width="1" stroke-dasharray="2 3"></line>`;
+    })
+    .join("");
+
+  const timeLabels = tickTs
+    .map(({ h, t }) => {
+      const x = xOfT(t);
+      return `<text x="${x.toFixed(1)}" y="${(height - 4).toFixed(
+        1
+      )}" text-anchor="middle" fill="${muted}" font-size="6.2">${escapeHtml(
+        formatBjClockLabel(h)
+      )}</text>`;
+    })
+    .join("");
+
+  const priceTicks = [max, (max + min) / 2, min]
+    .map((v, i) => {
+      const y = yOf(v);
+      const anchor = i === 0 ? "hanging" : i === 2 ? "auto" : "middle";
+      return `<text x="${(width - 1.5).toFixed(1)}" y="${y.toFixed(
+        1
+      )}" text-anchor="end" dominant-baseline="${anchor}" fill="${muted}" font-size="6.4">${escapeHtml(
+        formatPriceTick(v)
+      )}</text>`;
+    })
+    .join("");
+
+  const prevLine =
+    prev != null
+      ? `<line x1="${padL}" y1="${yOf(prev).toFixed(2)}" x2="${(
+          padL + plotW
+        ).toFixed(2)}" y2="${yOf(prev).toFixed(
+          2
+        )}" stroke="rgba(251,146,60,0.85)" stroke-width="1" stroke-dasharray="4 3"></line>
+        <text x="${(padL + 3).toFixed(1)}" y="${(yOf(prev) - 2.5).toFixed(
+          1
+        )}" fill="${muted}" font-size="6.2">昨收 ${escapeHtml(
+          formatPriceTick(prev)
+        )}</text>`
+      : "";
+
+  const line = coords
+    .map(([x, y], i) => `${i === 0 ? "M" : "L"}${x.toFixed(2)},${y.toFixed(2)}`)
+    .join(" ");
+  const area = `${line} L${coords[coords.length - 1][0].toFixed(2)},${(
+    padTop + plotH
+  ).toFixed(2)} L${coords[0][0].toFixed(2)},${(padTop + plotH).toFixed(2)} Z`;
+
+  const last = coords[coords.length - 1];
+  const tip = `<circle class="intraday-tip" cx="${last[0].toFixed(
+    2
+  )}" cy="${last[1].toFixed(
+    2
+  )}" r="0.9" fill="${stroke}" vector-effect="non-scaling-stroke"></circle>`;
+
+  const html = `
+    <svg class="session-intraday-svg futures-intraday-svg" viewBox="0 0 ${width} ${height}" preserveAspectRatio="none" role="img" aria-label="指数期货主连分时">
+      ${hGrid}
+      ${vGrid}
+      ${prevLine}
+      <path class="intraday-area" d="${area}" fill="${fill}"></path>
+      <path class="intraday-line" d="${line}" fill="none" stroke="${stroke}" stroke-width="0.6" stroke-linecap="round" stroke-linejoin="round" vector-effect="non-scaling-stroke"></path>
+      ${tip}
+      <g class="intraday-crosshair" visibility="hidden">
+        <line class="ch-v" x1="0" y1="${padTop}" x2="0" y2="${(
+          padTop + plotH
+        ).toFixed(1)}" stroke="rgba(148,163,184,0.85)" stroke-width="1" vector-effect="non-scaling-stroke"></line>
+        <line class="ch-h" x1="${padL}" y1="0" x2="${(padL + plotW).toFixed(
+          1
+        )}" y2="0" stroke="rgba(148,163,184,0.55)" stroke-width="1" stroke-dasharray="3 3" vector-effect="non-scaling-stroke"></line>
+        <circle class="ch-dot" cx="0" cy="0" r="1.35" fill="${stroke}" stroke="#fff" stroke-width="0.6" vector-effect="non-scaling-stroke"></circle>
+      </g>
+      ${timeLabels}
+      ${priceTicks}
+    </svg>
+  `;
+  return { html, hit: model };
 }
 
 /**
@@ -977,14 +1249,26 @@ function paintZoomableChart(key) {
   // Never index-slice 分时 — that clipped session tips off the canvas.
   if (tf === "intraday") {
     const linePts = toLineSparkPoints(points);
-    const drawn = renderSessionIntradaySvg(linePts.length ? linePts : points, {
-      up,
-      viewStart: 0,
-      viewEnd: null,
-      sessions: meta.sessions,
-      previousClose: meta.previousClose,
-      cycleStart: meta.cycleStart,
-    });
+    const pts = linePts.length ? linePts : points;
+    const isFutures =
+      meta.axis === "futures_bj" || String(key || "").startsWith("us-fut-");
+    const drawn = isFutures
+      ? renderFuturesIntradaySvg(pts, {
+          up,
+          viewStart: 0,
+          viewEnd: null,
+          previousClose: meta.previousClose,
+          cycleStart: meta.cycleStart,
+          cycleEnd: meta.cycleEnd,
+        })
+      : renderSessionIntradaySvg(pts, {
+          up,
+          viewStart: 0,
+          viewEnd: null,
+          sessions: meta.sessions,
+          previousClose: meta.previousClose,
+          cycleStart: meta.cycleStart,
+        });
     stage.innerHTML = drawn.html;
     meta.intradayHit = drawn.hit;
     hideIntradayCrosshair(key);
@@ -1194,6 +1478,8 @@ function bindZoomableChart(
     sessions = null,
     previousClose = null,
     cycleStart = null,
+    cycleEnd = null,
+    axis = null,
   }
 ) {
   if (!canvasEl) return;
@@ -1215,6 +1501,8 @@ function bindZoomableChart(
     sessions,
     previousClose,
     cycleStart,
+    cycleEnd,
+    axis,
   });
   ensureChartZoom(key, scope, len, tf, kind);
   if (sameShell) {
@@ -6112,8 +6400,10 @@ function renderUsFuturesCharts() {
       kind,
       up,
       sessions: series?.sessions || null,
-      previousClose: series?.previous_close ?? null,
+      previousClose: series?.previous_close ?? fut.previous_close ?? null,
       cycleStart: series?.cycle_start ?? null,
+      cycleEnd: series?.cycle_end ?? null,
+      axis: series?.axis || (tf === "intraday" ? "futures_bj" : null),
     });
   });
 }
