@@ -17,15 +17,13 @@ import httpx
 
 from us_market_pulse.markets import (
     _series_change,
-    _session_segments,
     even_sample_points,
-    finalize_desk_intraday_points,
-    sample_session_points,
 )
 from us_market_pulse.quotes import USER_AGENT, _parse_number, _parse_pct
 from us_market_pulse.sectors import SECTOR_TIMEFRAMES
 
 _ET = ZoneInfo("America/New_York")
+_BJ = ZoneInfo("Asia/Shanghai")
 
 # Yahoo display symbol → CNBC quote / bars symbol.
 _CNBC_SYM: dict[str, str] = {
@@ -75,7 +73,8 @@ US_FUTURES_CHARTS: list[dict[str, str]] = [
 
 # SECTOR_TIMEFRAMES id → CNBC bar type + lookback days.
 _TF_BARS: dict[str, tuple[str, int]] = {
-    "intraday": ("1M", 2),
+    # 2+ days so 北京 06:00→05:00 session always has full 1M coverage.
+    "intraday": ("1M", 3),
     "day": ("1D", 800),
     "month": ("1MO", 4000),
     "quarter": ("3MO", 6000),
@@ -97,6 +96,62 @@ def _headers() -> dict[str, str]:
 
 def _cnbc_for(yahoo_sym: str) -> str:
     return _CNBC_SYM.get(yahoo_sym.upper(), yahoo_sym)
+
+
+def futures_session_bounds_bj(
+    now: datetime | None = None,
+) -> tuple[datetime, datetime]:
+    """CME equity-index futures 1D window in Beijing time.
+
+    Summer/winter alike for the desk: 06:00 → next day 05:00 (23h), matching
+    broker apps (e.g. 主连 1D axis 06:01 … 05:00).
+    """
+    now_bj = now.astimezone(_BJ) if now else datetime.now(tz=_BJ)
+    today_6 = now_bj.replace(hour=6, minute=0, second=0, microsecond=0)
+    start = today_6 if now_bj >= today_6 else today_6 - timedelta(days=1)
+    end = start + timedelta(hours=23)
+    return start, end
+
+
+def finalize_futures_intraday_points(
+    points: list[dict[str, Any]] | None,
+    *,
+    now: datetime | None = None,
+    max_points: int = 360,
+) -> tuple[list[dict[str, Any]], dict[str, int]]:
+    """Clip 1M bars to the active 北京 06:00→05:00 session; chronological only."""
+    start_bj, end_bj = futures_session_bounds_bj(now)
+    start_ts = int(start_bj.timestamp())
+    end_ts = int(end_bj.timestamp())
+    now_ts = int((now or datetime.now(tz=_BJ)).timestamp())
+    clip_end = min(end_ts, now_ts + 60)
+    rows: list[dict[str, Any]] = []
+    for p in points or []:
+        if not isinstance(p, dict) or p.get("t") is None:
+            continue
+        try:
+            t = int(p["t"])
+            v = float(p.get("v") if p.get("v") is not None else p.get("c"))
+        except (TypeError, ValueError):
+            continue
+        if t < start_ts or t > clip_end:
+            continue
+        rows.append({"t": t, "v": round(v, 6)})
+    rows.sort(key=lambda p: p["t"])
+    # Drop duplicate timestamps (keep last).
+    dedup: list[dict[str, Any]] = []
+    for p in rows:
+        if dedup and dedup[-1]["t"] == p["t"]:
+            dedup[-1] = p
+        else:
+            dedup.append(p)
+    if len(dedup) > max_points:
+        dedup = even_sample_points(dedup, max_points)
+    meta = {
+        "cycle_start": start_ts,
+        "cycle_end": end_ts,
+    }
+    return dedup, meta
 
 
 def _parse_trade_time(raw: str | None) -> int | None:
@@ -287,17 +342,13 @@ async def _build_futures_bundle(
         max_pts = int(tf.get("max_points") or 360)
         if chart == "line":
             points = [{"t": b["t"], "v": b["c"]} for b in raw]
-            # Futures tape is near-24h; keep recent window, lightly sample.
-            if len(points) > max_pts * 3:
-                cutoff = points[-1]["t"] - 36 * 3600
-                points = [p for p in points if p["t"] >= cutoff] or points[-max_pts:]
-            # Equity session finalize still helps band labeling when hours overlap;
-            # if it empties the tape (weekend gaps), fall back to raw recent points.
-            finalized = finalize_desk_intraday_points(points)
-            if len(finalized) >= 2:
-                points = finalized
-            if len(points) > max_pts:
-                points = sample_session_points(points, max_pts)
+            # Dedicated CME 主连 1D: 北京 06:00 → 次日 05:00 (not equity 4–20 ET).
+            points, cycle = finalize_futures_intraday_points(
+                points, max_points=max_pts
+            )
+            if len(points) < 2:
+                errors.append(f"{spec['label']}/{tf['label']}: empty futures session")
+                return
             change, change_pct = _series_change(points, "line")
             prev = quote_seed.get("previous_close")
             price = quote_seed.get("price") or (points[-1]["v"] if points else None)
@@ -305,20 +356,20 @@ async def _build_futures_bundle(
             day_change_pct = quote_seed.get("change_pct")
             if day_change_pct is not None:
                 change, change_pct = day_change, day_change_pct
-            sessions = _session_segments(points)
             series[tf_id] = {
                 "tf": tf_id,
                 "label": tf["label"],
-                "blurb": "CNBC 分时 · 指数期货主连",
+                "blurb": "CNBC 分时 · 主连 北京06:00→05:00",
                 "range": tf.get("range"),
                 "interval": tf.get("interval"),
                 "chart": "line",
+                "axis": "futures_bj",
                 "points": points,
                 "change": change,
                 "change_pct": change_pct,
                 "previous_close": prev,
-                "sessions": sessions,
-                "session_labels": ["夜盘", "盘前", "盘中", "盘后"],
+                "cycle_start": cycle.get("cycle_start"),
+                "cycle_end": cycle.get("cycle_end"),
                 "source": "cnbc",
             }
             if price is not None:
