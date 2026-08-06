@@ -190,10 +190,9 @@ def derive_list_realtime(
                 out_change = chg
             if out_pct is None:
                 out_pct = pct
-    else:  # post / night
+    elif sid == "post":
         if out_price is None and post_pts:
             out_price = _point_price(post_pts[-1])
-        # Never fall back to day lastSale as 夜盘 RT — that clones 收盘涨跌幅.
         if out_price is not None and (out_pct is None or out_change is None):
             basis = regular_close if regular_close not in (None, 0) else previous_close
             chg, pct = _change_vs_basis(out_price, basis)
@@ -201,17 +200,24 @@ def derive_list_realtime(
                 out_change = chg
             if out_pct is None:
                 out_pct = pct
-        # If still identical to the day line with no distinct post tape, drop RT
-        # numbers so UI does not show a fake "夜盘" clone of 收盘涨跌幅.
+    else:  # night — Yahoo overnight is quote-only; never reuse 盘后 tape as 夜盘
+        if out_price is not None and (out_pct is None or out_change is None):
+            basis = regular_close if regular_close not in (None, 0) else previous_close
+            if basis is None:
+                basis = _parse_number(day_price)
+            chg, pct = _change_vs_basis(out_price, basis)
+            if out_change is None:
+                out_change = chg
+            if out_pct is None:
+                out_pct = pct
+        # Drop fake clones of the day line when Yahoo overnight is unavailable.
         if (
-            sid == "night"
-            and out_price is not None
+            out_price is not None
             and day_price is not None
             and abs(float(out_price) - float(day_price)) < 1e-6
             and out_pct is not None
             and day_change_pct is not None
             and abs(float(out_pct) - float(day_change_pct)) < 1e-6
-            and not post_pts
         ):
             out_price = out_change = out_pct = None
 
@@ -223,6 +229,154 @@ def derive_list_realtime(
     if out_pct is not None:
         result["rt_change_pct"] = round(float(out_pct), 3)
     return result
+
+
+def _yahoo_chart_headers() -> dict[str, str]:
+    return {
+        "User-Agent": USER_AGENT,
+        "Accept": "application/json",
+        "Accept-Language": "en-US,en;q=0.9",
+        "Origin": "https://finance.yahoo.com",
+        "Referer": "https://finance.yahoo.com/",
+    }
+
+
+def _yahoo_meta_extended(
+    meta: dict[str, Any], *, session: str
+) -> dict[str, Any] | None:
+    """Map Yahoo chart/quote meta → extended tape fields for list RT."""
+    if not isinstance(meta, dict):
+        return None
+    if session == "pre":
+        px = _parse_number(meta.get("preMarketPrice"))
+        if px is None:
+            return None
+        return {
+            "last": px,
+            "change": meta.get("preMarketChange"),
+            "change_pct": meta.get("preMarketChangePercent"),
+            "type": "PRE_MKT",
+        }
+    # post + night both use postMarket* on Yahoo; night/PREPRE is quote-only.
+    px = _parse_number(meta.get("postMarketPrice"))
+    if px is None:
+        return None
+    return {
+        "last": px,
+        "change": meta.get("postMarketChange"),
+        "change_pct": meta.get("postMarketChangePercent"),
+        "type": "AFTER_HOURS" if session == "post" else None,
+    }
+
+
+async def fetch_yahoo_overnight_quote(
+    client: httpx.AsyncClient, symbol: str
+) -> dict[str, Any] | None:
+    """
+    Yahoo overnight is numeric only (no 夜盘 tape).
+
+    Uses chart meta postMarket* which Yahoo shows as Overnight during PREPRE/
+    POSTPOST windows. Chart series stay pre+regular+post elsewhere.
+    """
+    sym = (symbol or "").strip().upper()
+    if not sym:
+        return None
+    enc = quote(sym, safe="")
+    url = (
+        f"https://query1.finance.yahoo.com/v8/finance/chart/{enc}"
+        f"?range=1d&interval=1m&includePrePost=false"
+    )
+    try:
+        resp = await client.get(url, timeout=12.0, headers=_yahoo_chart_headers())
+        if resp.status_code >= 400:
+            return None
+        result = ((resp.json().get("chart") or {}).get("result") or [None])[0]
+        if not result:
+            return None
+        meta = result.get("meta") or {}
+        price = _parse_number(meta.get("regularMarketPrice"))
+        prev = _parse_number(
+            meta.get("chartPreviousClose") or meta.get("previousClose")
+        )
+        change = _parse_number(meta.get("regularMarketChange"))
+        change_pct = _parse_pct(meta.get("regularMarketChangePercent"))
+        if change_pct is None and price is not None and prev not in (None, 0):
+            change, change_pct = _change_vs_basis(price, prev)
+        overnight_px = _parse_number(meta.get("postMarketPrice"))
+        # Yahoo Overnight % is vs regular close (same as the website Overnight box).
+        overnight_chg = overnight_pct = None
+        if overnight_px is not None:
+            basis = price if price not in (None, 0) else prev
+            overnight_chg, overnight_pct = _change_vs_basis(overnight_px, basis)
+        if overnight_px is None and price is None:
+            return None
+        out: dict[str, Any] = {
+            "symbol": sym,
+            "price": round(float(price), 2) if price is not None else None,
+            "change": round(float(change), 4) if change is not None else None,
+            "change_pct": round(float(change_pct), 3) if change_pct is not None else None,
+            "previous_close": round(float(prev), 6) if prev not in (None, 0) else None,
+            "source": "yahoo",
+            "session": "night",
+            "session_label": "夜盘",
+            "market_state": meta.get("marketState"),
+        }
+        if overnight_px is not None:
+            out["rt_price"] = round(float(overnight_px), 2)
+        if overnight_chg is not None:
+            out["rt_change"] = round(float(overnight_chg), 4)
+        if overnight_pct is not None:
+            out["rt_change_pct"] = round(float(overnight_pct), 3)
+        return out
+    except Exception:  # noqa: BLE001
+        return None
+
+
+async def overlay_yahoo_overnight_quotes(
+    client: httpx.AsyncClient,
+    quotes: dict[str, dict[str, Any]],
+    symbols: list[str],
+    *,
+    concurrency: int = 4,
+) -> dict[str, dict[str, Any]]:
+    """Stamp Yahoo overnight price/% onto list quotes (holdings + sectors)."""
+    import asyncio
+
+    sem = asyncio.Semaphore(max(1, concurrency))
+    uniq: list[str] = []
+    seen: set[str] = set()
+    for raw in symbols:
+        sym = str(raw or "").upper().strip()
+        if sym and sym not in seen:
+            seen.add(sym)
+            uniq.append(sym)
+
+    async def one(sym: str) -> None:
+        async with sem:
+            row = await fetch_yahoo_overnight_quote(client, sym)
+            if not row:
+                return
+            base = dict(quotes.get(sym) or {})
+            if base.get("price") is None and row.get("price") is not None:
+                base["price"] = row["price"]
+                base["change"] = row.get("change")
+                base["change_pct"] = row.get("change_pct")
+                base["previous_close"] = row.get("previous_close")
+            base["session"] = "night"
+            base["session_label"] = "夜盘"
+            for key in ("rt_price", "rt_change", "rt_change_pct"):
+                if row.get(key) is not None:
+                    base[key] = row[key]
+            if row.get("rt_price") is None:
+                # Clear stale AH clone so UI does not show fake 夜盘 = 收盘.
+                base.pop("rt_price", None)
+                base.pop("rt_change", None)
+                base.pop("rt_change_pct", None)
+            base["source"] = base.get("source") or "yahoo"
+            quotes[sym] = base
+
+    await asyncio.gather(*(one(s) for s in uniq))
+    return quotes
 
 
 def apply_list_quote_fields(
@@ -428,26 +582,8 @@ async def fetch_yahoo_light_quotes(
                     else None,
                     "source": "yahoo",
                 }
-                # Chart meta often still carries pre/post fields even without tape.
                 clock_sid, _ = session_from_clock()
-                extended = None
-                pre_px = _parse_number(meta.get("preMarketPrice"))
-                post_px = _parse_number(meta.get("postMarketPrice"))
-                if clock_sid == "pre" and pre_px is not None:
-                    extended = {
-                        "last": pre_px,
-                        "change": meta.get("preMarketChange"),
-                        "change_pct": meta.get("preMarketChangePercent"),
-                        "type": "PRE_MKT",
-                    }
-                elif clock_sid in {"post", "night"} and post_px is not None:
-                    extended = {
-                        "last": post_px,
-                        "change": meta.get("postMarketChange"),
-                        "change_pct": meta.get("postMarketChangePercent"),
-                        # Omit type at night so resolve_list_session keeps 夜盘.
-                        "type": "AFTER_HOURS" if clock_sid == "post" else None,
-                    }
+                extended = _yahoo_meta_extended(meta, session=clock_sid)
                 out[sym] = _with_session_and_realtime(
                     quote_row, extended=extended
                 )
@@ -459,13 +595,18 @@ async def fetch_yahoo_light_quotes(
 
 
 async def fetch_day_quotes(symbols: list[str]) -> dict[str, dict[str, Any]]:
-    """CNBC first, then Yahoo for any remaining symbols."""
+    """CNBC first, Yahoo fallback; at 夜盘 overlay Yahoo overnight quote numbers."""
     async with httpx.AsyncClient(follow_redirects=True, trust_env=False) as client:
         quotes = await fetch_cnbc_quotes(client, symbols)
         missing = [s for s in symbols if s.upper().strip() not in quotes]
         if missing:
             yahoo = await fetch_yahoo_light_quotes(client, missing, concurrency=3)
             quotes.update(yahoo)
+        # Yahoo overnight has no tape — sync numeric Overnight fields onto every row.
+        if session_from_clock()[0] == "night":
+            await overlay_yahoo_overnight_quotes(
+                client, quotes, symbols, concurrency=4
+            )
         return quotes
 
 
