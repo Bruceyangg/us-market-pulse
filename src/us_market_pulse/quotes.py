@@ -733,17 +733,20 @@ async def fetch_yahoo_light_quotes(
                 f"?range=5d&interval=1d&includePrePost=false"
             )
             try:
-                resp = await client.get(
-                    url,
-                    timeout=18.0,
-                    headers={
-                        "User-Agent": USER_AGENT,
-                        "Accept": "application/json",
-                        "Accept-Language": "en-US,en;q=0.9",
-                        "Origin": "https://finance.yahoo.com",
-                        "Referer": "https://finance.yahoo.com/",
-                    },
-                )
+                headers = {
+                    "User-Agent": USER_AGENT,
+                    "Accept": "application/json",
+                    "Accept-Language": "en-US,en;q=0.9",
+                    "Origin": "https://finance.yahoo.com",
+                    "Referer": "https://finance.yahoo.com/",
+                }
+                resp = await client.get(url, timeout=18.0, headers=headers)
+                if resp.status_code in {403, 429}:
+                    alt = url.replace("://query1.", "://query2.")
+                    if alt != url:
+                        resp2 = await client.get(alt, timeout=18.0, headers=headers)
+                        if resp2.status_code < 400:
+                            resp = resp2
                 if resp.status_code >= 400:
                     return
                 result = ((resp.json().get("chart") or {}).get("result") or [None])[0]
