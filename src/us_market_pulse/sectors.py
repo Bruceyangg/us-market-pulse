@@ -771,10 +771,8 @@ async def fetch_intraday_snapshot(
     if sid == "night":
         rt_fields: dict[str, Any] = {}
         try:
-            # Cache-first; kick a background refresh so polls stay snappy.
+            # Cache-only on the request path (see PULSE_OVERNIGHT_FETCH).
             y_night = peek_overnight_quote(sym)
-            if not y_night or y_night.get("rt_price") is None:
-                _schedule_overnight_refresh([sym])
         except Exception:  # noqa: BLE001
             y_night = None
         if isinstance(y_night, dict) and y_night.get("overnight"):
