@@ -7073,7 +7073,11 @@ function renderChainsDesk(data) {
         "输入行业关键词，生成上下游逻辑图，并标注美股代码；可一键加入持仓。";
     }
     renderChainsPanorama(chain);
-    setStatus(`${chain.label} · 全景逻辑图已生成`);
+    setStatus(
+      data.generated
+        ? `${chain.label} · 已按关键词自动生成`
+        : `${chain.label} · 全景逻辑图已生成`
+    );
   } else {
     setStatus(data.message || "输入行业关键词生成产业链");
   }
@@ -7084,6 +7088,20 @@ async function loadChainsDesk({ q, chain } = {}) {
   if (PAGE !== "chains") return null;
   const query = q ?? state.chainQ;
   const chainId = chain ?? state.chainId;
+  if (query) {
+    setStatus(`正在根据「${query}」生成全产业链逻辑图…`);
+    if (els.chainsEmpty) {
+      els.chainsEmpty.classList.remove("is-hidden");
+      const title = els.chainsEmpty.querySelector(".chains-empty-title");
+      const text = els.chainsEmpty.querySelector(".chains-empty-text");
+      if (title) title.textContent = "正在生成…";
+      if (text) {
+        text.textContent =
+          "正在组合上下游环节并检索相关美股，通常几秒内完成。";
+      }
+    }
+    if (els.chainsMap) els.chainsMap.classList.add("is-hidden");
+  }
   try {
     const params = new URLSearchParams();
     if (query) params.set("q", query);
