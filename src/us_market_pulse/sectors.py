@@ -27,11 +27,13 @@ from us_market_pulse.portfolio_intel import match_portfolio_intel
 from us_market_pulse.quotes import (
     apply_list_quote_fields,
     build_nasdaq_ohlc_series,
+    derive_list_realtime,
     fetch_day_quotes,
     fetch_nasdaq_daily_bars,
     fetch_nasdaq_intraday,
     fetch_nasdaq_intraday_many,
-    session_from_status,
+    resolve_list_session,
+    session_from_clock,
 )
 from us_market_pulse.topics import TOPICS, filter_topic_items, topic_bearish_analysis
 
@@ -734,32 +736,51 @@ async def fetch_intraday_snapshot(
             return dict(cached["data"])
         return None
 
-    # Prefer last tape point's session; fall back to ET clock.
-    sid = "regular"
+    # Badge: ET clock wins at 夜盘; otherwise prefer last tape session.
     last_pts = list(series_row.get("points") or [])
-    if last_pts:
-        sid = str(last_pts[-1].get("session") or "") or sid
-    if sid not in {"pre", "regular", "post", "night"}:
-        sid, _label = session_from_status(None)
-    else:
-        _label = {"pre": "盘前", "regular": "盘中", "post": "盘后", "night": "夜盘"}.get(
-            sid, "盘中"
-        )
-        # If tape still says regular but clock is pre/post, prefer clock for badge.
-        clock_sid, clock_label = session_from_status(None)
-        if clock_sid in {"pre", "post", "night"}:
+    tape_sid = str((last_pts[-1].get("session") if last_pts else "") or "")
+    clock_sid, clock_label = session_from_clock()
+    if clock_sid == "night":
+        sid, _label = clock_sid, clock_label
+    elif tape_sid in {"pre", "regular", "post", "night"}:
+        sid = tape_sid
+        _label = {
+            "pre": "盘前",
+            "regular": "盘中",
+            "post": "盘后",
+            "night": "夜盘",
+        }.get(sid, clock_label)
+        # Tape lag: still regular while clock already pre/post.
+        if clock_sid in {"pre", "post"}:
             sid, _label = clock_sid, clock_label
+    else:
+        sid, _label = resolve_list_session(None)
+
+    prev_close = series_row.get("previous_close")
+    # Day line stays Nasdaq/Yahoo full-day move vs previous close.
+    # Realtime line uses session-aware basis (pre vs prev close; post/night vs regular close).
+    rt_fields = derive_list_realtime(
+        session=sid,
+        day_price=price if isinstance(price, (int, float)) else None,
+        day_change=change if isinstance(change, (int, float)) else None,
+        day_change_pct=change_pct if isinstance(change_pct, (int, float)) else None,
+        previous_close=prev_close
+        if isinstance(prev_close, (int, float))
+        else None,
+        tape_points=last_pts,
+    )
     data = {
         "symbol": sym,
         "price": price,
         "change": change,
         "change_pct": change_pct,
-        "previous_close": series_row.get("previous_close"),
+        "previous_close": prev_close,
         "series": {"intraday": series_row},
         "source": source,
         "session": sid,
         "session_label": _label,
         "fetched_at": time.time(),
+        **rt_fields,
     }
     _INTRADAY_SNAP_CACHE[cache_key] = {"at": time.time(), "data": data}
     return dict(data)

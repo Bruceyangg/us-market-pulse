@@ -66,14 +66,18 @@ def _parse_pct(value: Any) -> float | None:
     return _parse_number(value)
 
 
-def session_from_status(status: str | None = None) -> tuple[str, str]:
-    """Map vendor market status / ET clock → (session_id, 中文标签)."""
-    key = str(status or "").upper().strip().replace(" ", "_")
-    if key in _CNBC_SESSION_MAP:
-        return _CNBC_SESSION_MAP[key]
+_SESSION_LABELS = {
+    "night": "夜盘",
+    "pre": "盘前",
+    "regular": "盘中",
+    "post": "盘后",
+}
+
+
+def session_from_clock() -> tuple[str, str]:
+    """ET clock → (session_id, 中文标签). Weekend counts as 夜盘."""
     now = datetime.now(tz=_ET)
     mins = now.hour * 60 + now.minute
-    # Weekend → treat as 夜盘/休市 band for the list badge
     if now.weekday() >= 5:
         return "night", "夜盘"
     if mins >= 20 * 60 or mins < 4 * 60:
@@ -85,13 +89,149 @@ def session_from_status(status: str | None = None) -> tuple[str, str]:
     return "post", "盘后"
 
 
+def session_from_status(status: str | None = None) -> tuple[str, str]:
+    """Map vendor market status / ET clock → (session_id, 中文标签)."""
+    key = str(status or "").upper().strip().replace(" ", "_")
+    if key in _CNBC_SESSION_MAP:
+        return _CNBC_SESSION_MAP[key]
+    return session_from_clock()
+
+
+def resolve_list_session(
+    status: str | None = None,
+) -> tuple[str, str]:
+    """List badge session: clock wins at 夜盘 so vendors don't stick on 盘后."""
+    clock_sid, clock_label = session_from_clock()
+    if clock_sid == "night":
+        return clock_sid, clock_label
+    key = str(status or "").upper().strip().replace(" ", "_")
+    if key in _CNBC_SESSION_MAP:
+        return _CNBC_SESSION_MAP[key]
+    return clock_sid, clock_label
+
+
+def _change_vs_basis(
+    price: float | None, basis: float | None
+) -> tuple[float | None, float | None]:
+    if price is None or basis in (None, 0):
+        return None, None
+    try:
+        px = float(price)
+        base = float(basis)
+    except (TypeError, ValueError):
+        return None, None
+    if base == 0:
+        return None, None
+    chg = px - base
+    return chg, (chg / base) * 100.0
+
+
+def _point_price(point: dict[str, Any] | None) -> float | None:
+    if not isinstance(point, dict):
+        return None
+    for key in ("v", "c", "price"):
+        val = _parse_number(point.get(key))
+        if val is not None:
+            return val
+    return None
+
+
+def derive_list_realtime(
+    *,
+    session: str,
+    day_price: float | None = None,
+    day_change: float | None = None,
+    day_change_pct: float | None = None,
+    previous_close: float | None = None,
+    rt_price: float | None = None,
+    rt_change: float | None = None,
+    rt_change_pct: float | None = None,
+    tape_points: list[dict[str, Any]] | None = None,
+) -> dict[str, Any]:
+    """
+    Dual-row 实时 fields by session.
+
+    - 盘中: same as day quote
+    - 盘前: last pre print vs previous close
+    - 盘后/夜盘: last post print vs regular close (not full-day % vs prev close)
+    - 夜盘 has no free overnight tape — freeze last 盘后; never invent ticks
+    """
+    sid = session if session in _SESSION_LABELS else "regular"
+    pts = [p for p in (tape_points or []) if isinstance(p, dict)]
+    pre_pts = [p for p in pts if p.get("session") == "pre"]
+    reg_pts = [p for p in pts if p.get("session") == "regular"]
+    post_pts = [p for p in pts if p.get("session") == "post"]
+
+    regular_close = _point_price(reg_pts[-1]) if reg_pts else None
+    if regular_close is None and sid in {"post", "night", "regular"}:
+        regular_close = _parse_number(day_price)
+
+    out_price = _parse_number(rt_price)
+    out_change = _parse_number(rt_change)
+    out_pct = _parse_pct(rt_change_pct)
+
+    if sid == "regular":
+        if out_price is None:
+            out_price = _parse_number(day_price)
+            if out_price is None and pts:
+                out_price = _point_price(pts[-1])
+        if out_change is None:
+            out_change = _parse_number(day_change)
+        if out_pct is None:
+            out_pct = _parse_pct(day_change_pct)
+        if out_pct is None:
+            out_change, out_pct = _change_vs_basis(out_price, previous_close)
+    elif sid == "pre":
+        if out_price is None and pre_pts:
+            out_price = _point_price(pre_pts[-1])
+        if out_price is not None and (out_pct is None or out_change is None):
+            chg, pct = _change_vs_basis(out_price, previous_close)
+            if out_change is None:
+                out_change = chg
+            if out_pct is None:
+                out_pct = pct
+    else:  # post / night
+        if out_price is None and post_pts:
+            out_price = _point_price(post_pts[-1])
+        # Never fall back to day lastSale as 夜盘 RT — that clones 收盘涨跌幅.
+        if out_price is not None and (out_pct is None or out_change is None):
+            basis = regular_close if regular_close not in (None, 0) else previous_close
+            chg, pct = _change_vs_basis(out_price, basis)
+            if out_change is None:
+                out_change = chg
+            if out_pct is None:
+                out_pct = pct
+        # If still identical to the day line with no distinct post tape, drop RT
+        # numbers so UI does not show a fake "夜盘" clone of 收盘涨跌幅.
+        if (
+            sid == "night"
+            and out_price is not None
+            and day_price is not None
+            and abs(float(out_price) - float(day_price)) < 1e-6
+            and out_pct is not None
+            and day_change_pct is not None
+            and abs(float(out_pct) - float(day_change_pct)) < 1e-6
+            and not post_pts
+        ):
+            out_price = out_change = out_pct = None
+
+    result: dict[str, Any] = {}
+    if out_price is not None:
+        result["rt_price"] = round(float(out_price), 2)
+    if out_change is not None:
+        result["rt_change"] = round(float(out_change), 4)
+    if out_pct is not None:
+        result["rt_change_pct"] = round(float(out_pct), 3)
+    return result
+
+
 def apply_list_quote_fields(
     row: dict[str, Any], quote: dict[str, Any] | None
 ) -> dict[str, Any]:
     """Copy 收盘 + 实时 list fields from a day quote onto a pick/holding card."""
     if not isinstance(row, dict) or not isinstance(quote, dict):
         return row
-    for key in ("price", "change", "change_pct", "as_of"):
+    for key in ("price", "change", "change_pct", "as_of", "previous_close"):
         if quote.get(key) is not None:
             row[key] = quote[key]
     for key in LIST_QUOTE_RT_KEYS:
@@ -106,11 +246,11 @@ def _with_session_and_realtime(
     curmktstatus: str | None = None,
     extended: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    """Attach session badge + realtime (pre/post) quote onto a day-quote row."""
+    """Attach session badge + realtime (pre/post/night) quote onto a day-quote row."""
     status = curmktstatus
     if isinstance(extended, dict) and extended.get("type"):
         status = str(extended.get("type") or status or "")
-    sid, label = session_from_status(status)
+    sid, label = resolve_list_session(status)
     base["session"] = sid
     base["session_label"] = label
 
@@ -118,18 +258,30 @@ def _with_session_and_realtime(
     rt_change = _parse_number((extended or {}).get("change")) if extended else None
     rt_pct = _parse_pct((extended or {}).get("change_pct")) if extended else None
 
-    if rt_price is None and sid == "regular":
-        # 盘中：实时与收盘行一致
-        rt_price = base.get("price")
-        rt_change = base.get("change")
-        rt_pct = base.get("change_pct")
-
+    # Normalize extended % to the session basis so vendors never leak full-day %.
     if rt_price is not None:
-        base["rt_price"] = round(float(rt_price), 2)
-    if rt_change is not None:
-        base["rt_change"] = round(float(rt_change), 4)
-    if rt_pct is not None:
-        base["rt_change_pct"] = round(float(rt_pct), 3)
+        if sid == "pre":
+            chg, pct = _change_vs_basis(rt_price, base.get("previous_close"))
+        elif sid in {"post", "night"}:
+            chg, pct = _change_vs_basis(rt_price, base.get("price"))
+        else:
+            chg, pct = None, None
+        if chg is not None:
+            rt_change = chg
+        if pct is not None:
+            rt_pct = pct
+
+    rt_fields = derive_list_realtime(
+        session=sid,
+        day_price=base.get("price"),
+        day_change=base.get("change"),
+        day_change_pct=base.get("change_pct"),
+        previous_close=base.get("previous_close"),
+        rt_price=rt_price,
+        rt_change=rt_change,
+        rt_change_pct=rt_pct,
+    )
+    base.update(rt_fields)
     return base
 
 
@@ -276,8 +428,29 @@ async def fetch_yahoo_light_quotes(
                     else None,
                     "source": "yahoo",
                 }
-                # Yahoo light chart has no pre/post tape — still stamp session badge.
-                out[sym] = _with_session_and_realtime(quote_row)
+                # Chart meta often still carries pre/post fields even without tape.
+                clock_sid, _ = session_from_clock()
+                extended = None
+                pre_px = _parse_number(meta.get("preMarketPrice"))
+                post_px = _parse_number(meta.get("postMarketPrice"))
+                if clock_sid == "pre" and pre_px is not None:
+                    extended = {
+                        "last": pre_px,
+                        "change": meta.get("preMarketChange"),
+                        "change_pct": meta.get("preMarketChangePercent"),
+                        "type": "PRE_MKT",
+                    }
+                elif clock_sid in {"post", "night"} and post_px is not None:
+                    extended = {
+                        "last": post_px,
+                        "change": meta.get("postMarketChange"),
+                        "change_pct": meta.get("postMarketChangePercent"),
+                        # Omit type at night so resolve_list_session keeps 夜盘.
+                        "type": "AFTER_HOURS" if clock_sid == "post" else None,
+                    }
+                out[sym] = _with_session_and_realtime(
+                    quote_row, extended=extended
+                )
             except Exception:  # noqa: BLE001
                 return
 

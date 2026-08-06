@@ -4478,16 +4478,48 @@ function applyIntradaySnapshot(sym, snap) {
   const intra = snap?.series?.intraday;
   if (!symbol || !intra?.points?.length) return;
   // Poll updates 实时价/涨跌; keep 收盘涨跌幅 (change_pct) from the day quote.
+  // Prefer backend session-aware rt_*; never clone full-day % into 夜盘/盘后/盘前.
+  const sid = String(snap.session || "");
   const rtPatch = {
-    rt_price: snap.price,
-    rt_change: snap.change,
-    rt_change_pct: snap.change_pct,
     series: { intraday: intra },
   };
   if (snap.session_label) {
     rtPatch.session = snap.session;
     rtPatch.session_label = snap.session_label;
   }
+  const hasExplicitRt =
+    snap.rt_price != null || snap.rt_change != null || snap.rt_change_pct != null;
+  if (hasExplicitRt) {
+    if (snap.rt_price != null) rtPatch.rt_price = snap.rt_price;
+    if (snap.rt_change != null) rtPatch.rt_change = snap.rt_change;
+    if (snap.rt_change_pct != null) rtPatch.rt_change_pct = snap.rt_change_pct;
+  } else if (sid === "regular") {
+    rtPatch.rt_price = snap.price;
+    rtPatch.rt_change = snap.change;
+    rtPatch.rt_change_pct = snap.change_pct;
+  } else if (sid === "pre" || sid === "post") {
+    // Legacy snapshot without rt_*: only adopt when distinct from day line.
+    const dayBoard =
+      PAGE === "desk"
+        ? state.portfolio?.selected_board
+        : state.sectors?.selected_pick;
+    const dayPx = dayBoard?.price;
+    const dayPct = dayBoard?.change_pct;
+    const samePx =
+      snap.price != null &&
+      dayPx != null &&
+      Math.abs(Number(snap.price) - Number(dayPx)) < 1e-6;
+    const samePct =
+      snap.change_pct != null &&
+      dayPct != null &&
+      Math.abs(Number(snap.change_pct) - Number(dayPct)) < 1e-6;
+    if (!(samePx && samePct)) {
+      rtPatch.rt_price = snap.price;
+      rtPatch.rt_change = snap.change;
+      rtPatch.rt_change_pct = snap.change_pct;
+    }
+  }
+  // night + no explicit rt_*: keep prior CNBC/Yahoo AH fields via merge below.
 
   if (PAGE === "desk" && state.portfolio) {
     const board = state.portfolio.selected_board;
