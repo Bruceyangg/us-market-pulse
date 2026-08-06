@@ -4261,13 +4261,15 @@ function mergeListQuoteFields(next, prev) {
   if (!next) return prev || next;
   if (!prev) return next;
   const out = { ...next };
-  const nextSid = String(out.session || prev.session || "");
-  // 夜盘: only keep prior RT if it was true Overnight (never 盘后).
+  const nextSid = String(out.session || "");
+  const prevSid = String(prev.session || "");
+  // Never carry RT across session boundaries (夜盘→盘前 was showing stale %).
+  const sameSession = nextSid && prevSid && nextSid === prevSid;
   if (nextSid === "night") {
     const prevOvernight = Boolean(prev.overnight);
     const nextOvernight = Boolean(out.overnight);
     if (!nextOvernight) {
-      if (prevOvernight) {
+      if (prevOvernight && sameSession) {
         for (const key of ["rt_price", "rt_change", "rt_change_pct"]) {
           if (out[key] == null && prev[key] != null) out[key] = prev[key];
         }
@@ -4279,10 +4281,19 @@ function mergeListQuoteFields(next, prev) {
         delete out.overnight;
       }
     }
-  } else {
+  } else if (sameSession) {
     for (const key of ["rt_price", "rt_change", "rt_change_pct"]) {
       if (out[key] == null && prev[key] != null) out[key] = prev[key];
     }
+    delete out.overnight;
+  } else {
+    // Session flipped (e.g. 夜盘→盘前): drop prior RT unless next brought fresh.
+    if (out.rt_price == null) {
+      delete out.rt_price;
+      delete out.rt_change;
+      delete out.rt_change_pct;
+    }
+    delete out.overnight;
   }
   for (const key of [
     "price",
@@ -5029,12 +5040,9 @@ async function refreshActiveIntraday({ force = false } = {}) {
 function mergePickPreserveIntraday(next, prev) {
   if (!next) return prev || next;
   if (!prev || !pickHasIntraday(prev)) return next;
-  if (pickHasIntraday(next)) {
-    // Prefer the denser tape when both exist
-    const nLen = next.series.intraday.points.length;
-    const pLen = prev.series.intraday.points.length;
-    if (nLen >= pLen) return next;
-  }
+  // Always prefer a fresh tape when present — denser-but-stale prior sessions
+  // (e.g. yesterday 盘后) must not block today's shorter 盘前 line.
+  if (pickHasIntraday(next)) return next;
   return {
     ...next,
     series: {
