@@ -280,19 +280,18 @@ def _yahoo_meta_extended(
     }
 
 
-# Yahoo quote page shows Overnight as a numeric box (no tape), e.g.
-#   220.29 +1.07 (+0.49%)
-#   Overnight: 10:44:05 PM EDT
+# Yahoo quote page Overnight box (BOATS). Also matches jina.md compact form:
+#   220.07+0.85(+0.39%)\n\nOvernight: 1:29:02 AM EDT
 _YAHOO_OVERNIGHT_RE = re.compile(
-    r"(?P<price>\d[\d,]*(?:\.\d+)?)\s+"
-    r"(?P<change>[+\-]?\d[\d,]*(?:\.\d+)?)\s+"
+    r"(?P<price>\d[\d,]*(?:\.\d+)?)\s*"
+    r"(?P<change>[+\-]?\d[\d,]*(?:\.\d+)?)\s*"
     r"\((?P<pct>[+\-]?\d[\d,]*(?:\.\d+)?)%\)\s*"
     r"(?:Overnight|夜盘)\s*:",
     re.I,
 )
 _YAHOO_CLOSE_RE = re.compile(
-    r"(?P<price>\d[\d,]*(?:\.\d+)?)\s+"
-    r"(?P<change>[+\-]?\d[\d,]*(?:\.\d+)?)\s+"
+    r"(?P<price>\d[\d,]*(?:\.\d+)?)\s*"
+    r"(?P<change>[+\-]?\d[\d,]*(?:\.\d+)?)\s*"
     r"\((?P<pct>[+\-]?\d[\d,]*(?:\.\d+)?)%\)\s*"
     r"(?:At close|收盘)",
     re.I,
@@ -405,16 +404,28 @@ async def fetch_yahoo_overnight_quote(
     price = change = change_pct = prev = None
     market_state = None
 
-    # Quote page — source of truth for Yahoo "Overnight" box.
+    # Quote page — source of truth for Yahoo "Overnight" box (not 盘后).
+    # Direct Yahoo often 403 from cloud IPs; jina reader is a BOATS-safe fallback.
     if allow_page:
         page_urls = (
             f"https://finance.yahoo.com/quote/{enc}/",
             f"https://finance.yahoo.com/quote/{enc}",
+            f"https://r.jina.ai/https://finance.yahoo.com/quote/{enc}/",
+            f"https://r.jina.ai/http://finance.yahoo.com/quote/{enc}",
         )
+        jina_headers = {
+            "User-Agent": USER_AGENT,
+            "Accept": "text/markdown,text/plain,*/*",
+            "X-Retain-Images": "none",
+            "X-Return-Format": "markdown",
+        }
         for page_url in page_urls:
             try:
+                is_jina = "r.jina.ai" in page_url
                 page = await client.get(
-                    page_url, timeout=page_timeout, headers=headers
+                    page_url,
+                    timeout=max(page_timeout, 12.0) if is_jina else page_timeout,
+                    headers=jina_headers if is_jina else headers,
                 )
                 if page.status_code >= 400 or not page.text:
                     continue
@@ -558,7 +569,8 @@ async def overlay_yahoo_overnight_quotes(
                 client,
                 sym,
                 allow_page=allow_page,
-                page_timeout=min(6.0, max(2.0, deadline_s)),
+                # jina fallback needs a longer page budget than direct Yahoo.
+                page_timeout=min(14.0, max(6.0, deadline_s)),
                 chart_timeout=min(3.5, max(1.5, deadline_s / 2)),
             )
             if not row or row.get("rt_price") is None:
@@ -910,15 +922,15 @@ async def fetch_day_quotes(
                 follow_redirects=True,
                 trust_env=False,
                 headers=_yahoo_chart_headers(),
-                timeout=httpx.Timeout(8.0, connect=3.0),
+                timeout=httpx.Timeout(20.0, connect=5.0),
             ) as client:
                 await overlay_yahoo_overnight_quotes(
                     client,
                     quotes,
                     need_on,
-                    concurrency=4,
+                    concurrency=2,
                     limit=min(12, len(need_on)),
-                    deadline_s=10.0,
+                    deadline_s=18.0,
                     allow_page=True,
                 )
                 _stamp_night_session(quotes)
