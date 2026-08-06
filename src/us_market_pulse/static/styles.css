@@ -4093,8 +4093,13 @@ html[data-theme="dark"] .chart-zoom .chart-crosshair-tip {
 
 .sector-chart .portfolio-stats {
   grid-template-columns: repeat(5, minmax(0, 1fr));
-  padding: 0.35rem 0.5rem;
-  margin-bottom: 0.15rem;
+  padding: 0.4rem 0.55rem 0.28rem;
+  margin-bottom: 0;
+}
+
+.sector-chart .desk-chg-row {
+  padding: 0.1rem 0.55rem 0.4rem;
+  margin-bottom: 0.4rem;
 }
 
 .sector-chart .chart-foot {
