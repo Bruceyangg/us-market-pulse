@@ -129,8 +129,6 @@ const els = {
   sectorMapCanvas: document.getElementById("sector-map-canvas"),
   usMarketsBlurb: document.getElementById("us-markets-blurb"),
   usMarketsStrip: document.getElementById("us-markets-strip"),
-  usMarketsStripPrev: document.getElementById("us-markets-strip-prev"),
-  usMarketsStripNext: document.getElementById("us-markets-strip-next"),
   usFuturesTfFilters: document.getElementById("us-futures-tf-filters"),
   usFuturesGrid: document.getElementById("us-futures-grid"),
   sectorEtfGrid: document.getElementById("sector-etf-grid"),
@@ -6453,12 +6451,6 @@ async function loadUsMarketsDesk({ force = false } = {}) {
 
 function bindUsMarketsDesk() {
   if (PAGE !== "sectors") return;
-  els.usMarketsStripPrev?.addEventListener("click", () => {
-    els.usMarketsStrip?.scrollBy({ left: -240, behavior: "smooth" });
-  });
-  els.usMarketsStripNext?.addEventListener("click", () => {
-    els.usMarketsStrip?.scrollBy({ left: 240, behavior: "smooth" });
-  });
   els.usFuturesTfFilters?.querySelectorAll("[data-uftf]").forEach((btn) => {
     btn.addEventListener("click", () => {
       const tf = btn.getAttribute("data-uftf");
@@ -6921,12 +6913,14 @@ function bootPage() {
         soft: true,
       });
     }, 90 * 1000);
-    trackPageInterval(() => refreshActiveIntraday(), 1000);
+    // Fastest practical 分时 poll (backend snap TTL ~0.75s).
+    trackPageInterval(() => refreshActiveIntraday(), 500);
   } else if (PAGE === "markets") {
     const painted = paintFromPageDataCache("markets");
     if (painted) restoreScrollPosition();
     loadMarketsDesk();
-    trackPageInterval(() => loadMarketsDesk(), 90 * 1000);
+    // Markets board TTL ~2s; avoid force so FRED isn't hammered.
+    trackPageInterval(() => loadMarketsDesk({ force: false }), 2000);
   } else if (PAGE === "sectors") {
     const params = new URLSearchParams(location.search);
     const qSector = (params.get("sector") || "").trim().toLowerCase();
@@ -6952,9 +6946,19 @@ function bootPage() {
       persistPageDataCache();
     });
     trackPageInterval(() => loadSectorDesk(), 90 * 1000);
-    trackPageInterval(() => loadUsMarketsDesk(), 120 * 1000);
+    // Futures 分时 + strip: poll near backend us-markets TTL (~2s).
+    trackPageInterval(() => {
+      if ((state.usFuturesTf || "intraday") === "intraday") {
+        loadUsMarketsDesk({ force: true });
+      }
+    }, 2000);
+    trackPageInterval(() => {
+      if ((state.usFuturesTf || "intraday") !== "intraday") {
+        loadUsMarketsDesk({ force: false });
+      }
+    }, 60 * 1000);
     trackPageInterval(() => refreshHoldingSymbols({ force: true }), 120 * 1000);
-    trackPageInterval(() => refreshActiveIntraday(), 1000);
+    trackPageInterval(() => refreshActiveIntraday(), 500);
   } else if (PAGE === "earnings") {
     bindEarningsDesk();
     loadEarningsDesk();
