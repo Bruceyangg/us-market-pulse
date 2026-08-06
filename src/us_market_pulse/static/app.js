@@ -6933,29 +6933,29 @@ function chainsCompanyRowHtml(c) {
         sector
       )}&symbol=${encodeURIComponent(sym)}">
         <span class="chains-co-name">${escapeHtml(c.name || sym)}</span>
-        <span class="chains-co-sym">${escapeHtml(sym)}</span>
+        <span class="chains-co-sym-wrap">
+          <span class="chains-co-sym">${escapeHtml(sym)}</span>
+          ${
+            core
+              ? '<span class="chains-co-core-tag" title="核心标的">核心</span>'
+              : ""
+          }
+        </span>
         ${
           c.note
             ? `<span class="chains-co-note">${escapeHtml(c.note)}</span>`
             : ""
         }
       </a>
-      <div class="chains-co-aside">
-        ${
-          core
-            ? '<span class="chains-co-core-tag" title="核心标的">核心</span>'
-            : '<span class="chains-co-core-tag is-empty" aria-hidden="true"></span>'
-        }
-        <button
-          type="button"
-          class="sector-hold-btn ${held ? "is-held" : ""}"
-          data-hold-symbol="${escapeHtml(sym)}"
-          data-hold-name="${escapeHtml(c.name || "")}"
-          data-hold-action="${held ? "remove" : "add"}"
-          title="${held ? `从持仓移除 ${sym}` : `加入持仓 ${sym}`}"
-          aria-label="${held ? `从持仓移除 ${sym}` : `加入持仓 ${sym}`}"
-        >${held ? "−" : "+"}</button>
-      </div>
+      <button
+        type="button"
+        class="sector-hold-btn ${held ? "is-held" : ""}"
+        data-hold-symbol="${escapeHtml(sym)}"
+        data-hold-name="${escapeHtml(c.name || "")}"
+        data-hold-action="${held ? "remove" : "add"}"
+        title="${held ? `从持仓移除 ${sym}` : `加入持仓 ${sym}`}"
+        aria-label="${held ? `从持仓移除 ${sym}` : `加入持仓 ${sym}`}"
+      >${held ? "−" : "+"}</button>
     </div>
   `;
 }
