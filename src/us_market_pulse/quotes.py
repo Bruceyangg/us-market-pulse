@@ -3,12 +3,17 @@
 from __future__ import annotations
 
 import re
+import time
 from datetime import date, datetime, timedelta, timezone
 from typing import Any
 from urllib.parse import quote
 from zoneinfo import ZoneInfo
 
 import httpx
+
+# Cross-endpoint day-quote memo (sectors ETF + picks + map + portfolio).
+_DAY_QUOTE_CACHE: dict[str, dict[str, Any]] = {}
+_DAY_QUOTE_TTL = 75.0
 
 USER_AGENT = (
     "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
@@ -790,34 +795,87 @@ async def fetch_day_quotes(
     symbols: list[str],
     *,
     overnight_priority: list[str] | None = None,
+    bypass_cache: bool = False,
 ) -> dict[str, dict[str, Any]]:
     """CNBC first, Yahoo fallback; at 夜盘 stamp session + best-effort Overnight.
 
     Full Yahoo page scrapes are limited to overnight_priority (selected / top
     holdings). Batch lists must stay fast — never scrape every constituent.
+    Shared in-process cache (~75s) so sectors/map/portfolio reuse CNBC hits.
     """
-    async with httpx.AsyncClient(follow_redirects=True, trust_env=False) as client:
-        quotes = await fetch_cnbc_quotes(client, symbols)
-        missing = [s for s in symbols if s.upper().strip() not in quotes]
-        if missing:
-            yahoo = await fetch_yahoo_light_quotes(client, missing, concurrency=3)
-            quotes.update(yahoo)
-        if session_from_clock()[0] == "night":
+    now = time.time()
+    uniq: list[str] = []
+    seen: set[str] = set()
+    for raw in symbols or []:
+        sym = str(raw or "").upper().strip()
+        if sym and sym not in seen:
+            seen.add(sym)
+            uniq.append(sym)
+
+    priority: set[str] = set()
+    if overnight_priority:
+        for raw in overnight_priority:
+            sym = str(raw or "").upper().strip()
+            if sym:
+                priority.add(sym)
+
+    quotes: dict[str, dict[str, Any]] = {}
+    needed: list[str] = []
+    for sym in uniq:
+        hit = _DAY_QUOTE_CACHE.get(sym)
+        if (
+            not bypass_cache
+            and sym not in priority
+            and isinstance(hit, dict)
+            and now - float(hit.get("at") or 0) < _DAY_QUOTE_TTL
+            and isinstance(hit.get("quote"), dict)
+        ):
+            quotes[sym] = dict(hit["quote"])
+        else:
+            needed.append(sym)
+
+    if needed:
+        async with httpx.AsyncClient(follow_redirects=True, trust_env=False) as client:
+            fresh = await fetch_cnbc_quotes(client, needed)
+            missing = [s for s in needed if s not in fresh]
+            if missing:
+                yahoo = await fetch_yahoo_light_quotes(client, missing, concurrency=3)
+                fresh.update(yahoo)
+            if session_from_clock()[0] == "night":
+                _stamp_night_session(fresh)
+                # None → try first symbols; [] → skip page scrapes (ETF strip).
+                candidates = (
+                    list(needed)
+                    if overnight_priority is None
+                    else list(overnight_priority)
+                )
+                pri: list[str] = []
+                seen_pri: set[str] = set()
+                for raw in candidates:
+                    sym = str(raw or "").upper().strip()
+                    if sym and sym not in seen_pri and sym in fresh:
+                        seen_pri.add(sym)
+                        pri.append(sym)
+                if pri:
+                    await overlay_yahoo_overnight_quotes(
+                        client,
+                        fresh,
+                        pri,
+                        concurrency=2,
+                        limit=2,
+                        deadline_s=5.0,
+                        allow_page=True,
+                    )
+                    _stamp_night_session(fresh)
+            stamped_at = time.time()
+            for sym, row in fresh.items():
+                quotes[sym] = row
+                _DAY_QUOTE_CACHE[sym] = {"at": stamped_at, "quote": dict(row)}
+    elif session_from_clock()[0] == "night" and priority:
+        # Cached path still needs overnight RT for the selected symbol.
+        async with httpx.AsyncClient(follow_redirects=True, trust_env=False) as client:
             _stamp_night_session(quotes)
-            # None → try first symbols; [] → skip page scrapes (ETF strip).
-            candidates = (
-                list(symbols or [])
-                if overnight_priority is None
-                else list(overnight_priority)
-            )
-            pri: list[str] = []
-            seen: set[str] = set()
-            for raw in candidates:
-                sym = str(raw or "").upper().strip()
-                if sym and sym not in seen and sym in quotes:
-                    seen.add(sym)
-                    pri.append(sym)
-            # At most 2 page scrapes so sector/holdings desks stay under ~5s.
+            pri = [s for s in priority if s in quotes]
             if pri:
                 await overlay_yahoo_overnight_quotes(
                     client,
@@ -829,7 +887,14 @@ async def fetch_day_quotes(
                     allow_page=True,
                 )
                 _stamp_night_session(quotes)
-        return quotes
+                stamped_at = time.time()
+                for sym in pri:
+                    if sym in quotes:
+                        _DAY_QUOTE_CACHE[sym] = {
+                            "at": stamped_at,
+                            "quote": dict(quotes[sym]),
+                        }
+    return quotes
 
 
 def _nasdaq_path_symbol(symbol: str) -> str:
