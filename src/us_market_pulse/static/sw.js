@@ -1,8 +1,8 @@
 /* Pulse Desk lightweight shell cache — HTML/auth pages always network-first. */
-const CACHE = "pulse-desk-shell-v81";
+const CACHE = "pulse-desk-shell-v82";
 const SHELL = [
-  "/static/styles.css?v=20260806d7",
-  "/static/app.js?v=20260806d7",
+  "/static/styles.css?v=20260806d8",
+  "/static/app.js?v=20260806d8",
   "/static/manifest.webmanifest",
   "/static/icons/apple-touch-icon.png",
   "/static/icons/icon-192.png",
