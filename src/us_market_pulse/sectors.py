@@ -2625,15 +2625,19 @@ async def build_sector_desk(
                     break
         else:
             night_pri = [selected] if selected else []
-        day_quotes = await fetch_day_quotes(
-            pick_symbols,
-            overnight_priority=night_pri,
-            bypass_cache=force,
-        )
+        try:
+            day_quotes = await asyncio.wait_for(
+                fetch_day_quotes(
+                    pick_symbols,
+                    overnight_priority=night_pri,
+                    bypass_cache=force,
+                ),
+                timeout=3.5,
+            )
+        except asyncio.TimeoutError:
+            day_quotes = {}
         for sym in pick_symbols:
             quote = day_quotes.get(sym)
-            if not quote and sym != selected:
-                continue
             pick_rows.append(
                 _lite_pick_from_quote(
                     sym,
@@ -2660,7 +2664,7 @@ async def build_sector_desk(
     elif picks_from_cache and pick_symbols and (
         not picks_fresh or session_from_clock()[0] in {"night", "pre", "post"}
     ):
-        # SWR / extended hours: reuse boards/charts; soft-refresh day + Overnight.
+        # Soft-refresh day tape with a hard budget — never stall the list paint.
         if session_from_clock()[0] == "night":
             night_pri = []
             if selected:
@@ -2672,10 +2676,16 @@ async def build_sector_desk(
                     break
         else:
             night_pri = [selected] if selected else []
-        day_quotes = await fetch_day_quotes(
-            pick_symbols,
-            overnight_priority=night_pri,
-        )
+        try:
+            day_quotes = await asyncio.wait_for(
+                fetch_day_quotes(
+                    pick_symbols,
+                    overnight_priority=night_pri,
+                ),
+                timeout=1.4,
+            )
+        except asyncio.TimeoutError:
+            day_quotes = {}
         for row in pick_rows:
             sym = str(row.get("symbol") or "").upper()
             quote = day_quotes.get(sym)
@@ -2690,18 +2700,53 @@ async def build_sector_desk(
                 row["change_pct"] = quote.get("change_pct")
                 row["momentum"] = float(quote["change_pct"] or 0)
 
-    # Ensure selected symbol has day/month/quarter (not just list 分时 spark).
-    # Chart upgrade + list sparks run in parallel — they don't depend on each other.
+    # List first: sparks from cache. Selected chart races briefly (≤2s), then
+    # continues in background so 成分股 never waits on a full multi-TF fetch.
     selected_pick = next((p for p in pick_rows if p.get("symbol") == selected), None)
     need_selected_chart = bool(selected) and not _pick_has_chart(selected_pick)
-    # On a fresh/stale cache hit, keep list sparks as-is — don't re-hit Nasdaq.
-    need_sparks = False
-    if pick_rows and not picks_from_cache:
-        sparked = sum(1 for r in pick_rows[:12] if _spark_points_from_row(r))
-        need_sparks = sparked < min(8, len(pick_rows))
+    _hydrate_sparks_from_cache(pick_rows)
+
+    async def _apply_selected_bundle(bundle: dict[str, Any]) -> None:
+        nonlocal selected_pick
+        if not bundle or not (
+            _bundle_has_full_chart(bundle) or _pick_has_intraday(bundle)
+        ):
+            return
+        vc = _value_chain_for(selected)
+        rs = _relative_strength(bundle, home_etf)
+        wave = _momentum_fields(bundle)
+        day_pct = bundle.get("change_pct")
+        sector_label = (active or {}).get("label") or ""
+        prev_row = next((p for p in pick_rows if p.get("symbol") == selected), None)
+        rich = {
+            **bundle,
+            "name": vc.get("name") or selected,
+            "month_change_pct": wave["month_change_pct"],
+            "quarter_change_pct": wave["quarter_change_pct"],
+            "vs_sector_pct": rs,
+            "momentum": wave["momentum"],
+            "is_wave": wave["is_wave"],
+            "is_strong": wave["is_wave"]
+            or (rs is not None and rs > 0)
+            or float(day_pct or 0) > float((home_etf or {}).get("change_pct") or 0),
+            "sector_id": sector_id,
+            "sector_label": sector_label,
+            "earnings": earnings_by_symbol.get(selected),
+            "value_chain": vc,
+            "move_analysis": None,
+            "lite": False,
+            "chart_attempted": True,
+        }
+        apply_list_quote_fields(rich, prev_row)
+        for idx, row in enumerate(pick_rows):
+            if row.get("symbol") == selected:
+                pick_rows[idx] = rich
+                break
+        else:
+            pick_rows.insert(0, rich)
+        selected_pick = rich
 
     async def _upgrade_selected_chart() -> None:
-        nonlocal selected_pick
         if not (selected and need_selected_chart):
             return
         try:
@@ -2713,82 +2758,69 @@ async def build_sector_desk(
             ) as client:
                 bundle, errs = await asyncio.wait_for(
                     _fetch_quote_limited(client, selected, selected, force=force),
-                    timeout=16.0,
+                    timeout=14.0,
                 )
         except (asyncio.TimeoutError, httpx.HTTPError) as exc:
-            bundle, errs = None, [f"{selected}: chart timeout ({exc.__class__.__name__})"]
-        pick_errors.extend(errs)
-        if bundle and (_bundle_has_full_chart(bundle) or _pick_has_intraday(bundle)):
-            vc = _value_chain_for(selected)
-            rs = _relative_strength(bundle, home_etf)
-            wave = _momentum_fields(bundle)
-            day_pct = bundle.get("change_pct")
-            sector_label = (active or {}).get("label") or ""
-            prev_row = next(
-                (p for p in pick_rows if p.get("symbol") == selected), None
-            )
-            rich = {
-                **bundle,
-                "name": vc.get("name") or selected,
-                "month_change_pct": wave["month_change_pct"],
-                "quarter_change_pct": wave["quarter_change_pct"],
-                "vs_sector_pct": rs,
-                "momentum": wave["momentum"],
-                "is_wave": wave["is_wave"],
-                "is_strong": wave["is_wave"]
-                or (rs is not None and rs > 0)
-                or float(day_pct or 0)
-                > float((home_etf or {}).get("change_pct") or 0),
-                "sector_id": sector_id,
-                "sector_label": sector_label,
-                "earnings": earnings_by_symbol.get(selected),
-                "value_chain": vc,
-                "move_analysis": None,
-                "lite": False,
-                "chart_attempted": True,
-            }
-            apply_list_quote_fields(rich, prev_row)
-            replaced = False
-            for idx, row in enumerate(pick_rows):
-                if row.get("symbol") == selected:
-                    pick_rows[idx] = rich
-                    replaced = True
-                    break
-            if not replaced:
-                pick_rows.insert(0, rich)
-            selected_pick = rich
-        else:
-            for row in pick_rows:
-                if row.get("symbol") == selected:
-                    row["chart_attempted"] = True
-                    break
-            if selected_pick is not None:
-                selected_pick["chart_attempted"] = True
-
-    async def _hydrate_sparks() -> None:
-        if not need_sparks:
-            _hydrate_sparks_from_cache(pick_rows)
+            pick_errors.append(f"{selected}: chart timeout ({exc.__class__.__name__})")
             return
-        try:
-            async with httpx.AsyncClient(
-                headers=yahoo_headers,
-                follow_redirects=True,
-                trust_env=False,
-                timeout=httpx.Timeout(4.0, connect=2.0),
-            ) as spark_client:
-                await asyncio.wait_for(
-                    _hydrate_list_intraday_sparks(
-                        spark_client,
-                        pick_rows,
-                        force=force,
-                        limit=min(12, len(pick_rows) or 1),
-                    ),
-                    timeout=8.0,
-                )
-        except (asyncio.TimeoutError, httpx.HTTPError):
-            _hydrate_sparks_from_cache(pick_rows)
+        pick_errors.extend(errs or [])
+        await _apply_selected_bundle(bundle or {})
+        # Persist into picks cache even if the HTTP response already left.
+        if selected_pick and not selected_pick.get("lite"):
+            cached = _PICKS_CACHE.get(sector_id) or {}
+            rows = [dict(r) for r in (cached.get("pick_rows") or pick_rows)]
+            for idx, row in enumerate(rows):
+                if row.get("symbol") == selected:
+                    rows[idx] = dict(selected_pick)
+                    break
+            else:
+                rows.insert(0, dict(selected_pick))
+            _PICKS_CACHE[sector_id] = {
+                "key": picks_key,
+                "pick_rows": rows,
+                "earnings_by_symbol": dict(
+                    cached.get("earnings_by_symbol") or earnings_by_symbol
+                ),
+                "fetched_at": cached.get("fetched_at") or time.time(),
+            }
 
-    await asyncio.gather(_upgrade_selected_chart(), _hydrate_sparks())
+    if need_selected_chart and selected:
+        chart_task = asyncio.create_task(_upgrade_selected_chart())
+        # Cold/force: race briefly so first paint often has 分时.
+        # Cache hit: never stall — FE /api/quote/intraday fills the chart.
+        if not picks_from_cache or force:
+            try:
+                await asyncio.wait_for(asyncio.shield(chart_task), timeout=2.0)
+            except asyncio.TimeoutError:
+                pass
+        # else: task warms _PICKS_CACHE in background
+
+    # Warm list sparks in background when missing.
+    if pick_rows and not picks_from_cache:
+        sparked = sum(1 for r in pick_rows[:12] if _spark_points_from_row(r))
+        if sparked < min(6, len(pick_rows)):
+
+            async def _sparks_bg() -> None:
+                try:
+                    async with httpx.AsyncClient(
+                        headers=yahoo_headers,
+                        follow_redirects=True,
+                        trust_env=False,
+                        timeout=httpx.Timeout(4.0, connect=2.0),
+                    ) as spark_client:
+                        await _hydrate_list_intraday_sparks(
+                            spark_client,
+                            [dict(r) for r in pick_rows],
+                            force=False,
+                            limit=min(12, len(pick_rows) or 1),
+                        )
+                except (asyncio.TimeoutError, httpx.HTTPError):
+                    return
+
+            try:
+                asyncio.get_running_loop().create_task(_sparks_bg())
+            except RuntimeError:
+                pass
 
     if pick_rows:
         pick_rows.sort(
@@ -2839,38 +2871,55 @@ async def build_sector_desk(
             row["earnings"] = earn
             earnings_by_symbol[sym] = earn
 
-    # Earnings surprise API is slow/flaky — never block warm cache hits on it.
+    # Earnings surprise API is slow — warm it in the background only.
     if (
         selected
         and not picks_from_cache
         and not _earnings_has_core(earnings_by_symbol.get(selected))
     ):
-        try:
-            async with httpx.AsyncClient(
-                headers={
-                    "User-Agent": USER_AGENT,
-                    "Accept": "application/json, text/plain, */*",
-                },
-                follow_redirects=True,
-                trust_env=False,
-                timeout=httpx.Timeout(2.0, connect=1.2),
-            ) as client:
-                earn = await asyncio.wait_for(
-                    _fetch_earnings_nasdaq(
-                        client,
-                        selected,
-                        upcoming=upcoming_peek.get(selected),
-                    ),
-                    timeout=2.0,
-                )
-        except (asyncio.TimeoutError, httpx.HTTPError):
-            earn = None
-        if earn:
-            earnings_by_symbol[selected] = earn
-            for row in pick_rows:
+
+        async def _earn_bg() -> None:
+            try:
+                async with httpx.AsyncClient(
+                    headers={
+                        "User-Agent": USER_AGENT,
+                        "Accept": "application/json, text/plain, */*",
+                    },
+                    follow_redirects=True,
+                    trust_env=False,
+                    timeout=httpx.Timeout(2.0, connect=1.2),
+                ) as client:
+                    earn = await asyncio.wait_for(
+                        _fetch_earnings_nasdaq(
+                            client,
+                            selected,
+                            upcoming=upcoming_peek.get(selected),
+                        ),
+                        timeout=2.0,
+                    )
+            except (asyncio.TimeoutError, httpx.HTTPError):
+                return
+            if not earn:
+                return
+            cached = _PICKS_CACHE.get(sector_id) or {}
+            earn_map = dict(cached.get("earnings_by_symbol") or {})
+            earn_map[selected] = earn
+            rows = [dict(r) for r in (cached.get("pick_rows") or [])]
+            for row in rows:
                 if row.get("symbol") == selected:
                     row["earnings"] = earn
-                    break
+            if rows:
+                _PICKS_CACHE[sector_id] = {
+                    "key": cached.get("key") or picks_key,
+                    "pick_rows": rows,
+                    "earnings_by_symbol": earn_map,
+                    "fetched_at": cached.get("fetched_at") or time.time(),
+                }
+
+        try:
+            asyncio.get_running_loop().create_task(_earn_bg())
+        except RuntimeError:
+            pass
 
     if selected_pick is not None:
         selected_pick = next(
@@ -2904,37 +2953,58 @@ async def build_sector_desk(
         if str(row.get("symbol") or "").upper() == str(selected or "").upper():
             selected_name = str(row.get("name") or "") or None
             break
-    # Keep desk TTFB low: short GN wait, then instant intel-match fallback.
-    # Timed-out GN task keeps running so the next click can hit cache.
-    news_task = asyncio.create_task(
-        _hydrate_sector_symbol_news(
+    # Instant news from in-memory intel; GN hydrate warms cache in background.
+    sector_news_slim = [
+        _slim_news_item(dict(i))
+        for i in _match_sector_news(news_items, topic_key)[:12]
+    ]
+    selected_symbol_news = [
+        _slim_news_item(dict(i))
+        for i in _match_symbol_news(
             news_items,
-            topic_id=topic_key,
-            sector_label=str((active or {}).get("label") or sector_id or ""),
-            selected_symbol=str(selected or ""),
-            selected_name=selected_name,
-            force=force,
+            str(selected or ""),
+            name=selected_name,
+            limit=8,
         )
-    )
-    try:
-        sector_news_slim, selected_symbol_news = await asyncio.wait_for(
-            asyncio.shield(news_task),
-            timeout=2.8,
-        )
-    except asyncio.TimeoutError:
-        sector_news_slim = [
-            _slim_news_item(dict(i))
-            for i in _match_sector_news(news_items, topic_key)[:12]
-        ]
-        selected_symbol_news = [
-            _slim_news_item(dict(i))
-            for i in _match_symbol_news(
+    ]
+
+    async def _news_bg() -> None:
+        try:
+            sector_gn, symbol_gn = await _hydrate_sector_symbol_news(
                 news_items,
-                str(selected or ""),
-                name=selected_name,
-                limit=8,
+                topic_id=topic_key,
+                sector_label=str((active or {}).get("label") or sector_id or ""),
+                selected_symbol=str(selected or ""),
+                selected_name=selected_name,
+                force=force,
             )
-        ]
+        except Exception:  # noqa: BLE001
+            return
+        # Stash on picks cache marker so a quick follow-up refresh can reuse.
+        cached = _PICKS_CACHE.get(sector_id) or {}
+        if not cached:
+            return
+        meta = dict(cached)
+        meta["sector_news"] = sector_gn
+        meta["symbol_news"] = {str(selected or "").upper(): symbol_gn}
+        meta["news_at"] = time.time()
+        _PICKS_CACHE[sector_id] = meta
+
+    # Prefer previously warmed GN headlines when available (< 3 min).
+    news_cached = _PICKS_CACHE.get(sector_id) or {}
+    news_age = time.time() - float(news_cached.get("news_at") or 0)
+    if news_age < 180 and news_cached.get("sector_news"):
+        sector_news_slim = list(news_cached.get("sector_news") or sector_news_slim)
+        warm_sym = (news_cached.get("symbol_news") or {}).get(
+            str(selected or "").upper()
+        )
+        if warm_sym:
+            selected_symbol_news = list(warm_sym)
+    else:
+        try:
+            asyncio.get_running_loop().create_task(_news_bg())
+        except RuntimeError:
+            pass
     sector_news = sector_news_slim
     # Enrich move analysis + per-symbol news once news is available
     for row in pick_rows:
