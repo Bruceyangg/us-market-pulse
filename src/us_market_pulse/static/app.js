@@ -455,7 +455,7 @@ function renderChartSvg(points, { up = true, viewStart = 0, viewEnd = null } = {
   return `
     <svg viewBox="0 0 ${width} ${height}" preserveAspectRatio="none" role="img" aria-label="分时走势图">
       <path class="intraday-area" d="${area}" fill="${fill}"></path>
-      <path class="intraday-line" d="${line}" fill="none" stroke="${stroke}" stroke-width="0.5" stroke-linecap="round" stroke-linejoin="round" vector-effect="non-scaling-stroke"></path>
+      <path class="intraday-line" d="${line}" fill="none" stroke="${stroke}" stroke-width="0.6" stroke-linecap="round" stroke-linejoin="round" vector-effect="non-scaling-stroke"></path>
     </svg>
   `;
 }
@@ -517,32 +517,44 @@ function formatPriceTick(v) {
   return n.toFixed(2);
 }
 
+/** Shared Yahoo 1D 分时 viewBox geometry (holdings + sectors). */
+const INTRADAY_VB = {
+  width: 360,
+  height: 188,
+  padL: 8,
+  padR: 44,
+  padTop: 10,
+  padBottom: 22,
+};
+
+function formatBeijingCrosshairTime(ts) {
+  const d = new Date(Number(ts) * 1000);
+  if (Number.isNaN(d.getTime())) return "—";
+  const parts = new Intl.DateTimeFormat("en-US", {
+    timeZone: "Asia/Shanghai",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    hourCycle: "h23",
+  }).formatToParts(d);
+  const get = (type) => parts.find((p) => p.type === type)?.value || "";
+  let hour = get("hour");
+  if (hour === "24") hour = "00";
+  return `${get("month")}/${get("day")} ${hour}:${get("minute")} (北京)`;
+}
+
 /**
- * Yahoo 1D-style 分时 (盘前→盘中→盘后), shared by holdings + sectors.
- * Fixed ET 04:00–20:00 axis with clock labels and previous-close guide.
+ * Build hit-test model for 分时 (same filter/axis as the SVG renderer).
+ * Shared by holdings + sectors charts.
  */
-function renderSessionIntradaySvg(
+function buildIntradayHitModel(
   points,
-  {
-    up = true,
-    viewStart = 0,
-    viewEnd = null,
-    sessions = null,
-    previousClose = null,
-    cycleStart = null,
-  } = {}
+  { viewStart = 0, viewEnd = null, previousClose = null } = {}
 ) {
-  void sessions;
-  void cycleStart;
-  const width = 360;
-  const height = 188;
-  const padL = 8;
-  const padR = 44;
-  const padTop = 10;
-  const padBottom = 22;
+  const { width, height, padL, padR, padTop, padBottom } = INTRADAY_VB;
   const plotW = width - padL - padR;
   const plotH = height - padTop - padBottom;
-
   let view = (points || [])
     .filter((p) => p && Number.isFinite(Number(p.v ?? p.c)) && p.t != null)
     .map((p) => ({ ...p, _mins: etParts(p.t).mins }))
@@ -555,9 +567,7 @@ function renderSessionIntradaySvg(
   if (!(start === 0 && end >= view.length)) {
     view = view.slice(start, end);
   }
-  if (view.length < 2) {
-    return `<svg viewBox="0 0 ${width} ${height}" role="img" aria-label="暂无走势"><text x="16" y="96" fill="${themeMutedFill()}" font-size="13">暂无分时数据</text></svg>`;
-  }
+  if (view.length < 2) return null;
 
   const prev =
     previousClose != null && Number.isFinite(Number(previousClose))
@@ -582,7 +592,67 @@ function renderSessionIntradaySvg(
       YAHOO_DAY_SPAN_MINS *
       plotW;
 
-  const coords = view.map((p) => [xOfMins(p._mins), yOf(Number(p.v ?? p.c))]);
+  const samples = view.map((p) => {
+    const price = Number(p.v ?? p.c);
+    return {
+      t: Number(p.t),
+      price,
+      mins: p._mins,
+      x: xOfMins(p._mins),
+      y: yOf(price),
+    };
+  });
+
+  return {
+    width,
+    height,
+    padL,
+    padR,
+    padTop,
+    padBottom,
+    plotW,
+    plotH,
+    min,
+    max,
+    prev,
+    yOf,
+    xOfMins,
+    samples,
+  };
+}
+
+/**
+ * Yahoo 1D-style 分时 (盘前→盘中→盘后), shared by holdings + sectors.
+ * Fixed ET 04:00–20:00 axis with clock labels and previous-close guide.
+ */
+function renderSessionIntradaySvg(
+  points,
+  {
+    up = true,
+    viewStart = 0,
+    viewEnd = null,
+    sessions = null,
+    previousClose = null,
+    cycleStart = null,
+  } = {}
+) {
+  void sessions;
+  void cycleStart;
+  const model = buildIntradayHitModel(points, {
+    viewStart,
+    viewEnd,
+    previousClose,
+  });
+  const { width, height, padL, padTop, plotW, plotH } = INTRADAY_VB;
+  if (!model) {
+    return {
+      html: `<svg viewBox="0 0 ${width} ${height}" role="img" aria-label="暂无走势"><text x="16" y="96" fill="${themeMutedFill()}" font-size="13">暂无分时数据</text></svg>`,
+      hit: null,
+    };
+  }
+
+  const { prev, min, max, yOf, xOfMins, samples } = model;
+  const coords = samples.map((s) => [s.x, s.y]);
   const stroke = up ? TAPE_UP : TAPE_DOWN;
   const fill = up ? TAPE_UP_SOFT : TAPE_DOWN_SOFT;
   const muted = themeMutedFill();
@@ -608,7 +678,6 @@ function renderSessionIntradaySvg(
     )}" stroke="${grid}" stroke-width="1" stroke-dasharray="2 3"></line>`;
   }).join("");
 
-  // Regular-session open / close guides (09:30 / 16:00 ET).
   const sessionGuides = [9 * 60 + 30, 16 * 60]
     .map((mins) => {
       const x = xOfMins(mins);
@@ -661,23 +730,35 @@ function renderSessionIntradaySvg(
   ).toFixed(2)} L${coords[0][0].toFixed(2)},${(padTop + plotH).toFixed(2)} Z`;
 
   const last = coords[coords.length - 1];
-  const tip = `<circle cx="${last[0].toFixed(2)}" cy="${last[1].toFixed(
+  const tip = `<circle class="intraday-tip" cx="${last[0].toFixed(
+    2
+  )}" cy="${last[1].toFixed(
     2
   )}" r="0.9" fill="${stroke}" vector-effect="non-scaling-stroke"></circle>`;
 
-  return `
+  const html = `
     <svg class="session-intraday-svg yahoo-intraday-svg" viewBox="0 0 ${width} ${height}" preserveAspectRatio="none" role="img" aria-label="Yahoo 1D 分时">
       ${hGrid}
       ${vGrid}
       ${sessionGuides}
       ${prevLine}
       <path class="intraday-area" d="${area}" fill="${fill}"></path>
-      <path class="intraday-line" d="${line}" fill="none" stroke="${stroke}" stroke-width="0.5" stroke-linecap="round" stroke-linejoin="round" vector-effect="non-scaling-stroke"></path>
+      <path class="intraday-line" d="${line}" fill="none" stroke="${stroke}" stroke-width="0.6" stroke-linecap="round" stroke-linejoin="round" vector-effect="non-scaling-stroke"></path>
       ${tip}
+      <g class="intraday-crosshair" visibility="hidden">
+        <line class="ch-v" x1="0" y1="${padTop}" x2="0" y2="${(
+          padTop + plotH
+        ).toFixed(1)}" stroke="rgba(148,163,184,0.85)" stroke-width="1" vector-effect="non-scaling-stroke"></line>
+        <line class="ch-h" x1="${padL}" y1="0" x2="${(padL + plotW).toFixed(
+          1
+        )}" y2="0" stroke="rgba(148,163,184,0.55)" stroke-width="1" stroke-dasharray="3 3" vector-effect="non-scaling-stroke"></line>
+        <circle class="ch-dot" cx="0" cy="0" r="1.35" fill="${stroke}" stroke="#fff" stroke-width="0.6" vector-effect="non-scaling-stroke"></circle>
+      </g>
       ${timeLabels}
       ${priceTicks}
     </svg>
   `;
+  return { html, hit: model };
 }
 
 function sanitizeCandleBars(points) {
@@ -839,7 +920,7 @@ function paintZoomableChart(key) {
   // Never index-slice 分时 — that clipped session tips off the canvas.
   if (tf === "intraday") {
     const linePts = toLineSparkPoints(points);
-    stage.innerHTML = renderSessionIntradaySvg(linePts.length ? linePts : points, {
+    const drawn = renderSessionIntradaySvg(linePts.length ? linePts : points, {
       up,
       viewStart: 0,
       viewEnd: null,
@@ -847,7 +928,12 @@ function paintZoomableChart(key) {
       previousClose: meta.previousClose,
       cycleStart: meta.cycleStart,
     });
+    stage.innerHTML = drawn.html;
+    meta.intradayHit = drawn.hit;
+    hideIntradayCrosshair(key);
   } else if (kind === "candle") {
+    meta.intradayHit = null;
+    hideIntradayCrosshair(key);
     // Keep SVG inside the zoom stage; park MA legend as a sibling so it cannot
     // overflow/paint over 个股财报 below when the chart card is height-clipped.
     stage.innerHTML = candleChartHtml(points, tf, z).replace(
@@ -862,12 +948,181 @@ function paintZoomableChart(key) {
       );
     }
   } else {
+    meta.intradayHit = null;
+    hideIntradayCrosshair(key);
     stage.innerHTML = renderChartSvg(points, {
       up,
       viewStart: z.start,
       viewEnd: z.start + z.count,
     });
   }
+}
+
+function nearestIntradaySample(hit, svgX) {
+  const samples = hit?.samples || [];
+  if (!samples.length) return null;
+  let best = samples[0];
+  let bestDist = Math.abs(samples[0].x - svgX);
+  for (let i = 1; i < samples.length; i += 1) {
+    const d = Math.abs(samples[i].x - svgX);
+    if (d < bestDist) {
+      best = samples[i];
+      bestDist = d;
+    }
+  }
+  return best;
+}
+
+function hideIntradayCrosshair(key) {
+  const meta = chartZoomData.get(key);
+  const root = meta?.root;
+  if (!root) return;
+  const g = root.querySelector(".intraday-crosshair");
+  if (g) g.setAttribute("visibility", "hidden");
+  const tip = root.querySelector(".chart-crosshair-tip");
+  if (tip) {
+    tip.classList.add("is-hidden");
+    tip.innerHTML = "";
+  }
+}
+
+function ensureIntradayCrosshairTip(zoomRoot) {
+  if (!zoomRoot) return null;
+  let tip = zoomRoot.querySelector(".chart-crosshair-tip");
+  if (!tip) {
+    tip = document.createElement("div");
+    tip.className = "chart-crosshair-tip is-hidden";
+    tip.setAttribute("aria-live", "polite");
+    zoomRoot.appendChild(tip);
+  }
+  return tip;
+}
+
+function showIntradayCrosshair(key, clientX, clientY) {
+  const meta = chartZoomData.get(key);
+  if (!meta || meta.tf !== "intraday" || !meta.intradayHit) {
+    hideIntradayCrosshair(key);
+    return;
+  }
+  const root = meta.root;
+  const svg = root?.querySelector("svg.session-intraday-svg");
+  const zoomRoot = root?.querySelector(".chart-zoom");
+  const hit = meta.intradayHit;
+  if (!svg || !zoomRoot) return;
+
+  const rect = svg.getBoundingClientRect();
+  if (!(rect.width > 0) || !(rect.height > 0)) return;
+  const svgX = ((clientX - rect.left) / rect.width) * hit.width;
+  const sample = nearestIntradaySample(hit, svgX);
+  if (!sample) {
+    hideIntradayCrosshair(key);
+    return;
+  }
+
+  const g = svg.querySelector(".intraday-crosshair");
+  const v = g?.querySelector(".ch-v");
+  const h = g?.querySelector(".ch-h");
+  const dot = g?.querySelector(".ch-dot");
+  if (g && v && h && dot) {
+    g.setAttribute("visibility", "visible");
+    v.setAttribute("x1", sample.x.toFixed(2));
+    v.setAttribute("x2", sample.x.toFixed(2));
+    h.setAttribute("y1", sample.y.toFixed(2));
+    h.setAttribute("y2", sample.y.toFixed(2));
+    dot.setAttribute("cx", sample.x.toFixed(2));
+    dot.setAttribute("cy", sample.y.toFixed(2));
+  }
+
+  const tip = ensureIntradayCrosshairTip(zoomRoot);
+  if (!tip) return;
+  const prev = hit.prev;
+  const change =
+    prev != null && Number.isFinite(prev) ? sample.price - prev : null;
+  const changePct =
+    change != null && prev ? (change / prev) * 100 : null;
+  const delta = formatDelta(change);
+  const tipCls = pctClass(changePct);
+  tip.innerHTML = `
+    <div class="cht-time">${escapeHtml(formatBeijingCrosshairTime(sample.t))}</div>
+    <div class="cht-grid">
+      <div><span>价格</span><strong class="${tipCls}">${escapeHtml(
+        formatNumber(sample.price, "")
+      )}</strong></div>
+      <div><span>涨跌额</span><strong class="${delta.cls}">${escapeHtml(
+        delta.text
+      )}</strong></div>
+      <div><span>涨跌幅</span><strong class="${tipCls}">${escapeHtml(
+        pctText(changePct)
+      )}</strong></div>
+    </div>
+  `;
+  tip.classList.remove("is-hidden");
+
+  // Keep tip inside the chart: prefer above the finger/cursor, flip if needed.
+  const zr = zoomRoot.getBoundingClientRect();
+  const localX = clientX - zr.left;
+  const localY = clientY - zr.top;
+  const tipW = tip.offsetWidth || 168;
+  const tipH = tip.offsetHeight || 72;
+  let left = localX - tipW / 2;
+  let top = localY - tipH - 14;
+  left = clamp(left, 6, Math.max(6, zr.width - tipW - 6));
+  if (top < 6) top = Math.min(localY + 18, Math.max(6, zr.height - tipH - 6));
+  tip.style.left = `${left}px`;
+  tip.style.top = `${top}px`;
+}
+
+function bindIntradayCrosshair(zoomRoot, key) {
+  if (!zoomRoot || zoomRoot.dataset.crosshairBound === "1") return;
+  zoomRoot.dataset.crosshairBound = "1";
+  ensureIntradayCrosshairTip(zoomRoot);
+  let activePointer = null;
+
+  const onMove = (event) => {
+    if (event.pointerType === "touch" && activePointer == null) return;
+    if (activePointer != null && event.pointerId !== activePointer) return;
+    // Ignore multi-touch pinch gestures.
+    if (event.pointerType === "touch" && zoomRoot._pulsePointers > 1) {
+      hideIntradayCrosshair(key);
+      return;
+    }
+    const meta = chartZoomData.get(key);
+    if (!meta || meta.tf !== "intraday") {
+      hideIntradayCrosshair(key);
+      return;
+    }
+    showIntradayCrosshair(key, event.clientX, event.clientY);
+  };
+
+  zoomRoot.addEventListener("pointerdown", (event) => {
+    if (event.target.closest("[data-zoom-act]")) return;
+    zoomRoot._pulsePointers = (zoomRoot._pulsePointers || 0) + 1;
+    if (event.pointerType === "touch") {
+      activePointer = event.pointerId;
+      try {
+        zoomRoot.setPointerCapture(event.pointerId);
+      } catch {
+        /* ignore */
+      }
+      showIntradayCrosshair(key, event.clientX, event.clientY);
+    }
+  });
+  zoomRoot.addEventListener("pointermove", onMove);
+  zoomRoot.addEventListener("pointerup", (event) => {
+    zoomRoot._pulsePointers = Math.max(0, (zoomRoot._pulsePointers || 1) - 1);
+    if (event.pointerId === activePointer) {
+      activePointer = null;
+      hideIntradayCrosshair(key);
+    }
+  });
+  zoomRoot.addEventListener("pointercancel", (event) => {
+    zoomRoot._pulsePointers = Math.max(0, (zoomRoot._pulsePointers || 1) - 1);
+    if (event.pointerId === activePointer) activePointer = null;
+    hideIntradayCrosshair(key);
+  });
+  zoomRoot.addEventListener("pointerleave", () => {
+    if (activePointer == null) hideIntradayCrosshair(key);
+  });
 }
 
 function bindZoomableChart(
@@ -907,6 +1162,7 @@ function bindZoomableChart(
   ensureChartZoom(key, scope, len, tf, kind);
   if (sameShell) {
     paintZoomableChart(key);
+    bindIntradayCrosshair(canvasEl.querySelector(".chart-zoom"), key);
     return;
   }
   const z = state.chartZoom[key];
@@ -916,12 +1172,14 @@ function bindZoomableChart(
     <div class="chart-zoom" data-zoom-key="${escapeHtml(key)}" tabindex="0" aria-label="可缩放图表：触控板捏合或使用角落按钮">
       ${chartZoomControlsHtml(zoomed)}
       <div class="chart-zoom-stage"></div>
+      <div class="chart-crosshair-tip is-hidden" aria-live="polite"></div>
     </div>
   `;
   paintZoomableChart(key);
 
   const zoomRoot = canvasEl.querySelector(".chart-zoom");
   if (!zoomRoot) return;
+  bindIntradayCrosshair(zoomRoot, key);
 
   zoomRoot.addEventListener("click", (event) => {
     const btn = event.target.closest("[data-zoom-act]");

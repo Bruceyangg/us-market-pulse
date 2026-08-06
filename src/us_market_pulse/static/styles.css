@@ -3829,12 +3829,12 @@ html[data-theme="dark"] .sector-pick-list .sector-hold-btn.is-held:hover {
   min-height: 190px;
 }
 
-/* Holdings + sectors share the same 分时 renderer — keep the tape hairline-thin. */
+/* Holdings + sectors share the same 分时 renderer — hairline tape. */
 .portfolio-chart .session-intraday-svg .intraday-line,
 .sector-chart .session-intraday-svg .intraday-line,
 .chart-card .session-intraday-svg .intraday-line,
 .yahoo-intraday-svg .intraday-line {
-  stroke-width: 0.5px;
+  stroke-width: 0.6px;
 }
 
 .portfolio-chart .session-intraday-svg .intraday-area,
@@ -3842,6 +3842,68 @@ html[data-theme="dark"] .sector-pick-list .sector-hold-btn.is-held:hover {
 .chart-card .session-intraday-svg .intraday-area,
 .yahoo-intraday-svg .intraday-area {
   opacity: 0.55;
+}
+
+.chart-zoom .chart-crosshair-tip {
+  position: absolute;
+  z-index: 4;
+  min-width: 10.5rem;
+  max-width: min(16rem, calc(100% - 12px));
+  padding: 0.45rem 0.55rem 0.5rem;
+  border-radius: 8px;
+  border: 1px solid color-mix(in srgb, var(--line) 85%, #8aa0b5);
+  background: color-mix(in srgb, var(--panel) 94%, #0b1220);
+  box-shadow: 0 8px 22px color-mix(in srgb, #000 28%, transparent);
+  backdrop-filter: blur(10px);
+  color: var(--ink);
+  pointer-events: none;
+  font-size: 0.72rem;
+  line-height: 1.35;
+}
+
+.chart-zoom .chart-crosshair-tip.is-hidden {
+  display: none;
+}
+
+.chart-zoom .chart-crosshair-tip .cht-time {
+  font-weight: 700;
+  margin-bottom: 0.28rem;
+  color: var(--ink);
+  letter-spacing: 0.01em;
+}
+
+.chart-zoom .chart-crosshair-tip .cht-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 0.28rem 0.55rem;
+}
+
+.chart-zoom .chart-crosshair-tip .cht-grid span {
+  display: block;
+  color: var(--ink-soft);
+  font-size: 0.64rem;
+  font-weight: 600;
+}
+
+.chart-zoom .chart-crosshair-tip .cht-grid strong {
+  display: block;
+  margin-top: 0.08rem;
+  font-size: 0.78rem;
+  font-weight: 750;
+  font-variant-numeric: tabular-nums;
+}
+
+.chart-zoom .chart-crosshair-tip .cht-grid strong.up {
+  color: #d92b2b;
+}
+
+.chart-zoom .chart-crosshair-tip .cht-grid strong.down {
+  color: #0f8a6a;
+}
+
+html[data-theme="dark"] .chart-zoom .chart-crosshair-tip {
+  background: rgba(16, 24, 36, 0.94);
+  border-color: rgba(148, 163, 184, 0.35);
 }
 
 .portfolio-chart .chart-canvas > svg,
