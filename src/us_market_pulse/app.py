@@ -42,6 +42,7 @@ from us_market_pulse.earnings_calendar import (
     parse_day_param,
 )
 from us_market_pulse.market_map import build_market_map
+from us_market_pulse.chains import build_chains_desk
 from us_market_pulse.sectors import build_sector_desk, fetch_intraday_snapshot
 from us_market_pulse.us_markets import build_us_markets_desk
 from us_market_pulse.symbol_lookup import resolve_holding_query, suggest_holdings
@@ -195,6 +196,11 @@ async def intel_page(request: Request) -> HTMLResponse:
     return _page(request, "intel.html", "intel")
 
 
+@app.get("/chains", response_class=HTMLResponse)
+async def chains_page(request: Request) -> HTMLResponse:
+    return _page(request, "chains.html", "chains")
+
+
 @app.get("/settings", response_class=HTMLResponse)
 async def settings_page(request: Request) -> HTMLResponse:
     return _page(request, "settings.html", "settings")
@@ -346,6 +352,15 @@ async def api_portfolio_intel(
         "errors": data.get("errors") or [],
         **summary,
     }
+
+
+@app.get("/api/chains")
+async def api_chains(
+    chain: str | None = Query(default=None),
+    node: str | None = Query(default=None),
+    q: str | None = Query(default=None),
+) -> dict[str, Any]:
+    return build_chains_desk(chain_id=chain, node_id=node, q=q)
 
 
 @app.get("/api/intel")
