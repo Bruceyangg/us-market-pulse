@@ -2007,23 +2007,34 @@ html[data-theme="dark"] .desk-chg-row {
     right: 0;
     bottom: 0;
     z-index: 40;
-    display: grid;
-    grid-template-columns: repeat(5, minmax(0, 1fr));
-    gap: 0.15rem;
-    padding: 0.45rem 0.55rem calc(0.45rem + env(safe-area-inset-bottom));
+    display: flex;
+    flex-wrap: nowrap;
+    gap: 0.12rem;
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+    overscroll-behavior-x: contain;
+    scrollbar-width: none;
+    padding: 0.4rem 0.45rem calc(0.4rem + env(safe-area-inset-bottom));
     background: var(--tabbar-bg);
     border-top: 1px solid var(--line);
     backdrop-filter: blur(14px);
   }
 
+  .mobile-tabbar::-webkit-scrollbar {
+    display: none;
+  }
+
   .mobile-tabbar a {
     text-decoration: none;
     color: var(--ink-soft);
-    font-size: 0.78rem;
+    font-size: 0.72rem;
     font-weight: 700;
     text-align: center;
-    padding: 0.55rem 0.25rem;
+    padding: 0.55rem 0.35rem;
     border-radius: 12px;
+    flex: 1 0 auto;
+    min-width: 3.45rem;
+    max-width: 5.2rem;
   }
 
   .mobile-tabbar a.is-active {
@@ -2972,8 +2983,30 @@ html[data-theme="dark"] .desk-chg-row {
 }
 
 @media (max-width: 720px) {
+  .us-markets-strip-wrap {
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+    overscroll-behavior-x: contain;
+    margin-inline: -0.15rem;
+    padding-inline: 0.15rem;
+  }
+
   .us-markets-strip {
-    grid-template-columns: repeat(auto-fit, minmax(8.6rem, 1fr));
+    display: flex;
+    gap: 0.5rem;
+    width: max-content;
+    min-width: 100%;
+    padding-bottom: 0.15rem;
+  }
+
+  .us-strip-card {
+    flex: 0 0 auto;
+    width: min(11.5rem, 72vw);
+    scroll-snap-align: start;
+  }
+
+  .us-markets-strip-wrap {
+    scroll-snap-type: x proximity;
   }
 }
 
@@ -7243,6 +7276,148 @@ html.pulse-native-app .portfolio-body .sector-hold-btn {
   width: 2.55rem;
   min-width: 2.55rem;
   z-index: 2;
+}
+
+/* Phone app: denser trading stack, larger touch, horizontal market strip */
+html.pulse-native-phone .page-intro .lede {
+  font-size: 0.8rem;
+  line-height: 1.4;
+}
+
+html.pulse-native-phone .us-markets-strip-wrap {
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+  scroll-snap-type: x proximity;
+}
+
+html.pulse-native-phone .us-markets-strip {
+  display: flex;
+  gap: 0.5rem;
+  width: max-content;
+  min-width: 100%;
+}
+
+html.pulse-native-phone .us-strip-card {
+  flex: 0 0 auto;
+  width: min(11.2rem, 70vw);
+  scroll-snap-align: start;
+}
+
+html.pulse-native-phone .us-futures-grid {
+  grid-template-columns: 1fr;
+}
+
+html.pulse-native-phone .tf-filters {
+  gap: 0.35rem;
+  flex-wrap: wrap;
+}
+
+html.pulse-native-phone .tf-filters .filter {
+  flex: 1 1 auto;
+  min-width: 3.6rem;
+  justify-content: center;
+}
+
+html.pulse-native-phone .chains-search input[type="search"] {
+  min-height: 2.75rem;
+  font-size: 1rem;
+}
+
+html.pulse-native-phone .chains-suggest-chip {
+  min-height: 2.35rem;
+  padding: 0.45rem 0.75rem;
+}
+
+html.pulse-native-phone .chains-co-row {
+  min-height: 2.85rem;
+  padding: 0.4rem 0.25rem;
+}
+
+html.pulse-native-phone .chains-panel .sector-hold-btn {
+  width: 2.35rem;
+  height: 2.35rem;
+  font-size: 1.2rem;
+}
+
+/* Tablet app: use width for side-by-side desk + readable map */
+html.pulse-native-tablet .page-main {
+  padding-left: 0.65rem;
+  padding-right: 0.65rem;
+}
+
+html.pulse-native-tablet .page-intro h1 {
+  font-size: 1.55rem;
+}
+
+html.pulse-native-tablet .sectors-board {
+  --desk-cols: minmax(16rem, 0.95fr) minmax(0, 1.5fr);
+  --sectors-desk-cols: var(--desk-cols);
+}
+
+html.pulse-native-tablet .page-desk .portfolio-body {
+  --desk-cols: minmax(16rem, 0.95fr) minmax(0, 1.5fr);
+}
+
+html.pulse-native-tablet .sectors-desk,
+html.pulse-native-tablet .portfolio-desk {
+  grid-template-columns: var(--desk-cols, minmax(16rem, 0.95fr) minmax(0, 1.5fr));
+}
+
+html.pulse-native-tablet .sectors-intel-pane {
+  grid-column: 1 / -1;
+}
+
+html.pulse-native-tablet .sectors-intel-sticky {
+  grid-template-columns: 1.1fr 0.9fr;
+}
+
+html.pulse-native-tablet .sector-map-stage,
+html.pulse-native-tablet .sector-map-stage.is-narrow {
+  min-width: 0;
+  width: 100%;
+  max-width: none;
+  aspect-ratio: 1000 / 560;
+}
+
+html.pulse-native-tablet .map-stock .nm {
+  display: block;
+}
+
+html.pulse-native-tablet .us-futures-grid {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+html.pulse-native-tablet .us-markets-strip {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(10rem, 1fr));
+  width: auto;
+}
+
+html.pulse-native-tablet .sector-chip-strip {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+html.pulse-native-tablet .chains-panels {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+html.pulse-native-tablet .holding-row,
+html.pulse-native-tablet .sector-pick-row {
+  min-height: 3.25rem;
+}
+
+@media (max-width: 900px) {
+  html.pulse-native-tablet .us-futures-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  html.pulse-native-tablet .chains-panels {
+    grid-template-columns: 1fr;
+  }
+
+  html.pulse-native-tablet .sectors-intel-sticky {
+    grid-template-columns: 1fr;
+  }
 }
 
 /* —— 产业链 desk —— */
