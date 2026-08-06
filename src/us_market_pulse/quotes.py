@@ -368,8 +368,24 @@ def _overnight_from_yahoo_html(html: str) -> dict[str, float | None] | None:
     }
 
 
+def peek_overnight_quote(symbol: str) -> dict[str, Any] | None:
+    """Return cached Overnight quote only (no network)."""
+    sym = (symbol or "").strip().upper()
+    if not sym:
+        return None
+    hit = _OVERNIGHT_CACHE.get(sym)
+    if not isinstance(hit, dict):
+        return None
+    if time.time() - float(hit.get("at") or 0) >= _OVERNIGHT_TTL:
+        return None
+    cached = hit.get("quote")
+    if isinstance(cached, dict) and cached.get("rt_price") is not None:
+        return dict(cached)
+    return None
+
+
 async def fetch_yahoo_overnight_quote(
-    client: httpx.AsyncClient,
+    client: httpx.AsyncClient | None,
     symbol: str,
     *,
     allow_page: bool = True,
@@ -396,6 +412,9 @@ async def fetch_yahoo_overnight_quote(
                 return dict(cached)
             if cached is None:
                 return None
+
+    if client is None:
+        return None
 
     enc = quote(sym, safe="")
     headers = {
@@ -903,9 +922,12 @@ async def fetch_day_quotes(
                 _DAY_QUOTE_CACHE[sym] = {"at": stamped_at, "quote": dict(row)}
 
     # 夜盘: only Yahoo Overnight (BOATS). Never CNBC 盘后.
+    # Apply cache immediately; refresh misses in the background so desk APIs
+    # never block on slow Yahoo/jina page scrapes (which can stall Render).
     if session_from_clock()[0] == "night" and quotes:
         _stamp_night_session(quotes)
-        # None → try listed symbols; [] → skip (ETF strip).
+        _apply_overnight_cache(quotes)
+        _stamp_night_session(quotes)
         if overnight_priority is None:
             candidates = list(uniq)
         else:
@@ -917,34 +939,120 @@ async def fetch_day_quotes(
         need_on = [
             s
             for s in candidates
-            if s in quotes and not (quotes[s].get("overnight") and quotes[s].get("rt_price") is not None)
-        ]
+            if s in quotes
+            and not (quotes[s].get("overnight") and quotes[s].get("rt_price") is not None)
+        ][:3]
         if need_on:
+            _schedule_overnight_refresh(need_on)
+        stamped_at = time.time()
+        for sym, row in quotes.items():
+            _DAY_QUOTE_CACHE[sym] = {"at": stamped_at, "quote": dict(row)}
+    return quotes
+
+
+def _apply_overnight_cache(quotes: dict[str, dict[str, Any]]) -> None:
+    """Stamp cached Overnight quotes onto day rows (no network)."""
+    now = time.time()
+    for sym, row in list(quotes.items()):
+        hit = _OVERNIGHT_CACHE.get(sym)
+        if not isinstance(hit, dict):
+            continue
+        age = now - float(hit.get("at") or 0)
+        cached = hit.get("quote")
+        if not isinstance(cached, dict) or cached.get("rt_price") is None:
+            continue
+        if age > _OVERNIGHT_TTL:
+            continue
+        base = dict(row)
+        for key in ("rt_price", "rt_change", "rt_change_pct"):
+            if cached.get(key) is not None:
+                base[key] = cached[key]
+        base["overnight"] = True
+        base["session"] = "night"
+        base["session_label"] = "夜盘"
+        base["source"] = cached.get("source") or base.get("source") or "yahoo"
+        quotes[sym] = base
+
+
+_OVERNIGHT_REFRESH_INFLIGHT: set[str] = set()
+
+
+def _schedule_overnight_refresh(symbols: list[str]) -> None:
+    """Fire-and-forget Overnight scrape; never block the request path."""
+    import asyncio
+
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        return
+
+    pending = [
+        s
+        for s in symbols
+        if s and s not in _OVERNIGHT_REFRESH_INFLIGHT
+    ]
+    if not pending:
+        return
+    for s in pending:
+        _OVERNIGHT_REFRESH_INFLIGHT.add(s)
+
+    async def _run() -> None:
+        try:
             async with httpx.AsyncClient(
                 follow_redirects=True,
                 trust_env=False,
                 headers=_yahoo_chart_headers(),
                 timeout=httpx.Timeout(12.0, connect=4.0),
             ) as client:
+                # Empty shell so overlay can write Overnight stamps into cache.
+                shell = {
+                    s: {
+                        "symbol": s,
+                        "session": "night",
+                        "session_label": "夜盘",
+                    }
+                    for s in pending
+                }
                 await overlay_yahoo_overnight_quotes(
                     client,
-                    quotes,
-                    need_on,
+                    shell,
+                    pending,
                     concurrency=1,
-                    # jina is slow — only a few Overnight stamps per request.
-                    limit=min(3, len(need_on)),
+                    limit=min(3, len(pending)),
                     deadline_s=12.0,
                     allow_page=True,
                 )
-                _stamp_night_session(quotes)
-                stamped_at = time.time()
-                for sym in need_on:
-                    if sym in quotes:
-                        _DAY_QUOTE_CACHE[sym] = {
-                            "at": stamped_at,
-                            "quote": dict(quotes[sym]),
-                        }
-    return quotes
+                now = time.time()
+                for s, row in shell.items():
+                    if row.get("overnight") and row.get("rt_price") is not None:
+                        # Keep day quote fields if present in day cache.
+                        day_hit = _DAY_QUOTE_CACHE.get(s)
+                        if isinstance(day_hit, dict) and isinstance(
+                            day_hit.get("quote"), dict
+                        ):
+                            merged = dict(day_hit["quote"])
+                            merged.update(
+                                {
+                                    k: row[k]
+                                    for k in (
+                                        "rt_price",
+                                        "rt_change",
+                                        "rt_change_pct",
+                                        "overnight",
+                                        "session",
+                                        "session_label",
+                                    )
+                                    if k in row
+                                }
+                            )
+                            _DAY_QUOTE_CACHE[s] = {"at": now, "quote": merged}
+        except Exception:  # noqa: BLE001
+            pass
+        finally:
+            for s in pending:
+                _OVERNIGHT_REFRESH_INFLIGHT.discard(s)
+
+    loop.create_task(_run())
 
 
 def _nasdaq_path_symbol(symbol: str) -> str:
