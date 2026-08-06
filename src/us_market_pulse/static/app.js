@@ -4261,18 +4261,9 @@ function mergeListQuoteFields(next, prev) {
   if (!next) return prev || next;
   if (!prev) return next;
   const out = { ...next };
-  const nextSid = String(out.session || prev.session || "");
-  const nextHasRt =
-    out.rt_price != null || out.rt_change != null || out.rt_change_pct != null;
-  // 夜盘 without Yahoo Overnight must not inherit prior CNBC 盘后 %.
-  if (nextSid === "night" && !nextHasRt) {
-    delete out.rt_price;
-    delete out.rt_change;
-    delete out.rt_change_pct;
-  } else {
-    for (const key of ["rt_price", "rt_change", "rt_change_pct"]) {
-      if (out[key] == null && prev[key] != null) out[key] = prev[key];
-    }
+  // Keep prior 夜盘/盘后 RT when the new payload is missing it (CNBC extended).
+  for (const key of ["rt_price", "rt_change", "rt_change_pct"]) {
+    if (out[key] == null && prev[key] != null) out[key] = prev[key];
   }
   for (const key of [
     "price",
@@ -4876,10 +4867,8 @@ function applyIntradaySnapshot(sym, snap) {
     if (snap.rt_change != null) rtPatch.rt_change = snap.rt_change;
     if (snap.rt_change_pct != null) rtPatch.rt_change_pct = snap.rt_change_pct;
   } else if (sid === "night") {
-    // Clear stale 盘后 clones; Yahoo Overnight is quote-only when available.
-    rtPatch.rt_price = null;
-    rtPatch.rt_change = null;
-    rtPatch.rt_change_pct = null;
+    // CNBC extended 夜盘 may omit rt_* on a blip — keep prior values.
+    /* no clear */
   } else if (sid === "regular") {
     rtPatch.rt_price = snap.price;
     rtPatch.rt_change = snap.change;
