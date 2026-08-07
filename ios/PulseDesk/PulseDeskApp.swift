@@ -2,13 +2,10 @@ import SwiftUI
 
 @main
 struct PulseDeskApp: App {
-    @StateObject private var themeStore = ThemeStore()
-
     var body: some Scene {
         WindowGroup {
             RootView()
-                .environmentObject(themeStore)
-                .preferredColorScheme(themeStore.preferredColorScheme)
+                .tint(Color(red: 0.18, green: 0.45, blue: 0.72))
         }
     }
 }

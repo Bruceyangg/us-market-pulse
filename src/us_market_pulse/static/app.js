@@ -44,12 +44,27 @@ const state = {
   sectorSymbol: "",
   sectorTf: "intraday",
   sectorPrefetchTimer: null,
+  usMarkets: null,
+  usFuturesTf: "intraday",
+  usMarketsPollBusy: false,
+  usMarketsPollPending: null,
+  marketsLoadBusy: false,
+  intel: null,
+  sectorsLoadBusy: false,
+  sectorsLoadSeq: 0,
+  sectorsLoadPending: null,
+  chartUpgradeSym: "",
+  symbolNewsRetrySym: "",
   earnings: null,
   earningsDate: "",
   earningsSession: "all",
   earningsQ: "",
   chartZoom: {},
   chartZoomScope: {},
+  chains: null,
+  chainId: "",
+  chainQ: "",
+  chainsBound: false,
 };
 
 const CHART_ZOOM_MIN_BARS = 12;
@@ -71,7 +86,7 @@ if (!PORTFOLIO_TF_KEYS.includes(state.portfolioTf)) {
 let PAGE = document.body?.dataset?.page || "desk";
 const AUTHED = Boolean(document.getElementById("user-chip") || document.getElementById("btn-logout"));
 const pageTimers = [];
-const PAGE_DATA_TTL_MS = 3 * 60 * 1000;
+const PAGE_DATA_TTL_MS = 5 * 60 * 1000;
 
 const els = {
   status: document.getElementById("status-line"),
@@ -125,6 +140,10 @@ const els = {
   hotSectorsBlurb: document.getElementById("hot-sectors-blurb"),
   sectorMapBlurb: document.getElementById("sector-map-blurb"),
   sectorMapCanvas: document.getElementById("sector-map-canvas"),
+  usMarketsBlurb: document.getElementById("us-markets-blurb"),
+  usMarketsStrip: document.getElementById("us-markets-strip"),
+  usFuturesTfFilters: document.getElementById("us-futures-tf-filters"),
+  usFuturesGrid: document.getElementById("us-futures-grid"),
   sectorEtfGrid: document.getElementById("sector-etf-grid"),
   sectorPicksTitle: document.getElementById("sector-picks-title"),
   sectorPicksBlurb: document.getElementById("sector-picks-blurb"),
@@ -158,6 +177,16 @@ const els = {
   earningsTableTitle: document.getElementById("earnings-table-title"),
   earningsTableBlurb: document.getElementById("earnings-table-blurb"),
   earningsCount: document.getElementById("earnings-count"),
+  chainsBlurb: document.getElementById("chains-blurb"),
+  chainsSearch: document.getElementById("chains-search"),
+  chainsQ: document.getElementById("chains-q"),
+  chainsSuggest: document.getElementById("chains-suggest"),
+  chainsEmpty: document.getElementById("chains-empty"),
+  chainsMap: document.getElementById("chains-map"),
+  chainsMapTitle: document.getElementById("chains-map-title"),
+  chainsMapBlurb: document.getElementById("chains-map-blurb"),
+  chainsMindmap: document.getElementById("chains-mindmap"),
+  chainsPanels: document.getElementById("chains-panels"),
   briefGrid: document.getElementById("brief-grid"),
   briefBlurb: document.getElementById("brief-blurb"),
   eventRail: document.getElementById("event-rail"),
@@ -196,18 +225,20 @@ const els = {
 };
 
 function formatNumber(value, unit) {
-  if (value == null || Number.isNaN(value)) return "—";
-  const abs = Math.abs(value);
+  const n = Number(value);
+  if (value == null || !Number.isFinite(n)) return "—";
+  const abs = Math.abs(n);
   const digits = abs >= 100 ? 1 : abs >= 10 ? 2 : 3;
-  const text = value.toFixed(digits);
+  const text = n.toFixed(digits);
   return unit === "%" ? `${text}%` : text;
 }
 
 function formatDelta(delta) {
-  if (delta == null || Number.isNaN(delta)) return { text: "—", cls: "" };
-  const sign = delta > 0 ? "+" : "";
-  const cls = delta > 0 ? "up" : delta < 0 ? "down" : "";
-  return { text: `${sign}${delta.toFixed(3)}`, cls };
+  const n = Number(delta);
+  if (delta == null || !Number.isFinite(n)) return { text: "—", cls: "" };
+  const sign = n > 0 ? "+" : "";
+  const cls = n > 0 ? "up" : n < 0 ? "down" : "";
+  return { text: `${sign}${n.toFixed(3)}`, cls };
 }
 
 function relativeTime(iso) {
@@ -411,16 +442,68 @@ function panChartWindow(key, deltaBars) {
   paintZoomableChart(key);
 }
 
-function chartZoomControlsHtml(zoomed) {
+function chartLiveRefreshIconHtml() {
+  // Clockwise circular arrow (matches the desk refresh glyph).
   return `
-    <div class="chart-zoom-controls" role="group" aria-label="图表缩放">
-      <button type="button" class="chart-zoom-btn" data-zoom-act="out" title="缩小" aria-label="缩小">−</button>
-      <button type="button" class="chart-zoom-btn" data-zoom-act="in" title="放大" aria-label="放大">+</button>
-      <button type="button" class="chart-zoom-btn chart-zoom-reset${
-        zoomed ? "" : " is-hidden"
-      }" data-zoom-act="reset" title="重置" aria-label="重置缩放">1×</button>
+    <svg class="chart-live-refresh-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+      <path
+        fill="none"
+        stroke="currentColor"
+        stroke-width="2.4"
+        stroke-linecap="round"
+        stroke-linejoin="round"
+        d="M20.5 12a8.5 8.5 0 1 1-2.4-5.9"
+      />
+      <path
+        fill="none"
+        stroke="currentColor"
+        stroke-width="2.4"
+        stroke-linecap="round"
+        stroke-linejoin="round"
+        d="M20.5 4.2v4.6h-4.6"
+      />
+    </svg>
+  `;
+}
+
+function chartZoomControlsHtml(zoomed, { showLiveRefresh = false } = {}) {
+  return `
+    <div class="chart-zoom-bar">
+      <button type="button" class="chart-live-refresh${
+        showLiveRefresh ? "" : " is-hidden"
+      }" data-zoom-act="live-refresh" title="实时刷新分时" aria-label="实时刷新分时">${chartLiveRefreshIconHtml()}</button>
+      <span class="chart-zoom-hint">缩放</span>
+      <div class="chart-zoom-controls" role="group" aria-label="图表缩放">
+        <button type="button" class="chart-zoom-btn" data-zoom-act="out" title="缩小" aria-label="缩小">−</button>
+        <button type="button" class="chart-zoom-btn" data-zoom-act="in" title="放大" aria-label="放大">+</button>
+        <button type="button" class="chart-zoom-btn chart-zoom-reset${
+          zoomed ? "" : " is-hidden"
+        }" data-zoom-act="reset" title="重置" aria-label="重置缩放">重置</button>
+      </div>
     </div>
   `;
+}
+
+async function refreshChartLive(key) {
+  const meta = chartZoomData.get(key);
+  if (!meta || meta.tf !== "intraday") return;
+  const btn = meta.root?.querySelector('[data-zoom-act="live-refresh"]');
+  if (btn) {
+    btn.classList.add("is-busy");
+    btn.disabled = true;
+  }
+  try {
+    if (String(key || "").startsWith("us-fut-")) {
+      await loadUsMarketsDesk({ force: true });
+    } else {
+      await refreshActiveIntraday({ force: true });
+    }
+  } finally {
+    if (btn) {
+      btn.classList.remove("is-busy");
+      btn.disabled = false;
+    }
+  }
 }
 
 function renderChartSvg(points, { up = true, viewStart = 0, viewEnd = null } = {}) {
@@ -454,8 +537,8 @@ function renderChartSvg(points, { up = true, viewStart = 0, viewEnd = null } = {
   const fill = up ? TAPE_UP_SOFT : TAPE_DOWN_SOFT;
   return `
     <svg viewBox="0 0 ${width} ${height}" preserveAspectRatio="none" role="img" aria-label="分时走势图">
-      <path d="${area}" fill="${fill}"></path>
-      <path d="${line}" fill="none" stroke="${stroke}" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"></path>
+      <path class="intraday-area" d="${area}" fill="${fill}"></path>
+      <path class="intraday-line" d="${line}" fill="none" stroke="${stroke}" stroke-width="0.6" stroke-linecap="round" stroke-linejoin="round" vector-effect="non-scaling-stroke"></path>
     </svg>
   `;
 }
@@ -467,6 +550,42 @@ const SESSION_LABELS = {
   night: "夜盘",
 };
 const SESSION_LABEL_ORDER = ["盘前", "盘中", "盘后"];
+
+/** ET clock → session id/label (matches backend session_from_clock). */
+function sessionFromClock(date = new Date()) {
+  const parts = new Intl.DateTimeFormat("en-US", {
+    timeZone: "America/New_York",
+    weekday: "short",
+    hour: "2-digit",
+    minute: "2-digit",
+    hourCycle: "h23",
+  }).formatToParts(date);
+  const map = Object.fromEntries(parts.map((p) => [p.type, p.value]));
+  const wd = String(map.weekday || "");
+  const mins = Number(map.hour || 0) * 60 + Number(map.minute || 0);
+  if (wd === "Sat" || wd === "Sun") return { id: "night", label: "夜盘" };
+  if (mins >= 20 * 60 || mins < 4 * 60) return { id: "night", label: "夜盘" };
+  if (mins < 9 * 60 + 30) return { id: "pre", label: "盘前" };
+  if (mins < 16 * 60) return { id: "regular", label: "盘中" };
+  return { id: "post", label: "盘后" };
+}
+
+function applyClockSession(row) {
+  if (!row || typeof row !== "object") return row;
+  const clock = sessionFromClock();
+  const out = { ...row, session: clock.id, session_label: clock.label };
+  if (clock.id === "regular") {
+    if (out.rt_price == null && out.price != null) out.rt_price = out.price;
+    if (out.rt_change == null && out.change != null) out.rt_change = out.change;
+    if (out.rt_change_pct == null && out.change_pct != null) {
+      out.rt_change_pct = out.change_pct;
+    }
+    delete out.overnight;
+  } else if (clock.id !== "night") {
+    delete out.overnight;
+  }
+  return out;
+}
 
 /** Yahoo 1D tape window (ET): 04:00 → 20:00. */
 const YAHOO_DAY_START_MINS = 4 * 60;
@@ -509,6 +628,59 @@ function formatEtClockLabel(mins) {
   return `${h12}${mm} ${am ? "AM" : "PM"}`;
 }
 
+/** CME equity-index futures 1D: Beijing 06:00 → next day 05:00. */
+const FUTURES_BJ_TICK_HOURS = [6, 10, 14, 18, 22, 2, 5];
+
+function bjParts(ts) {
+  const parts = new Intl.DateTimeFormat("en-US", {
+    timeZone: "Asia/Shanghai",
+    hour: "2-digit",
+    minute: "2-digit",
+    hourCycle: "h23",
+  }).formatToParts(new Date(Number(ts) * 1000));
+  let hour = Number(parts.find((p) => p.type === "hour")?.value || 0);
+  const minute = Number(parts.find((p) => p.type === "minute")?.value || 0);
+  if (hour === 24) hour = 0;
+  return { hour, minute, mins: hour * 60 + minute };
+}
+
+function formatBjClockLabel(hour) {
+  return `${String(hour % 24).padStart(2, "0")}:00`;
+}
+
+function futuresCycleBounds(points, cycleStart, cycleEnd) {
+  const start = Number(cycleStart);
+  const end = Number(cycleEnd);
+  if (Number.isFinite(start) && Number.isFinite(end) && end > start) {
+    return { start, end };
+  }
+  const ts = (points || [])
+    .map((p) => Number(p?.t))
+    .filter((t) => Number.isFinite(t));
+  if (!ts.length) return null;
+  const last = Math.max(...ts);
+  // Walk back to the active 06:00 BJ open for this tape.
+  const d = new Date(last * 1000);
+  const parts = new Intl.DateTimeFormat("en-CA", {
+    timeZone: "Asia/Shanghai",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    hourCycle: "h23",
+  }).formatToParts(d);
+  const y = Number(parts.find((p) => p.type === "year")?.value);
+  const mo = Number(parts.find((p) => p.type === "month")?.value);
+  const day = Number(parts.find((p) => p.type === "day")?.value);
+  const hour = Number(parts.find((p) => p.type === "hour")?.value);
+  // Approximate BJ midnight UTC offset (+8); then add 06:00.
+  let openMs = Date.UTC(y, mo - 1, day, 6 - 8, 0, 0);
+  if (hour < 6) openMs -= 24 * 3600 * 1000;
+  const open = Math.floor(openMs / 1000);
+  return { start: open, end: open + 23 * 3600 };
+}
+
 function formatPriceTick(v) {
   const n = Number(v);
   if (!Number.isFinite(n)) return "";
@@ -517,32 +689,54 @@ function formatPriceTick(v) {
   return n.toFixed(2);
 }
 
+/** Shared Yahoo 1D 分时 viewBox geometry (holdings + sectors). */
+const INTRADAY_VB = {
+  width: 360,
+  height: 188,
+  padL: 6,
+  padR: 30,
+  padTop: 8,
+  padBottom: 18,
+};
+
+/** Shared day/month/quarter candle geometry (holdings + sectors). */
+const CANDLE_VB = {
+  width: 360,
+  height: 168,
+  padL: 6,
+  padR: 30,
+  padTop: 8,
+  padBottom: 10,
+};
+
+function formatBeijingCrosshairTime(ts) {
+  const d = new Date(Number(ts) * 1000);
+  if (Number.isNaN(d.getTime())) return "—";
+  const parts = new Intl.DateTimeFormat("en-US", {
+    timeZone: "Asia/Shanghai",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    hourCycle: "h23",
+  }).formatToParts(d);
+  const get = (type) => parts.find((p) => p.type === type)?.value || "";
+  let hour = get("hour");
+  if (hour === "24") hour = "00";
+  return `${get("month")}/${get("day")} ${hour}:${get("minute")} (北京)`;
+}
+
 /**
- * Yahoo 1D-style 分时 (盘前→盘中→盘后), shared by holdings + sectors.
- * Fixed ET 04:00–20:00 axis with clock labels and previous-close guide.
+ * Build hit-test model for 分时 (same filter/axis as the SVG renderer).
+ * Shared by holdings + sectors charts.
  */
-function renderSessionIntradaySvg(
+function buildIntradayHitModel(
   points,
-  {
-    up = true,
-    viewStart = 0,
-    viewEnd = null,
-    sessions = null,
-    previousClose = null,
-    cycleStart = null,
-  } = {}
+  { viewStart = 0, viewEnd = null, previousClose = null } = {}
 ) {
-  void sessions;
-  void cycleStart;
-  const width = 360;
-  const height = 188;
-  const padL = 8;
-  const padR = 44;
-  const padTop = 10;
-  const padBottom = 22;
+  const { width, height, padL, padR, padTop, padBottom } = INTRADAY_VB;
   const plotW = width - padL - padR;
   const plotH = height - padTop - padBottom;
-
   let view = (points || [])
     .filter((p) => p && Number.isFinite(Number(p.v ?? p.c)) && p.t != null)
     .map((p) => ({ ...p, _mins: etParts(p.t).mins }))
@@ -555,9 +749,7 @@ function renderSessionIntradaySvg(
   if (!(start === 0 && end >= view.length)) {
     view = view.slice(start, end);
   }
-  if (view.length < 2) {
-    return `<svg viewBox="0 0 ${width} ${height}" role="img" aria-label="暂无走势"><text x="16" y="96" fill="${themeMutedFill()}" font-size="13">暂无分时数据</text></svg>`;
-  }
+  if (view.length < 2) return null;
 
   const prev =
     previousClose != null && Number.isFinite(Number(previousClose))
@@ -582,62 +774,178 @@ function renderSessionIntradaySvg(
       YAHOO_DAY_SPAN_MINS *
       plotW;
 
-  const coords = view.map((p) => [xOfMins(p._mins), yOf(Number(p.v ?? p.c))]);
+  const samples = view.map((p) => {
+    const price = Number(p.v ?? p.c);
+    return {
+      t: Number(p.t),
+      price,
+      mins: p._mins,
+      x: xOfMins(p._mins),
+      y: yOf(price),
+    };
+  });
+
+  return {
+    width,
+    height,
+    padL,
+    padR,
+    padTop,
+    padBottom,
+    plotW,
+    plotH,
+    min,
+    max,
+    prev,
+    yOf,
+    xOfMins,
+    samples,
+  };
+}
+
+/**
+ * Index-futures 主连 1D: chronological X on Beijing 06:00→05:00 axis.
+ * Do not reuse equity ET clock mapping (that draws the diagonal slash).
+ */
+function buildFuturesHitModel(
+  points,
+  {
+    viewStart = 0,
+    viewEnd = null,
+    previousClose = null,
+    cycleStart = null,
+    cycleEnd = null,
+  } = {}
+) {
+  const { width, height, padL, padR, padTop, padBottom } = INTRADAY_VB;
+  const plotW = width - padL - padR;
+  const plotH = height - padTop - padBottom;
+  let view = (points || [])
+    .filter((p) => p && Number.isFinite(Number(p.v ?? p.c)) && p.t != null)
+    .map((p) => ({ ...p, t: Number(p.t), v: Number(p.v ?? p.c) }))
+    .sort((a, b) => a.t - b.t);
+  const bounds = futuresCycleBounds(view, cycleStart, cycleEnd);
+  if (!bounds) return null;
+  const { start, end } = bounds;
+  view = view.filter((p) => p.t >= start && p.t <= end);
+  const sliceEnd = viewEnd == null ? view.length : Math.min(view.length, viewEnd);
+  const sliceStart = clamp(viewStart, 0, Math.max(0, sliceEnd));
+  if (!(sliceStart === 0 && sliceEnd >= view.length)) {
+    view = view.slice(sliceStart, sliceEnd);
+  }
+  if (view.length < 2) return null;
+
+  const prev =
+    previousClose != null && Number.isFinite(Number(previousClose))
+      ? Number(previousClose)
+      : null;
+  const vals = view.map((p) => p.v);
+  let min = Math.min(...vals);
+  let max = Math.max(...vals);
+  if (prev != null) {
+    min = Math.min(min, prev);
+    max = Math.max(max, prev);
+  }
+  const pad = (max - min) * 0.06 || Math.abs(max) * 0.002 || 0.01;
+  min -= pad;
+  max += pad;
+  const span = max - min || 1;
+  const axisSpan = Math.max(1, end - start);
+  const yOf = (v) => padTop + (1 - (v - min) / span) * plotH;
+  const xOfT = (t) =>
+    padL + (clamp(Number(t), start, end) - start) / axisSpan * plotW;
+
+  const samples = view.map((p) => ({
+    t: p.t,
+    price: p.v,
+    mins: bjParts(p.t).mins,
+    x: xOfT(p.t),
+    y: yOf(p.v),
+  }));
+
+  return {
+    width,
+    height,
+    padL,
+    padR,
+    padTop,
+    padBottom,
+    plotW,
+    plotH,
+    min,
+    max,
+    prev,
+    yOf,
+    xOfT,
+    samples,
+    cycleStart: start,
+    cycleEnd: end,
+  };
+}
+
+function renderFuturesIntradaySvg(
+  points,
+  {
+    up = true,
+    viewStart = 0,
+    viewEnd = null,
+    previousClose = null,
+    cycleStart = null,
+    cycleEnd = null,
+  } = {}
+) {
+  const model = buildFuturesHitModel(points, {
+    viewStart,
+    viewEnd,
+    previousClose,
+    cycleStart,
+    cycleEnd,
+  });
+  const { width, height, padL, padTop, padBottom, padR } = INTRADAY_VB;
+  const plotW = width - padL - padR;
+  const plotH = height - padTop - padBottom;
+  if (!model) {
+    return {
+      html: `<svg viewBox="0 0 ${width} ${height}" role="img" aria-label="暂无走势"><text x="16" y="96" fill="${themeMutedFill()}" font-size="13">暂无分时数据</text></svg>`,
+      hit: null,
+    };
+  }
+
+  const { prev, min, max, yOf, xOfT, samples, cycleStart: start } = model;
+  const coords = samples.map((s) => [s.x, s.y]);
   const stroke = up ? TAPE_UP : TAPE_DOWN;
   const fill = up ? TAPE_UP_SOFT : TAPE_DOWN_SOFT;
   const muted = themeMutedFill();
-  const grid = "rgba(148,163,184,0.28)";
 
-  const hGrid = [0.2, 0.4, 0.6, 0.8]
-    .map((t) => {
-      const y = padTop + t * plotH;
-      return `<line x1="${padL}" y1="${y.toFixed(1)}" x2="${(
-        padL + plotW
-      ).toFixed(1)}" y2="${y.toFixed(
+  const tickTs = FUTURES_BJ_TICK_HOURS.map((h) => {
+    // Offset from session open (06:00): wrap past midnight for 02:00 / 05:00.
+    let hoursFromOpen = h - 6;
+    if (hoursFromOpen < 0) hoursFromOpen += 24;
+    return { h, t: start + hoursFromOpen * 3600 };
+  });
+
+  const timeLabels = tickTs
+    .map(({ h, t }) => {
+      const x = xOfT(t);
+      return `<text x="${x.toFixed(1)}" y="${(height - 4).toFixed(
         1
-      )}" stroke="${grid}" stroke-width="1" stroke-dasharray="2 3"></line>`;
+      )}" text-anchor="middle" fill="${muted}" font-size="6.2">${escapeHtml(
+        formatBjClockLabel(h)
+      )}</text>`;
     })
     .join("");
 
-  const vGrid = YAHOO_TIME_TICKS.map((mins) => {
-    const x = xOfMins(mins);
-    return `<line x1="${x.toFixed(1)}" y1="${padTop}" x2="${x.toFixed(
-      1
-    )}" y2="${(padTop + plotH).toFixed(
-      1
-    )}" stroke="${grid}" stroke-width="1" stroke-dasharray="2 3"></line>`;
-  }).join("");
-
-  // Regular-session open / close guides (09:30 / 16:00 ET).
-  const sessionGuides = [9 * 60 + 30, 16 * 60]
-    .map((mins) => {
-      const x = xOfMins(mins);
-      return `<line x1="${x.toFixed(1)}" y1="${padTop}" x2="${x.toFixed(
+  const priceTicks = [max, (max + min) / 2, min]
+    .map((v, i) => {
+      const y = yOf(v);
+      const anchor = i === 0 ? "hanging" : i === 2 ? "auto" : "middle";
+      return `<text x="${(width - 1.5).toFixed(1)}" y="${y.toFixed(
         1
-      )}" y2="${(padTop + plotH).toFixed(
-        1
-      )}" stroke="rgba(148,163,184,0.45)" stroke-width="1"></line>`;
+      )}" text-anchor="end" dominant-baseline="${anchor}" fill="${muted}" font-size="6.4">${escapeHtml(
+        formatPriceTick(v)
+      )}</text>`;
     })
     .join("");
-
-  const timeLabels = YAHOO_TIME_TICKS.map((mins) => {
-    const x = xOfMins(mins);
-    return `<text x="${x.toFixed(1)}" y="${(height - 6).toFixed(
-      1
-    )}" text-anchor="middle" fill="${muted}" font-size="8">${escapeHtml(
-      formatEtClockLabel(mins)
-    )}</text>`;
-  }).join("");
-
-  const priceTicks = [max, (max + min) / 2, min].map((v, i) => {
-    const y = yOf(v);
-    const anchor = i === 0 ? "hanging" : i === 2 ? "auto" : "middle";
-    return `<text x="${(width - 6).toFixed(1)}" y="${y.toFixed(
-      1
-    )}" text-anchor="end" dominant-baseline="${anchor}" fill="${muted}" font-size="8.5">${escapeHtml(
-      formatPriceTick(v)
-    )}</text>`;
-  }).join("");
 
   const prevLine =
     prev != null
@@ -645,10 +953,10 @@ function renderSessionIntradaySvg(
           padL + plotW
         ).toFixed(2)}" y2="${yOf(prev).toFixed(
           2
-        )}" stroke="rgba(148,163,184,0.75)" stroke-width="1" stroke-dasharray="4 3"></line>
-        <text x="${(padL + 4).toFixed(1)}" y="${(yOf(prev) - 3).toFixed(
+        )}" stroke="rgba(251,146,60,0.85)" stroke-width="1" stroke-dasharray="4 3"></line>
+        <text x="${(padL + 3).toFixed(1)}" y="${(yOf(prev) - 2.5).toFixed(
           1
-        )}" fill="${muted}" font-size="7.5">昨收 ${escapeHtml(
+        )}" fill="${muted}" font-size="6.2">昨收 ${escapeHtml(
           formatPriceTick(prev)
         )}</text>`
       : "";
@@ -661,23 +969,160 @@ function renderSessionIntradaySvg(
   ).toFixed(2)} L${coords[0][0].toFixed(2)},${(padTop + plotH).toFixed(2)} Z`;
 
   const last = coords[coords.length - 1];
-  const tip = `<circle cx="${last[0].toFixed(2)}" cy="${last[1].toFixed(
+  const tip = `<circle class="intraday-tip" cx="${last[0].toFixed(
     2
-  )}" r="2.6" fill="${stroke}"></circle>`;
+  )}" cy="${last[1].toFixed(
+    2
+  )}" r="0.9" fill="${stroke}" vector-effect="non-scaling-stroke"></circle>`;
 
-  return `
-    <svg class="session-intraday-svg yahoo-intraday-svg" viewBox="0 0 ${width} ${height}" preserveAspectRatio="none" role="img" aria-label="Yahoo 1D 分时">
-      ${hGrid}
-      ${vGrid}
-      ${sessionGuides}
+  const html = `
+    <svg class="session-intraday-svg futures-intraday-svg" viewBox="0 0 ${width} ${height}" preserveAspectRatio="none" role="img" aria-label="指数期货主连分时">
       ${prevLine}
-      <path d="${area}" fill="${fill}"></path>
-      <path d="${line}" fill="none" stroke="${stroke}" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"></path>
+      <path class="intraday-area" d="${area}" fill="${fill}"></path>
+      <path class="intraday-line" d="${line}" fill="none" stroke="${stroke}" stroke-width="0.6" stroke-linecap="round" stroke-linejoin="round" vector-effect="non-scaling-stroke"></path>
       ${tip}
+      <g class="intraday-crosshair" visibility="hidden">
+        <line class="ch-v" x1="0" y1="${padTop}" x2="0" y2="${(
+          padTop + plotH
+        ).toFixed(1)}" stroke="rgba(148,163,184,0.85)" stroke-width="1" vector-effect="non-scaling-stroke"></line>
+        <line class="ch-h" x1="${padL}" y1="0" x2="${(padL + plotW).toFixed(
+          1
+        )}" y2="0" stroke="rgba(148,163,184,0.55)" stroke-width="1" stroke-dasharray="3 3" vector-effect="non-scaling-stroke"></line>
+        <circle class="ch-dot" cx="0" cy="0" r="1.35" fill="${stroke}" stroke="#fff" stroke-width="0.6" vector-effect="non-scaling-stroke"></circle>
+      </g>
       ${timeLabels}
       ${priceTicks}
     </svg>
   `;
+  return { html, hit: model };
+}
+
+/**
+ * Yahoo 1D-style 分时 (盘前→盘中→盘后), shared by holdings + sectors.
+ * Fixed ET 04:00–20:00 axis with clock labels and previous-close guide.
+ */
+function renderSessionIntradaySvg(
+  points,
+  {
+    up = true,
+    viewStart = 0,
+    viewEnd = null,
+    sessions = null,
+    previousClose = null,
+    cycleStart = null,
+  } = {}
+) {
+  void sessions;
+  void cycleStart;
+  const model = buildIntradayHitModel(points, {
+    viewStart,
+    viewEnd,
+    previousClose,
+  });
+  const { width, height, padL, padTop, padBottom, padR } = INTRADAY_VB;
+  const plotW = width - padL - padR;
+  const plotH = height - padTop - padBottom;
+  if (!model) {
+    return {
+      html: `<svg viewBox="0 0 ${width} ${height}" role="img" aria-label="暂无走势"><text x="16" y="96" fill="${themeMutedFill()}" font-size="13">暂无分时数据</text></svg>`,
+      hit: null,
+    };
+  }
+
+  const { prev, min, max, yOf, xOfMins, samples } = model;
+  const coords = samples.map((s) => [s.x, s.y]);
+  const stroke = up ? TAPE_UP : TAPE_DOWN;
+  const fill = up ? TAPE_UP_SOFT : TAPE_DOWN_SOFT;
+  const muted = themeMutedFill();
+  // Yahoo-style extended-hours bands (avoid red/green so they never clash with tape).
+  const PRE_OPEN = 9 * 60 + 30;
+  const POST_OPEN = 16 * 60;
+  const xPre0 = xOfMins(YAHOO_DAY_START_MINS);
+  const xPre1 = xOfMins(PRE_OPEN);
+  const xPost0 = xOfMins(POST_OPEN);
+  const xPost1 = xOfMins(YAHOO_DAY_END_MINS);
+  const preW = Math.max(0, xPre1 - xPre0);
+  const postW = Math.max(0, xPost1 - xPost0);
+  // Pale flat bands only (no grain) — painted before the tape so they sit behind.
+  const sessionBands = `
+    <g class="session-bands" aria-hidden="true">
+      <rect class="band-pre" x="${xPre0.toFixed(2)}" y="${padTop}" width="${preW.toFixed(
+        2
+      )}" height="${plotH.toFixed(2)}"></rect>
+      <rect class="band-post" x="${xPost0.toFixed(2)}" y="${padTop}" width="${postW.toFixed(
+        2
+      )}" height="${plotH.toFixed(2)}"></rect>
+    </g>`;
+
+  const timeLabels = YAHOO_TIME_TICKS.map((mins) => {
+    const x = xOfMins(mins);
+    return `<text x="${x.toFixed(1)}" y="${(height - 4).toFixed(
+      1
+    )}" text-anchor="middle" fill="${muted}" font-size="6.2">${escapeHtml(
+      formatEtClockLabel(mins)
+    )}</text>`;
+  }).join("");
+
+  // Park price labels at the far right so the plot can use a narrower padR.
+  const priceTicks = [max, (max + min) / 2, min].map((v, i) => {
+    const y = yOf(v);
+    const anchor = i === 0 ? "hanging" : i === 2 ? "auto" : "middle";
+    return `<text x="${(width - 1.5).toFixed(1)}" y="${y.toFixed(
+      1
+    )}" text-anchor="end" dominant-baseline="${anchor}" fill="${muted}" font-size="6.4">${escapeHtml(
+      formatPriceTick(v)
+    )}</text>`;
+  }).join("");
+
+  const prevLine =
+    prev != null
+      ? `<line x1="${padL}" y1="${yOf(prev).toFixed(2)}" x2="${(
+          padL + plotW
+        ).toFixed(2)}" y2="${yOf(prev).toFixed(
+          2
+        )}" stroke="rgba(148,163,184,0.75)" stroke-width="1" stroke-dasharray="4 3"></line>
+        <text x="${(padL + 3).toFixed(1)}" y="${(yOf(prev) - 2.5).toFixed(
+          1
+        )}" fill="${muted}" font-size="6.2">昨收 ${escapeHtml(
+          formatPriceTick(prev)
+        )}</text>`
+      : "";
+
+  const line = coords
+    .map(([x, y], i) => `${i === 0 ? "M" : "L"}${x.toFixed(2)},${y.toFixed(2)}`)
+    .join(" ");
+  const area = `${line} L${coords[coords.length - 1][0].toFixed(2)},${(
+    padTop + plotH
+  ).toFixed(2)} L${coords[0][0].toFixed(2)},${(padTop + plotH).toFixed(2)} Z`;
+
+  const last = coords[coords.length - 1];
+  const tip = `<circle class="intraday-tip" cx="${last[0].toFixed(
+    2
+  )}" cy="${last[1].toFixed(
+    2
+  )}" r="0.9" fill="${stroke}" vector-effect="non-scaling-stroke"></circle>`;
+
+  const html = `
+    <svg class="session-intraday-svg yahoo-intraday-svg" viewBox="0 0 ${width} ${height}" preserveAspectRatio="none" role="img" aria-label="Yahoo 1D 分时">
+      ${sessionBands}
+      ${prevLine}
+      <path class="intraday-area" d="${area}" fill="${fill}"></path>
+      <path class="intraday-line" d="${line}" fill="none" stroke="${stroke}" stroke-width="0.6" stroke-linecap="round" stroke-linejoin="round" vector-effect="non-scaling-stroke"></path>
+      ${tip}
+      <g class="intraday-crosshair" visibility="hidden">
+        <line class="ch-v" x1="0" y1="${padTop}" x2="0" y2="${(
+          padTop + plotH
+        ).toFixed(1)}" stroke="rgba(148,163,184,0.85)" stroke-width="1" vector-effect="non-scaling-stroke"></line>
+        <line class="ch-h" x1="${padL}" y1="0" x2="${(padL + plotW).toFixed(
+          1
+        )}" y2="0" stroke="rgba(148,163,184,0.55)" stroke-width="1" stroke-dasharray="3 3" vector-effect="non-scaling-stroke"></line>
+        <circle class="ch-dot" cx="0" cy="0" r="1.35" fill="${stroke}" stroke="#fff" stroke-width="0.6" vector-effect="non-scaling-stroke"></circle>
+      </g>
+      ${timeLabels}
+      ${priceTicks}
+    </svg>
+  `;
+  return { html, hit: model };
 }
 
 function sanitizeCandleBars(points) {
@@ -710,19 +1155,19 @@ function renderCandleSvg(
   points,
   { showMa = false, viewStart = 0, viewEnd = null } = {}
 ) {
-  const width = 320;
-  const height = 150;
-  const padX = 8;
-  const padY = 10;
+  const { width, height, padL, padR, padTop, padBottom } = CANDLE_VB;
+  const plotW = width - padL - padR;
+  const plotH = height - padTop - padBottom;
+  const muted = themeMutedFill();
   const bars = sanitizeCandleBars(points);
   if (bars.length < 2) {
-    return `<svg viewBox="0 0 ${width} ${height}" role="img" aria-label="暂无K线"><text x="16" y="78" fill="${themeMutedFill()}" font-size="13">暂无K线数据</text></svg>`;
+    return `<svg viewBox="0 0 ${width} ${height}" role="img" aria-label="暂无K线"><text x="16" y="78" fill="${muted}" font-size="11">暂无K线数据</text></svg>`;
   }
   const end = viewEnd == null ? bars.length : Math.min(bars.length, viewEnd);
   const start = clamp(viewStart, 0, Math.max(0, end));
   const viewBars = bars.slice(start, end);
   if (viewBars.length < 2) {
-    return `<svg viewBox="0 0 ${width} ${height}" role="img" aria-label="暂无K线"><text x="16" y="78" fill="${themeMutedFill()}" font-size="13">暂无K线数据</text></svg>`;
+    return `<svg viewBox="0 0 ${width} ${height}" role="img" aria-label="暂无K线"><text x="16" y="78" fill="${muted}" font-size="11">暂无K线数据</text></svg>`;
   }
 
   const closes = bars.map((b) => Number(b.c));
@@ -739,10 +1184,10 @@ function renderCandleSvg(
   const min = Math.min(...lows, ...(maVals.length ? maVals : [Infinity]));
   const max = Math.max(...highs, ...(maVals.length ? maVals : [-Infinity]));
   const span = max - min || 1;
-  const slot = (width - padX * 2) / viewBars.length;
+  const slot = plotW / viewBars.length;
   const bodyW = Math.max(1.8, Math.min(8, slot * 0.68));
   const wickW = Math.max(1.2, Math.min(2.2, bodyW * 0.45));
-  const yOf = (price) => padY + (1 - (price - min) / span) * (height - padY * 2);
+  const yOf = (price) => padTop + (1 - (price - min) / span) * plotH;
 
   const shapes = viewBars
     .map((b, i) => {
@@ -752,7 +1197,7 @@ function renderCandleSvg(
       const c = Number(b.c);
       const up = c >= o;
       const color = up ? TAPE_UP : TAPE_DOWN;
-      const x = padX + i * slot + slot / 2;
+      const x = padL + i * slot + slot / 2;
       const yHigh = yOf(h);
       const yLow = yOf(l);
       const yOpen = yOf(o);
@@ -783,7 +1228,7 @@ function renderCandleSvg(
           started = false;
           return;
         }
-        const x = padX + i * slot + slot / 2;
+        const x = padL + i * slot + slot / 2;
         const y = yOf(v);
         d += `${started ? "L" : "M"}${x.toFixed(2)},${y.toFixed(2)} `;
         started = true;
@@ -791,16 +1236,27 @@ function renderCandleSvg(
       if (!d) return "";
       return `<path d="${d.trim()}" fill="none" stroke="${
         m.color
-      }" stroke-width="1.35" stroke-linecap="round" stroke-linejoin="round" opacity="0.92"></path>`;
+      }" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round" opacity="0.9"></path>`;
     })
     .join("");
 
+  const priceTicks = [max, (max + min) / 2, min].map((v, i) => {
+    const y = yOf(v);
+    const anchor = i === 0 ? "hanging" : i === 2 ? "auto" : "middle";
+    return `<text x="${(width - 1.5).toFixed(1)}" y="${y.toFixed(
+      1
+    )}" text-anchor="end" dominant-baseline="${anchor}" fill="${muted}" font-size="6.4">${escapeHtml(
+      formatPriceTick(v)
+    )}</text>`;
+  }).join("");
+
   return `
-    <svg viewBox="0 0 ${width} ${height}" preserveAspectRatio="none" role="img" aria-label="K线柱状图 红涨绿跌${
+    <svg class="candle-ohlc-svg" viewBox="0 0 ${width} ${height}" preserveAspectRatio="none" role="img" aria-label="K线柱状图 红涨绿跌${
       showMa ? " 含均线" : ""
     }">
       ${shapes}
       ${maPaths}
+      ${priceTicks}
     </svg>
   `;
 }
@@ -833,21 +1289,40 @@ function paintZoomableChart(key) {
   const full = defaultChartZoom(len, tf, kind);
   const zoomed = z.count < len || z.start !== full.start;
   if (resetBtn) resetBtn.classList.toggle("is-hidden", !zoomed);
+  const liveBtn = root.querySelector('[data-zoom-act="live-refresh"]');
+  if (liveBtn) liveBtn.classList.toggle("is-hidden", tf !== "intraday");
   if (zoomRoot) zoomRoot.classList.toggle("is-zoomed", zoomed);
   root.querySelectorAll(":scope > .ma-legend").forEach((el) => el.remove());
   // 分时 always uses the session line renderer, even if a stale kind says candle.
   // Never index-slice 分时 — that clipped session tips off the canvas.
   if (tf === "intraday") {
     const linePts = toLineSparkPoints(points);
-    stage.innerHTML = renderSessionIntradaySvg(linePts.length ? linePts : points, {
-      up,
-      viewStart: 0,
-      viewEnd: null,
-      sessions: meta.sessions,
-      previousClose: meta.previousClose,
-      cycleStart: meta.cycleStart,
-    });
+    const pts = linePts.length ? linePts : points;
+    const isFutures =
+      meta.axis === "futures_bj" || String(key || "").startsWith("us-fut-");
+    const drawn = isFutures
+      ? renderFuturesIntradaySvg(pts, {
+          up,
+          viewStart: 0,
+          viewEnd: null,
+          previousClose: meta.previousClose,
+          cycleStart: meta.cycleStart,
+          cycleEnd: meta.cycleEnd,
+        })
+      : renderSessionIntradaySvg(pts, {
+          up,
+          viewStart: 0,
+          viewEnd: null,
+          sessions: meta.sessions,
+          previousClose: meta.previousClose,
+          cycleStart: meta.cycleStart,
+        });
+    stage.innerHTML = drawn.html;
+    meta.intradayHit = drawn.hit;
+    hideIntradayCrosshair(key);
   } else if (kind === "candle") {
+    meta.intradayHit = null;
+    hideIntradayCrosshair(key);
     // Keep SVG inside the zoom stage; park MA legend as a sibling so it cannot
     // overflow/paint over 个股财报 below when the chart card is height-clipped.
     stage.innerHTML = candleChartHtml(points, tf, z).replace(
@@ -862,12 +1337,181 @@ function paintZoomableChart(key) {
       );
     }
   } else {
+    meta.intradayHit = null;
+    hideIntradayCrosshair(key);
     stage.innerHTML = renderChartSvg(points, {
       up,
       viewStart: z.start,
       viewEnd: z.start + z.count,
     });
   }
+}
+
+function nearestIntradaySample(hit, svgX) {
+  const samples = hit?.samples || [];
+  if (!samples.length) return null;
+  let best = samples[0];
+  let bestDist = Math.abs(samples[0].x - svgX);
+  for (let i = 1; i < samples.length; i += 1) {
+    const d = Math.abs(samples[i].x - svgX);
+    if (d < bestDist) {
+      best = samples[i];
+      bestDist = d;
+    }
+  }
+  return best;
+}
+
+function hideIntradayCrosshair(key) {
+  const meta = chartZoomData.get(key);
+  const root = meta?.root;
+  if (!root) return;
+  const g = root.querySelector(".intraday-crosshair");
+  if (g) g.setAttribute("visibility", "hidden");
+  const tip = root.querySelector(".chart-crosshair-tip");
+  if (tip) {
+    tip.classList.add("is-hidden");
+    tip.innerHTML = "";
+  }
+}
+
+function ensureIntradayCrosshairTip(zoomRoot) {
+  if (!zoomRoot) return null;
+  let tip = zoomRoot.querySelector(".chart-crosshair-tip");
+  if (!tip) {
+    tip = document.createElement("div");
+    tip.className = "chart-crosshair-tip is-hidden";
+    tip.setAttribute("aria-live", "polite");
+    zoomRoot.appendChild(tip);
+  }
+  return tip;
+}
+
+function showIntradayCrosshair(key, clientX, clientY) {
+  const meta = chartZoomData.get(key);
+  if (!meta || meta.tf !== "intraday" || !meta.intradayHit) {
+    hideIntradayCrosshair(key);
+    return;
+  }
+  const root = meta.root;
+  const svg = root?.querySelector("svg.session-intraday-svg");
+  const zoomRoot = root?.querySelector(".chart-zoom");
+  const hit = meta.intradayHit;
+  if (!svg || !zoomRoot) return;
+
+  const rect = svg.getBoundingClientRect();
+  if (!(rect.width > 0) || !(rect.height > 0)) return;
+  const svgX = ((clientX - rect.left) / rect.width) * hit.width;
+  const sample = nearestIntradaySample(hit, svgX);
+  if (!sample) {
+    hideIntradayCrosshair(key);
+    return;
+  }
+
+  const g = svg.querySelector(".intraday-crosshair");
+  const v = g?.querySelector(".ch-v");
+  const h = g?.querySelector(".ch-h");
+  const dot = g?.querySelector(".ch-dot");
+  if (g && v && h && dot) {
+    g.setAttribute("visibility", "visible");
+    v.setAttribute("x1", sample.x.toFixed(2));
+    v.setAttribute("x2", sample.x.toFixed(2));
+    h.setAttribute("y1", sample.y.toFixed(2));
+    h.setAttribute("y2", sample.y.toFixed(2));
+    dot.setAttribute("cx", sample.x.toFixed(2));
+    dot.setAttribute("cy", sample.y.toFixed(2));
+  }
+
+  const tip = ensureIntradayCrosshairTip(zoomRoot);
+  if (!tip) return;
+  const prev = hit.prev;
+  const change =
+    prev != null && Number.isFinite(prev) ? sample.price - prev : null;
+  const changePct =
+    change != null && prev ? (change / prev) * 100 : null;
+  const delta = formatDelta(change);
+  const tipCls = pctClass(changePct);
+  tip.innerHTML = `
+    <div class="cht-time">${escapeHtml(formatBeijingCrosshairTime(sample.t))}</div>
+    <div class="cht-grid">
+      <div><span>价格</span><strong class="${tipCls}">${escapeHtml(
+        formatNumber(sample.price, "")
+      )}</strong></div>
+      <div><span>涨跌额</span><strong class="${delta.cls}">${escapeHtml(
+        delta.text
+      )}</strong></div>
+      <div><span>涨跌幅</span><strong class="${tipCls}">${escapeHtml(
+        pctText(changePct)
+      )}</strong></div>
+    </div>
+  `;
+  tip.classList.remove("is-hidden");
+
+  // Keep tip inside the chart: prefer above the finger/cursor, flip if needed.
+  const zr = zoomRoot.getBoundingClientRect();
+  const localX = clientX - zr.left;
+  const localY = clientY - zr.top;
+  const tipW = tip.offsetWidth || 168;
+  const tipH = tip.offsetHeight || 72;
+  let left = localX - tipW / 2;
+  let top = localY - tipH - 14;
+  left = clamp(left, 6, Math.max(6, zr.width - tipW - 6));
+  if (top < 6) top = Math.min(localY + 18, Math.max(6, zr.height - tipH - 6));
+  tip.style.left = `${left}px`;
+  tip.style.top = `${top}px`;
+}
+
+function bindIntradayCrosshair(zoomRoot, key) {
+  if (!zoomRoot || zoomRoot.dataset.crosshairBound === "1") return;
+  zoomRoot.dataset.crosshairBound = "1";
+  ensureIntradayCrosshairTip(zoomRoot);
+  let activePointer = null;
+
+  const onMove = (event) => {
+    if (event.pointerType === "touch" && activePointer == null) return;
+    if (activePointer != null && event.pointerId !== activePointer) return;
+    // Ignore multi-touch pinch gestures.
+    if (event.pointerType === "touch" && zoomRoot._pulsePointers > 1) {
+      hideIntradayCrosshair(key);
+      return;
+    }
+    const meta = chartZoomData.get(key);
+    if (!meta || meta.tf !== "intraday") {
+      hideIntradayCrosshair(key);
+      return;
+    }
+    showIntradayCrosshair(key, event.clientX, event.clientY);
+  };
+
+  zoomRoot.addEventListener("pointerdown", (event) => {
+    if (event.target.closest("[data-zoom-act]")) return;
+    zoomRoot._pulsePointers = (zoomRoot._pulsePointers || 0) + 1;
+    if (event.pointerType === "touch") {
+      activePointer = event.pointerId;
+      try {
+        zoomRoot.setPointerCapture(event.pointerId);
+      } catch {
+        /* ignore */
+      }
+      showIntradayCrosshair(key, event.clientX, event.clientY);
+    }
+  });
+  zoomRoot.addEventListener("pointermove", onMove);
+  zoomRoot.addEventListener("pointerup", (event) => {
+    zoomRoot._pulsePointers = Math.max(0, (zoomRoot._pulsePointers || 1) - 1);
+    if (event.pointerId === activePointer) {
+      activePointer = null;
+      hideIntradayCrosshair(key);
+    }
+  });
+  zoomRoot.addEventListener("pointercancel", (event) => {
+    zoomRoot._pulsePointers = Math.max(0, (zoomRoot._pulsePointers || 1) - 1);
+    if (event.pointerId === activePointer) activePointer = null;
+    hideIntradayCrosshair(key);
+  });
+  zoomRoot.addEventListener("pointerleave", () => {
+    if (activePointer == null) hideIntradayCrosshair(key);
+  });
 }
 
 function bindZoomableChart(
@@ -882,6 +1526,8 @@ function bindZoomableChart(
     sessions = null,
     previousClose = null,
     cycleStart = null,
+    cycleEnd = null,
+    axis = null,
   }
 ) {
   if (!canvasEl) return;
@@ -903,25 +1549,30 @@ function bindZoomableChart(
     sessions,
     previousClose,
     cycleStart,
+    cycleEnd,
+    axis,
   });
   ensureChartZoom(key, scope, len, tf, kind);
   if (sameShell) {
     paintZoomableChart(key);
+    bindIntradayCrosshair(canvasEl.querySelector(".chart-zoom"), key);
     return;
   }
   const z = state.chartZoom[key];
   const full = defaultChartZoom(len, tf, kind);
   const zoomed = z.count < len || z.start !== full.start;
   canvasEl.innerHTML = `
-    <div class="chart-zoom" data-zoom-key="${escapeHtml(key)}" tabindex="0" aria-label="可缩放图表：触控板捏合或使用角落按钮">
-      ${chartZoomControlsHtml(zoomed)}
+    <div class="chart-zoom" data-zoom-key="${escapeHtml(key)}" tabindex="0" aria-label="可缩放图表：触控板捏合或使用上方缩放按钮">
+      ${chartZoomControlsHtml(zoomed, { showLiveRefresh: tf === "intraday" })}
       <div class="chart-zoom-stage"></div>
+      <div class="chart-crosshair-tip is-hidden" aria-live="polite"></div>
     </div>
   `;
   paintZoomableChart(key);
 
   const zoomRoot = canvasEl.querySelector(".chart-zoom");
   if (!zoomRoot) return;
+  bindIntradayCrosshair(zoomRoot, key);
 
   zoomRoot.addEventListener("click", (event) => {
     const btn = event.target.closest("[data-zoom-act]");
@@ -930,6 +1581,10 @@ function bindZoomableChart(
     if (act === "in") zoomChartWindow(key, CHART_ZOOM_STEP, 0.85);
     else if (act === "out") zoomChartWindow(key, 1 / CHART_ZOOM_STEP, 0.85);
     else if (act === "reset") zoomChartWindow(key, 1);
+    else if (act === "live-refresh") {
+      event.preventDefault();
+      void refreshChartLive(key);
+    }
   });
 
   zoomRoot.addEventListener(
@@ -1420,23 +2075,8 @@ function renderPortfolioChart() {
         <h3>${escapeHtml(pick.name || "")} · ${escapeHtml(
           pick.symbol || ""
         )}${preview ? '<span class="preview-tag">预览</span>' : ""}</h3>
-        <span class="range chg ${pctClass(pick.change_pct)}">${escapeHtml(
-          pctText(pick.change_pct)
-        )}</span>
       </div>
-      <div class="portfolio-stats" aria-label="区间读数">
-        <span><span class="k">现价</span><span class="v ${pctClass(
-          pick.change_pct
-        )}">${escapeHtml(
-          pick.price == null ? "—" : formatNumber(pick.price, "")
-        )}</span></span>
-        <span><span class="k">开</span><span class="v">—</span></span>
-        <span><span class="k">高</span><span class="v">—</span></span>
-        <span><span class="k">低</span><span class="v">—</span></span>
-        <span><span class="k">月涨幅</span><span class="v ${pctClass(
-          pick.month_change_pct
-        )}">${escapeHtml(pctText(pick.month_change_pct))}</span></span>
-      </div>
+      ${deskStatsBlockHtml(pick, { open: null, high: null, low: null })}
       <p class="chart-placeholder">暂无${escapeHtml(
         tfLabel
       )}数据 · 点右上角刷新重试</p>
@@ -1478,33 +2118,12 @@ function renderPortfolioChart() {
       <h3>${escapeHtml(pick.name || "")} · ${escapeHtml(pick.symbol || "")}${
         pick.is_wave ? '<span class="hot-tag">涨势</span>' : ""
       }${preview ? '<span class="preview-tag">预览</span>' : ""}</h3>
-      <span class="range chg ${up ? "up" : "down"}">${escapeHtml(
-        pctText(pct)
-      )}</span>
     </div>
-    <div class="portfolio-stats" aria-label="区间读数">
-      <span><span class="k">现价</span><span class="v ${
-        up ? "up" : "down"
-      }">${escapeHtml(
-        pick.price == null ? "—" : formatNumber(pick.price, "")
-      )}</span></span>
-      <span><span class="k">开</span><span class="v">${escapeHtml(
-        stats.open == null ? "—" : formatNumber(stats.open, "")
-      )}</span></span>
-      <span><span class="k">高</span><span class="v up">${escapeHtml(
-        stats.high == null ? "—" : formatNumber(stats.high, "")
-      )}</span></span>
-      <span><span class="k">低</span><span class="v down">${escapeHtml(
-        stats.low == null ? "—" : formatNumber(stats.low, "")
-      )}</span></span>
-      <span><span class="k">月涨幅</span><span class="v ${pctClass(
-        pick.month_change_pct
-      )}">${escapeHtml(pctText(pick.month_change_pct))}</span></span>
-    </div>
+    ${deskStatsBlockHtml(pick, stats)}
     <div class="chart-canvas" data-zoom-host="portfolio"></div>
     <div class="chart-foot">红涨绿跌${maNote}${sessionNote} · ${escapeHtml(
       pick.sector_label || "持仓"
-    )} · 捏合缩放</div>
+    )}</div>
   `;
   bindZoomableChart(els.portfolioChart.querySelector("[data-zoom-host]"), {
     key: "portfolio",
@@ -1910,6 +2529,7 @@ function syncHoldingSymbolsFromPortfolio(data) {
     .map((h) => String(h.symbol || "").toUpperCase())
     .filter(Boolean);
   state.holdingSymbols = new Set(symbols);
+  state._holdingSymbolsAt = Date.now();
   if (data) state.portfolio = data;
   return state.holdingSymbols;
 }
@@ -1926,19 +2546,43 @@ async function refreshHoldingSymbols({ force = false } = {}) {
     state.holdingSymbols = new Set();
     return state.holdingSymbols;
   }
-  if (state.holdingSymbols && !force && state.portfolio) {
+  if (
+    !force &&
+    state.holdingSymbols instanceof Set &&
+    state._holdingSymbolsAt &&
+    Date.now() - state._holdingSymbolsAt < 60_000
+  ) {
     return state.holdingSymbols;
   }
   try {
-    const res = await fetch("/api/portfolio", { credentials: "same-origin" });
+    // Symbols-only — never block sectors/map on full portfolio quote builds.
+    const res = await fetch("/api/portfolio/symbols", {
+      credentials: "same-origin",
+    });
     if (res.status === 401) {
       state.holdingSymbols = new Set();
       return state.holdingSymbols;
     }
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     const data = await res.json();
-    return syncHoldingSymbolsFromPortfolio(data);
+    const symbols = (data?.symbols || [])
+      .map((s) => String(s || "").toUpperCase())
+      .filter(Boolean);
+    state.holdingSymbols = new Set(symbols);
+    state._holdingSymbolsAt = Date.now();
+    return state.holdingSymbols;
   } catch {
+    try {
+      const res = await fetch("/api/portfolio", { credentials: "same-origin" });
+      if (res.ok) {
+        const data = await res.json();
+        syncHoldingSymbolsFromPortfolio(data);
+        state._holdingSymbolsAt = Date.now();
+        return state.holdingSymbols;
+      }
+    } catch {
+      /* ignore */
+    }
     if (!state.holdingSymbols) state.holdingSymbols = new Set();
     return state.holdingSymbols;
   }
@@ -1959,7 +2603,7 @@ function paintHoldingToggle(sym, held) {
     });
   document
     .querySelectorAll(
-      `.sector-pick-row[data-symbol="${symbol}"], .holding-row[data-holding="${symbol}"]`
+      `.sector-pick-row[data-symbol="${symbol}"], .holding-row[data-holding="${symbol}"], .chains-co-row[data-symbol="${symbol}"]`
     )
     .forEach((row) => {
       row.classList.toggle("in-holding", held);
@@ -2182,22 +2826,52 @@ function renderPush(push) {
   }
 }
 
+/** English title primary; Chinese below at one smaller size. */
+function newsTitleParts(item) {
+  const en = String(item?.title || "").trim();
+  const zhRaw = String(item?.title_zh || "").trim();
+  const zh = zhRaw && zhRaw !== en ? zhRaw : "";
+  return { en: en || zhRaw, zh };
+}
+
+/** Card mood class — 红多 / 绿空 / 灰中性. */
+function newsMoodClass(item) {
+  const s = item?.sentiment;
+  if (s === "bullish") return "is-bullish";
+  if (s === "bearish") return "is-bearish";
+  return "is-neutral";
+}
+
+function newsTitleBlockHtml(item, { heading = "h3", href = null } = {}) {
+  const { en, zh } = newsTitleParts(item);
+  if (!en && !zh) return "";
+  const zhTag = heading === "span" ? "span" : "p";
+  const enBody = href
+    ? `<a href="${escapeHtml(href)}" target="_blank" rel="noopener noreferrer">${escapeHtml(
+        en
+      )}</a>`
+    : escapeHtml(en);
+  return `
+    <${heading} class="news-title-en">${enBody}</${heading}>
+    ${
+      zh
+        ? `<${zhTag} class="news-title-zh">${escapeHtml(zh)}</${zhTag}>`
+        : ""
+    }
+  `;
+}
+
 function holdingIntelCardHtml(item) {
-  const titleZh = item.title_zh || item.title || "";
-  const titleEn = item.title || "";
-  const showEn = titleEn && titleEn !== titleZh;
   const matches = (item.holding_matches || []).join(" · ");
-  const isBearish = item.sentiment === "bearish";
-  const isBullish = item.sentiment === "bullish";
   const logic =
     item.sentiment_logic ||
     item.brief_zh ||
     item.summary ||
     "";
   return `
-    <a class="holding-intel-card ${isBearish ? "is-bearish" : ""} ${
-      isBullish ? "is-bullish" : ""
-    }" href="${escapeHtml(item.url || "#")}" target="_blank" rel="noopener noreferrer">
+    <a class="holding-intel-card ${newsMoodClass(
+      item
+    )}" href="${escapeHtml(item.url || "#")}" target="_blank" rel="noopener noreferrer">
       <div class="holding-intel-meta">
         ${verdictBadge(item)}
         ${
@@ -2208,8 +2882,7 @@ function holdingIntelCardHtml(item) {
         <span>${escapeHtml(item.source || "")}</span>
         <span>${escapeHtml(relativeTime(item.published))}</span>
       </div>
-      <h3>${escapeHtml(titleZh)}</h3>
-      ${showEn ? `<p class="en">${escapeHtml(titleEn)}</p>` : ""}
+      ${newsTitleBlockHtml(item)}
       ${logic ? `<p class="logic">${escapeHtml(logic)}</p>` : ""}
     </a>
   `;
@@ -2335,19 +3008,17 @@ function renderWatchHits(hits) {
         .slice(0, 8)
         .map((item) => {
           const keys = (item.watch_matches || []).join(",");
-          const titleZh = item.title_zh || item.title || "";
-          const titleEn = item.title || "";
-          const showEn = titleEn && titleEn !== titleZh;
           return `
-            <a class="watch-hit-card" href="${item.url}" target="_blank" rel="noopener noreferrer">
+            <a class="watch-hit-card ${newsMoodClass(
+              item
+            )}" href="${item.url}" target="_blank" rel="noopener noreferrer">
               <div class="watch-hit-meta">
                 <span class="chip ${item.sentiment || "neutral"}">${escapeHtml(
                   item.sentiment_label || "中性"
                 )}</span>
                 <span class="chip watch">盯盘:${escapeHtml(keys)}</span>
               </div>
-              <p class="watch-hit-zh">${escapeHtml(titleZh)}</p>
-              ${showEn ? `<p class="watch-hit-en">${escapeHtml(titleEn)}</p>` : ""}
+              ${newsTitleBlockHtml(item, { heading: "p" })}
             </a>
           `;
         })
@@ -2367,21 +3038,21 @@ function verdictBadge(item) {
 }
 
 function spotlightCardHtml(item) {
-  const titleZh = item.title_zh || item.title || "";
-  const titleEn = item.title || "";
-  const showEn = titleEn && titleEn !== titleZh;
   const factors = (item.sentiment_factors || []).join("、");
   const metaBits = [
     item.source || "",
     item.published ? formatClock(item.published) : "",
   ].filter(Boolean);
+  const logic =
+    item.sentiment_logic || item.sentiment_reason || item.brief_zh || "";
   return `
-    <a class="spotlight-card" href="${item.url || "#"}" target="_blank" rel="noopener noreferrer">
+    <a class="spotlight-card ${newsMoodClass(item)}" href="${
+      item.url || "#"
+    }" target="_blank" rel="noopener noreferrer">
       ${verdictBadge(item)}
-      <h3>${escapeHtml(titleZh)}</h3>
-      ${showEn ? `<p class="story-title-en">${escapeHtml(titleEn)}</p>` : ""}
-      <p>${escapeHtml(item.sentiment_logic || item.sentiment_reason || item.brief_zh || "")}</p>
-      ${factors ? `<p>因子：${escapeHtml(factors)}</p>` : ""}
+      ${newsTitleBlockHtml(item)}
+      ${logic ? `<p class="news-logic">${escapeHtml(logic)}</p>` : ""}
+      ${factors ? `<p class="news-logic">因子：${escapeHtml(factors)}</p>` : ""}
       ${
         metaBits.length
           ? `<p class="war-card-meta">${escapeHtml(metaBits.join(" · "))}</p>`
@@ -2610,23 +3281,16 @@ function renderLiveBriefing(brief) {
       .join("");
     const drivers = (data.drivers || [])
       .map((d) => {
-        const titleZh = d.title_zh || d.title || "";
-        const titleEn = d.title || "";
-        const showEn = titleEn && titleEn !== titleZh;
         const href = d.url || "#";
+        const mood = newsMoodClass(d);
         return `
-          <li>
+          <li class="driver-item ${mood}">
             <a href="${escapeHtml(href)}" target="_blank" rel="noopener noreferrer">
-              <span class="driver-title">${escapeHtml(titleZh)}</span>
-              ${
-                showEn
-                  ? `<span class="driver-en">${escapeHtml(titleEn)}</span>`
-                  : ""
-              }
+              ${newsTitleBlockHtml(d, { heading: "span" })}
             </a>
             <div class="driver-meta">
-              <span class="chip bearish">${escapeHtml(
-                d.sentiment_label || "利空"
+              <span class="chip ${d.sentiment || "neutral"}">${escapeHtml(
+                d.sentiment_label || "中性"
               )}</span>
               <span>${escapeHtml(d.source || "")}</span>
               <span>${escapeHtml(formatClock(d.published))}</span>
@@ -2732,23 +3396,21 @@ function renderEventThreads(threads) {
   }
   els.eventRail.innerHTML = rows
     .map((event) => {
-      const titleZh = event.title_zh || event.title || "";
-      const titleEn = event.title || "";
-      const showEn = titleEn && titleEn !== titleZh;
       const keys = (event.keywords || [])
         .slice(0, 4)
         .map((k) => `<span class="key-chip">${escapeHtml(k)}</span>`)
         .join("");
       return `
-        <button type="button" class="event-card" data-open-event="${escapeHtml(event.id)}">
+        <button type="button" class="event-card ${newsMoodClass(
+          event
+        )}" data-open-event="${escapeHtml(event.id)}">
           <div class="event-card-top">
             <span class="chip ${event.sentiment || "neutral"}">${escapeHtml(
               event.sentiment_label || "中性"
             )}</span>
             <span>${event.count} 条报道</span>
           </div>
-          <h3>${escapeHtml(titleZh)}</h3>
-          ${showEn ? `<p class="event-en">${escapeHtml(titleEn)}</p>` : ""}
+          ${newsTitleBlockHtml(event)}
           <p class="event-en">${escapeHtml(formatClock(event.first_seen))} → ${escapeHtml(
             formatClock(event.last_seen)
           )}</p>
@@ -2777,9 +3439,6 @@ function renderDayTimeline(timeline) {
       const items = (day.items || [])
         .slice(0, 8)
         .map((item) => {
-          const titleZh = item.title_zh || item.title || "";
-          const titleEn = item.title || "";
-          const showEn = titleEn && titleEn !== titleZh;
           const eventBtn =
             item.event_id && item.event_count > 1
               ? `<button type="button" class="event-link" data-open-event="${escapeHtml(
@@ -2787,7 +3446,7 @@ function renderDayTimeline(timeline) {
                 )}">同事件 ${item.event_count}</button>`
               : "";
           return `
-            <div class="day-item">
+            <div class="day-item ${newsMoodClass(item)}">
               <div class="day-item-top">
                 <span class="chip ${item.sentiment || "neutral"}">${escapeHtml(
                   item.sentiment_label || "中性"
@@ -2796,10 +3455,7 @@ function renderDayTimeline(timeline) {
                 <time datetime="${item.published || ""}">${relativeTime(item.published)}</time>
                 ${eventBtn}
               </div>
-              <a href="${item.url}" target="_blank" rel="noopener noreferrer">${escapeHtml(
-                titleZh
-              )}</a>
-              ${showEn ? `<p class="en">${escapeHtml(titleEn)}</p>` : ""}
+              ${newsTitleBlockHtml(item, { heading: "p", href: item.url || "#" })}
             </div>
           `;
         })
@@ -2896,13 +3552,10 @@ function renderFeed(items) {
             (item.holding_matches || []).join(",")
           )}</span>`
         : "";
-      const isBearish = item.sentiment === "bearish";
-      const isBullish = item.sentiment === "bullish";
       const factors = (item.sentiment_factors || []).join("、") || "暂无强因子";
       const logic =
         item.sentiment_logic ||
         `结论：${item.sentiment_label || "中性"}（${Number(item.sentiment_score || 0).toFixed(2)}）`;
-      const titleZh = item.title_zh || item.title || "";
       const eventBtn =
         item.event_id && item.event_count > 1
           ? `<button type="button" class="event-link" data-open-event="${escapeHtml(
@@ -2910,7 +3563,7 @@ function renderFeed(items) {
             )}">同事件 ${item.event_count} 条</button>`
           : "";
       return `
-      <article class="story ${item.watch_hit ? "is-watch" : ""} ${item.holding_hit ? "is-holding" : ""} ${isBearish ? "is-bearish" : ""} ${isBullish ? "is-bullish" : ""}">
+      <article class="story ${item.watch_hit ? "is-watch" : ""} ${item.holding_hit ? "is-holding" : ""} ${newsMoodClass(item)}">
         <div class="story-top">
           <span class="chip ${item.category}">${categoryName(item.category)}</span>
           ${watchChip}
@@ -2923,10 +3576,7 @@ function renderFeed(items) {
         </div>
         <div class="story-title-block">
           ${verdictBadge(item)}
-          <h3>
-            <a href="${item.url}" target="_blank" rel="noopener noreferrer">${escapeHtml(titleZh)}</a>
-          </h3>
-          <p class="story-title-en">${escapeHtml(item.title || "")}</p>
+          ${newsTitleBlockHtml(item, { href: item.url || "#" })}
         </div>
         <div class="story-verdict ${item.sentiment || "neutral"}">
           <p class="story-verdict-label">
@@ -2968,6 +3618,9 @@ function setStatus(text) {
 }
 
 async function loadMarketsDesk({ force = false } = {}) {
+  if (PAGE !== "markets") return;
+  if (state.marketsLoadBusy && !force) return;
+  state.marketsLoadBusy = true;
   setStatus(force ? "正在刷新市场…" : "同步指数与读数…");
   if (els.refresh) els.refresh.disabled = true;
   try {
@@ -2977,6 +3630,7 @@ async function loadMarketsDesk({ force = false } = {}) {
     renderMarkets(data.markets);
     renderIndicators(data.indicators);
     renderAgenda(data.calendar, data.next_fomc);
+    persistPageDataCache();
     const when = data.fetched_at
       ? new Date(data.fetched_at * 1000).toLocaleTimeString("zh-CN", {
           hour: "2-digit",
@@ -2990,6 +3644,7 @@ async function loadMarketsDesk({ force = false } = {}) {
     console.error(err);
     setStatus("市场同步失败，请稍后重试");
   } finally {
+    state.marketsLoadBusy = false;
     if (els.refresh) els.refresh.disabled = false;
   }
 }
@@ -3036,6 +3691,7 @@ async function loadIntel({ force = false } = {}) {
     const res = await fetch(`/api/intel?${params.toString()}`);
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     const data = await res.json();
+    state.intel = data;
 
     const allEvents = [
       ...(data.event_threads || []),
@@ -3063,6 +3719,7 @@ async function loadIntel({ force = false } = {}) {
       renderDigest(data.digest);
       if (PAGE === "settings") renderPush(data.push);
     }
+    if (PAGE === "intel") persistPageDataCache();
 
     if (data.holding_intel) {
       state.holdingIntel = data.holding_intel;
@@ -3858,22 +4515,74 @@ function pctClass(pct) {
 }
 
 function pctText(pct) {
-  if (typeof pct !== "number" || Number.isNaN(pct)) return "—";
-  return `${pct >= 0 ? "+" : ""}${pct.toFixed(2)}%`;
+  const n = Number(pct);
+  if (pct == null || !Number.isFinite(n)) return "—";
+  return `${n >= 0 ? "+" : ""}${n.toFixed(2)}%`;
+}
+
+/** Shared desk stats: 现价/开高低/月涨幅 + 收盘% + 时段实时% (holdings + sectors). */
+function deskStatsBlockHtml(pick, stats) {
+  const closePct = pick?.change_pct;
+  const sessionLabel = String(pick?.session_label || "").trim() || "实时";
+  const rtPct = pick?.rt_change_pct;
+  const priceCls = pctClass(closePct);
+  return `
+    <div class="portfolio-stats" aria-label="区间读数">
+      <span class="stat-cell">
+        <span class="k">现价</span>
+        <span class="v ${priceCls}" data-desk-price>${escapeHtml(
+          pick?.price == null ? "—" : formatNumber(pick.price, "")
+        )}</span>
+      </span>
+      <span class="stat-cell">
+        <span class="k">开</span>
+        <span class="v">${escapeHtml(
+          stats?.open == null ? "—" : formatNumber(stats.open, "")
+        )}</span>
+      </span>
+      <span class="stat-cell">
+        <span class="k">高</span>
+        <span class="v up">${escapeHtml(
+          stats?.high == null ? "—" : formatNumber(stats.high, "")
+        )}</span>
+      </span>
+      <span class="stat-cell">
+        <span class="k">低</span>
+        <span class="v down">${escapeHtml(
+          stats?.low == null ? "—" : formatNumber(stats.low, "")
+        )}</span>
+      </span>
+      <span class="stat-cell">
+        <span class="k">月涨幅</span>
+        <span class="v ${pctClass(pick?.month_change_pct)}">${escapeHtml(
+          pctText(pick?.month_change_pct)
+        )}</span>
+      </span>
+    </div>
+    <div class="desk-chg-row" aria-label="收盘与时段涨跌">
+      <span class="desk-close-chg ${pctClass(closePct)}" data-desk-close-chg>收盘: ${escapeHtml(
+        pctText(closePct)
+      )}</span>
+      <span class="desk-session-chg ${pctClass(rtPct)}" data-desk-session-chg data-session-label="${escapeHtml(
+        sessionLabel
+      )}">${escapeHtml(sessionLabel)}: ${escapeHtml(pctText(rtPct))}</span>
+    </div>
+  `;
 }
 
 /** Shared holdings/sectors list quote: 收盘涨跌幅 + 实时涨跌幅 + 时段. */
 function listQuoteHtml(pick) {
-  const closePct = pick?.change_pct;
+  const stamped = applyClockSession(pick || {});
+  const closePct = stamped?.change_pct;
   const rtPct =
-    pick?.rt_change_pct != null ? pick.rt_change_pct : null;
-  const sessionLabel = String(pick?.session_label || "").trim();
+    stamped?.rt_change_pct != null ? stamped.rt_change_pct : null;
+  const sessionLabel = String(stamped?.session_label || "").trim();
   const price =
-    pick?.price == null ? "—" : formatNumber(pick.price, "");
+    stamped?.price == null ? "—" : formatNumber(stamped.price, "");
   const rtPrice =
-    pick?.rt_price == null ? "" : formatNumber(pick.rt_price, "");
+    stamped?.rt_price == null ? "" : formatNumber(stamped.rt_price, "");
   const showRt =
-    rtPct != null || pick?.rt_price != null || Boolean(sessionLabel);
+    rtPct != null || stamped?.rt_price != null || Boolean(sessionLabel);
   return `
     <span class="quote">
       <span class="quote-main">
@@ -3890,12 +4599,11 @@ function listQuoteHtml(pick) {
         )}</span>
         <span class="rt-chg ${pctClass(rtPct)}">${escapeHtml(
           pctText(rtPct)
-        )}</span>
-        ${
+        )}${
           sessionLabel
             ? `<span class="session-tag">${escapeHtml(sessionLabel)}</span>`
             : ""
-        }
+        }</span>
       </span>`
           : ""
       }
@@ -3905,21 +4613,48 @@ function listQuoteHtml(pick) {
 
 function mergeListQuoteFields(next, prev) {
   if (!next) return prev || next;
-  if (!prev) return next;
+  if (!prev) return applyClockSession(next);
+  const clock = sessionFromClock();
   const out = { ...next };
-  for (const key of [
-    "price",
-    "change",
-    "change_pct",
-    "rt_price",
-    "rt_change",
-    "rt_change_pct",
-    "session",
-    "session_label",
-  ]) {
+  // Clock always wins for badge — never keep stale 盘前 into 盘中.
+  out.session = clock.id;
+  out.session_label = clock.label;
+  const prevSid = String(prev.session || "");
+  const sameSession = prevSid && prevSid === clock.id;
+  if (clock.id === "night") {
+    const prevOvernight = Boolean(prev.overnight);
+    const nextOvernight = Boolean(out.overnight);
+    if (!nextOvernight) {
+      if (prevOvernight && sameSession) {
+        for (const key of ["rt_price", "rt_change", "rt_change_pct"]) {
+          if (out[key] == null && prev[key] != null) out[key] = prev[key];
+        }
+        out.overnight = true;
+      } else {
+        delete out.rt_price;
+        delete out.rt_change;
+        delete out.rt_change_pct;
+        delete out.overnight;
+      }
+    }
+  } else if (sameSession) {
+    for (const key of ["rt_price", "rt_change", "rt_change_pct"]) {
+      if (out[key] == null && prev[key] != null) out[key] = prev[key];
+    }
+    delete out.overnight;
+  } else {
+    // Session flipped: drop prior RT unless next brought fresh.
+    if (out.rt_price == null) {
+      delete out.rt_price;
+      delete out.rt_change;
+      delete out.rt_change_pct;
+    }
+    delete out.overnight;
+  }
+  for (const key of ["price", "change", "change_pct"]) {
     if (out[key] == null && prev[key] != null) out[key] = prev[key];
   }
-  return out;
+  return applyClockSession(out);
 }
 
 function renderAiDesk(aiDesk) {
@@ -3980,8 +4715,8 @@ function renderSectorNewsFeed(data) {
   const q = data?.active_sector?.topic_id || label;
   if (els.sectorNewsBlurb) {
     els.sectorNewsBlurb.textContent = news.length
-      ? `${label} · ${news.length} 条匹配`
-      : `${label} · 暂无匹配`;
+      ? `${label} · Google News · ${news.length} 条最新`
+      : `${label} · Google News · 暂无最新`;
   }
   if (els.sectorNewsLink) {
     els.sectorNewsLink.href = `/intel?q=${encodeURIComponent(q)}`;
@@ -3989,7 +4724,7 @@ function renderSectorNewsFeed(data) {
   if (!els.sectorNewsList) return;
   els.sectorNewsList.innerHTML = news.length
     ? news.slice(0, 8).map((item) => spotlightCardHtml(item)).join("")
-    : '<p class="empty">暂无该板块匹配新闻。</p>';
+    : '<p class="empty">暂无该板块最新新闻。</p>';
 }
 
 function renderSymbolNewsFeed(data) {
@@ -4002,11 +4737,11 @@ function renderSymbolNewsFeed(data) {
   const name = pick?.name || sym;
   if (els.symbolNewsBlurb) {
     if (!sym) {
-      els.symbolNewsBlurb.textContent = "点选个股后显示相关情报";
+      els.symbolNewsBlurb.textContent = "点选个股后汇总最新消息";
     } else if (!news.length) {
-      els.symbolNewsBlurb.textContent = `${name} · 暂无命中标题/正文的情报`;
+      els.symbolNewsBlurb.textContent = `${name} · Google News · 暂无最新`;
     } else {
-      els.symbolNewsBlurb.textContent = `${name} · ${news.length} 条相关`;
+      els.symbolNewsBlurb.textContent = `${name} · Google News · ${news.length} 条最新`;
     }
   }
   if (els.symbolNewsLink) {
@@ -4022,9 +4757,10 @@ function renderSymbolNewsFeed(data) {
   }
   els.symbolNewsList.innerHTML = news.length
     ? news.slice(0, 8).map((item) => spotlightCardHtml(item)).join("")
-    : `<p class="empty">暂无命中 ${escapeHtml(
+    : `<p class="empty">暂无 ${escapeHtml(
         sym
-      )} 的情报 · <a href="/intel?q=${encodeURIComponent(sym)}">去情报流搜索</a></p>`;
+      )} 最新消息 · <a href="/intel?q=${encodeURIComponent(sym)}">去情报流搜索</a></p>`;
+  requestAnimationFrame(() => syncSectorsDeskHeights());
 }
 
 function heatColor(pct) {
@@ -4072,6 +4808,39 @@ function layoutTreemap(nodes, x, y, w, h, out) {
   }
 }
 
+/** Clamp treemap labels to real pixel boxes after layout (fixes phone overflow). */
+function fitSectorMapLabels() {
+  const stage = els.sectorMapCanvas?.querySelector(".sector-map-stage");
+  if (!stage) return;
+  stage.querySelectorAll(".map-stock").forEach((el) => {
+    const w = el.clientWidth;
+    const h = el.clientHeight;
+    el.classList.toggle("is-tiny", w < 40 || h < 26);
+    el.classList.toggle("is-compact", w < 62 || h < 38);
+    el.classList.toggle("is-roomy", w >= 86 && h >= 50);
+    const nm = el.querySelector(".nm");
+    if (nm && (w < 72 || h < 44)) nm.hidden = true;
+    const pct = el.querySelector(".pct");
+    if (pct && (w < 30 || h < 20)) pct.hidden = true;
+  });
+  stage.querySelectorAll(".map-group-label").forEach((el) => {
+    const host = el.parentElement;
+    if (!host) return;
+    if (host.clientWidth < 52 || host.clientHeight < 36) {
+      el.hidden = true;
+      host.querySelector(".map-group-body")?.classList.remove("has-label");
+    }
+  });
+  stage.querySelectorAll(".map-sector-label").forEach((el) => {
+    const host = el.parentElement;
+    if (!host) return;
+    if (host.clientWidth < 64 || host.clientHeight < 48) {
+      el.hidden = true;
+      host.querySelector(".map-sector-body")?.classList.remove("has-label");
+    }
+  });
+}
+
 function renderSectorMap(map) {
   if (!els.sectorMapCanvas) return;
   const sectors = map?.sectors || [];
@@ -4095,8 +4864,12 @@ function renderSectorMap(map) {
     return;
   }
 
+  const narrow =
+    typeof window !== "undefined" &&
+    (window.matchMedia("(max-width: 720px)").matches ||
+      document.documentElement.classList.contains("pulse-native-phone"));
   const width = 1000;
-  const height = 520;
+  const height = narrow ? 640 : 520;
   const sectorNodes = sectors.map((s) => ({
     ...s,
     value: Math.max(0.5, Number(s.weight) || 1),
@@ -4111,7 +4884,7 @@ function renderSectorMap(map) {
       const sy = sec.y + gap;
       const sw = Math.max(1, sec.w - gap * 2);
       const sh = Math.max(1, sec.h - gap * 2);
-      const showHead = sh > 64 && sw > 70;
+      const showHead = narrow ? sh > 72 && sw > 86 : sh > 64 && sw > 70;
       const innerW = Math.max(1, sw - 2);
       const innerH = Math.max(1, sh - (showHead ? 17 : 2));
       const groups = (sec.groups || []).map((g) => ({
@@ -4122,7 +4895,9 @@ function renderSectorMap(map) {
       layoutTreemap(groups, 0, 0, innerW, innerH, groupRects);
       const groupsHtml = groupRects
         .map((grp) => {
-          const showGHead = grp.h > 42 && grp.w > 50;
+          const showGHead = narrow
+            ? grp.h > 52 && grp.w > 64
+            : grp.h > 42 && grp.w > 50;
           const bodyW = Math.max(1, grp.w - 1);
           const bodyH = Math.max(1, grp.h - (showGHead ? 13 : 1));
           const stocks = (grp.children || []).map((c) => ({
@@ -4133,8 +4908,13 @@ function renderSectorMap(map) {
           layoutTreemap(stocks, 0, 0, bodyW, bodyH, stockRects);
           const stocksHtml = stockRects
             .map((st) => {
-              const showName = st.w / bodyW > 0.28 && st.h / bodyH > 0.34;
-              const showPct = st.w / bodyW > 0.18 && st.h / bodyH > 0.22;
+              // Phone: ticker + % only — company names overflow tiny cells.
+              const showName = narrow
+                ? false
+                : st.w / bodyW > 0.28 && st.h / bodyH > 0.34;
+              const showPct = narrow
+                ? st.w > 28 && st.h > 22
+                : st.w / bodyW > 0.18 && st.h / bodyH > 0.22;
               const pct = st.change_pct;
               const cls =
                 pct == null || Number.isNaN(Number(pct))
@@ -4220,7 +5000,13 @@ function renderSectorMap(map) {
     })
     .join("");
 
-  els.sectorMapCanvas.innerHTML = `<div class="sector-map-stage">${html}</div>`;
+  els.sectorMapCanvas.innerHTML = `<div class="sector-map-stage${
+    narrow ? " is-narrow" : ""
+  }">${html}</div>`;
+  requestAnimationFrame(() => {
+    fitSectorMapLabels();
+    requestAnimationFrame(fitSectorMapLabels);
+  });
 
   els.sectorMapCanvas.querySelectorAll("[data-desk].map-sector-label").forEach((btn) => {
     btn.addEventListener("click", () => {
@@ -4246,8 +5032,16 @@ function renderSectorMap(map) {
   });
 }
 
+function isSectorMapCollapsed() {
+  return Boolean(
+    document.getElementById("sector-map")?.classList.contains("is-map-collapsed"),
+  );
+}
+
 async function loadSectorMap({ force = false } = {}) {
   if (PAGE !== "sectors" || !els.sectorMapCanvas) return null;
+  // Phone collapses the map by default — skip the heavy map API until opened.
+  if (isSectorMapCollapsed() && !force) return null;
   if (force) {
     els.sectorMapCanvas.innerHTML = '<p class="empty">刷新全板块涨跌图…</p>';
   }
@@ -4284,15 +5078,32 @@ function syncSectorQuery() {
   }
 }
 
+function sectorDeskQuoteCoverage(data) {
+  const picks = data?.picks || [];
+  if (!picks.length) return 0;
+  const priced = picks.filter(
+    (p) =>
+      typeof p?.price === "number" || typeof p?.change_pct === "number"
+  ).length;
+  return priced / picks.length;
+}
+
 function sectorCacheGet(id) {
   const row = state.sectorCache?.[id];
   if (!row?.data) return null;
-  if (Date.now() - Number(row.at || 0) > 45_000) return null;
+  // Keep optimistic sector paint warm across tab switches / hover.
+  if (Date.now() - Number(row.at || 0) > 120_000) return null;
+  // Drop spark-only shells that lost day quotes (shows "—" for the whole list).
+  if (sectorDeskQuoteCoverage(row.data) < 0.4) {
+    delete state.sectorCache[id];
+    return null;
+  }
   return row.data;
 }
 
 function sectorCachePut(id, data) {
   if (!id || !data) return;
+  if (sectorDeskQuoteCoverage(data) < 0.4) return;
   state.sectorCache[id] = { at: Date.now(), data };
 }
 
@@ -4390,17 +5201,33 @@ function paintSectorSelection() {
   scheduleSectorsDeskHeightSync();
 }
 
-function updateDeskChartQuote(root, { pct, price } = {}) {
+function updateDeskChartQuote(
+  root,
+  { pct, price, rtPct, sessionLabel } = {}
+) {
   if (!root) return;
+  // Legacy top-right badge (removed from markup; keep safe if cached HTML remains).
   const range = root.querySelector(".chart-head .range");
-  if (range && pct != null) {
-    range.className = `range chg ${pctClass(pct)}`;
-    range.textContent = pctText(pct);
-  }
-  const priceV = root.querySelector(".portfolio-stats > span .v");
+  if (range) range.hidden = true;
+  const priceV = root.querySelector("[data-desk-price]");
   if (priceV && price != null) {
     priceV.className = `v ${pctClass(pct)}`;
     priceV.textContent = formatNumber(price, "");
+  }
+  const closeEl = root.querySelector("[data-desk-close-chg]");
+  if (closeEl && pct != null) {
+    closeEl.className = `desk-close-chg ${pctClass(pct)}`;
+    closeEl.textContent = `收盘: ${pctText(pct)}`;
+  }
+  const sessEl = root.querySelector("[data-desk-session-chg]");
+  if (sessEl) {
+    const label =
+      String(sessionLabel || sessEl.getAttribute("data-session-label") || "").trim() ||
+      "实时";
+    sessEl.setAttribute("data-session-label", label);
+    const hasRt = rtPct != null && Number.isFinite(Number(rtPct));
+    sessEl.className = `desk-session-chg ${hasRt ? pctClass(rtPct) : ""}`;
+    sessEl.textContent = `${label}: ${hasRt ? pctText(rtPct) : "—"}`;
   }
 }
 
@@ -4429,15 +5256,53 @@ function applyIntradaySnapshot(sym, snap) {
   const intra = snap?.series?.intraday;
   if (!symbol || !intra?.points?.length) return;
   // Poll updates 实时价/涨跌; keep 收盘涨跌幅 (change_pct) from the day quote.
+  // Prefer backend session-aware rt_*; never clone full-day % into 夜盘/盘后/盘前.
+  const sid = String(snap.session || "");
   const rtPatch = {
-    rt_price: snap.price,
-    rt_change: snap.change,
-    rt_change_pct: snap.change_pct,
     series: { intraday: intra },
   };
   if (snap.session_label) {
     rtPatch.session = snap.session;
     rtPatch.session_label = snap.session_label;
+  }
+  const hasExplicitRt =
+    snap.rt_price != null || snap.rt_change != null || snap.rt_change_pct != null;
+  if (hasExplicitRt) {
+    if (snap.rt_price != null) rtPatch.rt_price = snap.rt_price;
+    if (snap.rt_change != null) rtPatch.rt_change = snap.rt_change;
+    if (snap.rt_change_pct != null) rtPatch.rt_change_pct = snap.rt_change_pct;
+    if (sid === "night") rtPatch.overnight = true;
+  } else if (sid === "night") {
+    // No true Overnight on this snap — clear 盘后 leftovers.
+    rtPatch.rt_price = null;
+    rtPatch.rt_change = null;
+    rtPatch.rt_change_pct = null;
+    rtPatch.overnight = false;
+  } else if (sid === "regular") {
+    rtPatch.rt_price = snap.price;
+    rtPatch.rt_change = snap.change;
+    rtPatch.rt_change_pct = snap.change_pct;
+  } else if (sid === "pre" || sid === "post") {
+    // Legacy snapshot without rt_*: only adopt when distinct from day line.
+    const dayBoard =
+      PAGE === "desk"
+        ? state.portfolio?.selected_board
+        : state.sectors?.selected_pick;
+    const dayPx = dayBoard?.price;
+    const dayPct = dayBoard?.change_pct;
+    const samePx =
+      snap.price != null &&
+      dayPx != null &&
+      Math.abs(Number(snap.price) - Number(dayPx)) < 1e-6;
+    const samePct =
+      snap.change_pct != null &&
+      dayPct != null &&
+      Math.abs(Number(snap.change_pct) - Number(dayPct)) < 1e-6;
+    if (!(samePx && samePct)) {
+      rtPatch.rt_price = snap.price;
+      rtPatch.rt_change = snap.change;
+      rtPatch.rt_change_pct = snap.change_pct;
+    }
   }
 
   if (PAGE === "desk" && state.portfolio) {
@@ -4470,8 +5335,10 @@ function applyIntradaySnapshot(sym, snap) {
           renderPortfolioChart();
         } else {
           updateDeskChartQuote(els.portfolioChart, {
-            pct: snap.change_pct ?? nextBoard.change_pct,
-            price: snap.price ?? nextBoard.price,
+            pct: nextBoard.change_pct,
+            price: nextBoard.price,
+            rtPct: nextBoard.rt_change_pct,
+            sessionLabel: nextBoard.session_label,
           });
         }
       }
@@ -4502,8 +5369,10 @@ function applyIntradaySnapshot(sym, snap) {
           renderSectorPickChart();
         } else {
           updateDeskChartQuote(els.sectorPickChart, {
-            pct: snap.change_pct ?? nextPick.change_pct,
-            price: snap.price ?? nextPick.price,
+            pct: nextPick.change_pct,
+            price: nextPick.price,
+            rtPct: nextPick.rt_change_pct,
+            sessionLabel: nextPick.session_label,
           });
         }
       }
@@ -4519,14 +5388,23 @@ async function refreshActiveIntraday({ force = false } = {}) {
     PAGE === "desk"
       ? state.portfolioPreview || state.portfolio?.selected || ""
       : state.sectorSymbol || state.sectors?.selected_symbol || "";
-  if (!sym || state.intradayPollBusy) return;
+  // Auto-poll skips when busy; manual 刷新 bypasses as a backup.
+  if (!sym || (state.intradayPollBusy && !force)) return;
   state.intradayPollBusy = true;
   try {
     const url = `/api/quote/intraday?symbol=${encodeURIComponent(sym)}${
       force ? "&refresh=true" : ""
     }`;
-    const res = await fetch(url, { credentials: "same-origin" });
-    if (!res.ok) return;
+    const res = await fetch(url, {
+      credentials: "same-origin",
+      signal: AbortSignal.timeout(8000),
+    });
+    if (!res.ok) {
+      if (PAGE === "sectors" && !pickHasIntraday(state.sectors?.selected_pick)) {
+        renderSectorPickChart();
+      }
+      return;
+    }
     const snap = await res.json();
     // Drop stale replies if the user already switched symbols.
     const current =
@@ -4536,7 +5414,10 @@ async function refreshActiveIntraday({ force = false } = {}) {
     if (String(current).toUpperCase() !== String(sym).toUpperCase()) return;
     applyIntradaySnapshot(sym, snap);
   } catch {
-    /* quiet poll */
+    if (PAGE === "sectors" && !pickHasIntraday(state.sectors?.selected_pick)) {
+      // Stop eternal "正在加载分时…" — show retry placeholder.
+      renderSectorPickChart();
+    }
   } finally {
     state.intradayPollBusy = false;
   }
@@ -4546,12 +5427,9 @@ async function refreshActiveIntraday({ force = false } = {}) {
 function mergePickPreserveIntraday(next, prev) {
   if (!next) return prev || next;
   if (!prev || !pickHasIntraday(prev)) return next;
-  if (pickHasIntraday(next)) {
-    // Prefer the denser tape when both exist
-    const nLen = next.series.intraday.points.length;
-    const pLen = prev.series.intraday.points.length;
-    if (nLen >= pLen) return next;
-  }
+  // Always prefer a fresh tape when present — denser-but-stale prior sessions
+  // (e.g. yesterday 盘后) must not block today's shorter 盘前 line.
+  if (pickHasIntraday(next)) return next;
   return {
     ...next,
     series: {
@@ -4570,7 +5448,12 @@ function openSectorDesk(id, { scroll = true } = {}) {
   if (!sectorId) return;
   const same = sectorId === state.sectorId;
   state.sectorId = sectorId;
-  if (!same) state.sectorSymbol = "";
+  if (!same) {
+    state.sectorSymbol = "";
+    state.chartUpgradeSym = "";
+    state.symbolNewsRetrySym = "";
+    state.sectorsLoadPending = null;
+  }
   syncSectorQuery();
 
   // Optimistic: paint cached desk immediately while a refresh runs in background
@@ -4587,10 +5470,14 @@ function openSectorDesk(id, { scroll = true } = {}) {
     }
   }
 
+  // Always refresh when switching sectors so list prices/sparks don't stick empty.
   const load =
-    same && state.sectors && pickHasChart(state.sectors.selected_pick)
+    same &&
+    state.sectors &&
+    pickHasChart(state.sectors.selected_pick) &&
+    sectorDeskQuoteCoverage(state.sectors) >= 0.4
       ? Promise.resolve(state.sectors)
-      : loadSectorDesk();
+      : loadSectorDesk({ force: !same });
   Promise.resolve(load).finally(() => {
     if (scroll && els.sectorsDesk) {
       els.sectorsDesk.scrollIntoView({ behavior: "smooth", block: "start" });
@@ -5076,19 +5963,34 @@ function renderSectorPickChart() {
     const tfLabel =
       { intraday: "分时", day: "日图", month: "月图", quarter: "季图" }[tf] ||
       "走势";
+    const symKey = String(pick.symbol || "").toUpperCase();
+    const loading =
+      state.sectorsLoadBusy ||
+      (state.chartUpgradeSym === symKey && Boolean(pick.lite)) ||
+      (tf === "intraday" &&
+        state.intradayPollBusy &&
+        !pickHasIntraday(pick));
+    const stats = seriesStats(
+      toLineSparkPoints(pick.series?.intraday?.points || pick.points || []),
+      "line"
+    );
     els.sectorPickChart.innerHTML = `
       <div class="chart-head">
         <h3>${escapeHtml(pick.name || pick.label || "")} · ${escapeHtml(
           pick.symbol || ""
         )}</h3>
       </div>
-      <p class="chart-placeholder">暂无${escapeHtml(
-        tfLabel
-      )}数据 · 点右上角刷新重试</p>
+      ${deskStatsBlockHtml(pick, stats)}
+      <p class="chart-placeholder">${
+        loading
+          ? `正在加载${escapeHtml(tfLabel)}…`
+          : `暂无${escapeHtml(tfLabel)}数据 · 点右上角刷新重试`
+      }</p>
     `;
     renderMonthPanel(pick);
     renderStockEarnings(data.selected_earnings || pick.earnings, pick);
     renderMoveAnalysis(pick);
+    renderSymbolNewsFeed(data);
     return;
   }
   const zoomWin = defaultChartZoom(points.length, tf, kind);
@@ -5130,31 +6032,12 @@ function renderSectorPickChart() {
       <h3>${escapeHtml(pick.name || pick.label || "")} · ${escapeHtml(
         pick.symbol || ""
       )}${pick.is_wave ? '<span class="hot-tag">涨势</span>' : ""}</h3>
-      <span class="range chg ${up ? "up" : "down"}">${escapeHtml(
-        pctText(pct)
-      )}</span>
     </div>
-    <div class="portfolio-stats" aria-label="区间读数">
-      <span><span class="k">现价</span><span class="v ${up ? "up" : "down"}">${escapeHtml(
-        pick.price == null ? "—" : formatNumber(pick.price, "")
-      )}</span></span>
-      <span><span class="k">开</span><span class="v">${escapeHtml(
-        stats.open == null ? "—" : formatNumber(stats.open, "")
-      )}</span></span>
-      <span><span class="k">高</span><span class="v up">${escapeHtml(
-        stats.high == null ? "—" : formatNumber(stats.high, "")
-      )}</span></span>
-      <span><span class="k">低</span><span class="v down">${escapeHtml(
-        stats.low == null ? "—" : formatNumber(stats.low, "")
-      )}</span></span>
-      <span><span class="k">月涨幅</span><span class="v ${pctClass(
-        pick.month_change_pct
-      )}">${escapeHtml(pctText(pick.month_change_pct))}</span></span>
-    </div>
+    ${deskStatsBlockHtml(pick, stats)}
     <div class="chart-canvas" data-zoom-host="sector"></div>
     <div class="chart-foot">红涨绿跌${maNote}${sessionNote} · 所属 ${escapeHtml(
       pick.sector_label || "板块"
-    )}${escapeHtml(earnNote)} · 捏合缩放</div>
+    )}${escapeHtml(earnNote)}</div>
   `;
   bindZoomableChart(els.sectorPickChart.querySelector("[data-zoom-host]"), {
     key: "sector",
@@ -5218,9 +6101,15 @@ function renderValueChain(vc) {
 }
 
 function renderSectorPicks(data) {
-  const picks = data?.picks || [];
+  const picks = (data?.picks || []).map((p) => applyClockSession(p));
   const selected = data?.selected_symbol || state.sectorSymbol || "";
-  const selectedPick = data?.selected_pick || null;
+  const selectedPick = data?.selected_pick
+    ? applyClockSession(data.selected_pick)
+    : null;
+  if (data) {
+    data.picks = picks;
+    if (selectedPick) data.selected_pick = selectedPick;
+  }
   const sector = data?.active_sector || {};
   const tf = state.sectorTf || "intraday";
   const waveN = (data?.wave_leaders || picks.filter((p) => p.is_wave)).length;
@@ -5391,30 +6280,49 @@ function selectSectorSymbol(sym) {
   if (!data || !pick) {
     state.sectorSymbol = symbol;
     syncSectorQuery();
-    loadSectorDesk();
+    loadSectorDesk({ force: true });
     return;
   }
+  const prevSelected = data.selected_pick;
   const already =
     symbol === state.sectorSymbol && pickHasChart(data.selected_pick);
   // Always paint locally first — never wait on network / rebuild the whole list.
   state.sectorSymbol = symbol;
   data.selected_symbol = symbol;
-  data.selected_pick = pick;
-  data.selected_earnings = pick.earnings || null;
-  data.value_chain = pick.value_chain || data.value_chain;
-  data.symbol_news = pick.symbol_news || [];
+  // List rows are slim (spark only). Keep prior full multi-TF chart when
+  // re-selecting the same symbol so 日/月/季 don't flash "暂无".
+  if (
+    pickHasChart(pick) ||
+    (prevSelected?.symbol === symbol && pickHasChart(prevSelected))
+  ) {
+    data.selected_pick =
+      pickHasChart(pick)
+        ? pick
+        : mergePickPreserveIntraday(
+            { ...pick, series: { ...(pick.series || {}), ...prevSelected.series }, lite: false },
+            prevSelected
+          );
+  } else {
+    data.selected_pick = pick;
+  }
+  data.selected_earnings =
+    data.selected_pick?.earnings || pick.earnings || null;
+  data.value_chain =
+    data.selected_pick?.value_chain || pick.value_chain || data.value_chain;
+  data.symbol_news =
+    data.selected_pick?.symbol_news || pick.symbol_news || [];
   syncSectorQuery();
   paintSectorSelection();
-  refreshActiveRowQuote(els.sectorPickList, pick, "data-symbol");
+  refreshActiveRowQuote(els.sectorPickList, data.selected_pick || pick, "data-symbol");
   setStatus(`已切换 ${pick.name || symbol} · ${pick.sector_label || ""}`);
   persistPageDataCache();
-  if (already || pickHasChart(pick)) {
+  if (already || pickHasChart(data.selected_pick)) {
     if (state.sectorTf === "intraday") refreshActiveIntraday({ force: false });
     return;
   }
   // Has 分时 but missing 日/月/季 — still upgrade in background.
   if (state.sectorTf === "intraday") refreshActiveIntraday({ force: false });
-  loadSectorDesk();
+  loadSectorDesk({ force: true });
 }
 
 function renderSectorDesk(data) {
@@ -5426,19 +6334,58 @@ function renderSectorDesk(data) {
   renderSectorPicks(data);
 }
 
+function paintSectorDeskError(message) {
+  const msg = String(message || "加载失败");
+  if (els.sectorPickList && !state.sectors?.picks?.length) {
+    els.sectorPickList.innerHTML = `<p class="empty">成分加载失败：${escapeHtml(
+      msg
+    )} · <button type="button" class="btn ghost btn-compact" data-retry-sectors="1">重试</button></p>`;
+    els.sectorPickList
+      .querySelector("[data-retry-sectors]")
+      ?.addEventListener("click", () => loadSectorDesk({ force: true }));
+  }
+  if (els.aiAnalysisCard && !state.sectors?.hot_desk && !state.sectors?.ai_desk) {
+    els.aiAnalysisCard.innerHTML = `<p class="empty">热点汇总失败：${escapeHtml(
+      msg
+    )}</p>`;
+  }
+  if (els.sectorNewsList && !(state.sectors?.sector_news || []).length) {
+    els.sectorNewsList.innerHTML = `<p class="empty">板块新闻加载失败：${escapeHtml(
+      msg
+    )}</p>`;
+  }
+}
+
 async function loadSectorDesk({ force = false } = {}) {
   if (PAGE !== "sectors") return null;
+  if (state.sectorsLoadBusy) {
+    // Queue the latest sector/symbol so a click during an in-flight load
+    // still upgrades the selected desk chart after the current request.
+    state.sectorsLoadPending = {
+      force: Boolean(force || state.sectorsLoadPending?.force),
+      sectorId: state.sectorId,
+      sectorSymbol: state.sectorSymbol,
+    };
+    return state.sectors;
+  }
+  const seq = ++state.sectorsLoadSeq;
+  state.sectorsLoadBusy = true;
+  state.sectorsLoadPending = null;
   const params = new URLSearchParams();
   if (state.sectorId) params.set("sector", state.sectorId);
   if (state.sectorSymbol) params.set("symbol", state.sectorSymbol);
   if (force) params.set("refresh", "true");
   setStatus(force ? "强制刷新板块…" : "同步板块行情与情报…");
   if (els.sectorsRefresh) els.sectorsRefresh.disabled = true;
-  const mapPromise = loadSectorMap({ force });
+  // Map is independent — never let it delay the constituent list / chart.
+  const mapPromise = loadSectorMap({ force }).catch(() => null);
   try {
-    const res = await fetch(`/api/sectors?${params.toString()}`);
+    const res = await fetch(`/api/sectors?${params.toString()}`, {
+      signal: AbortSignal.timeout(40000),
+    });
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     const data = await res.json();
+    if (seq !== state.sectorsLoadSeq) return data;
     if (data?.active_sector_id) sectorCachePut(data.active_sector_id, data);
     // Keep previously upgraded picks / 分时 when the new payload is still lite
     // or arrives with day/month candles but an empty intraday series.
@@ -5475,7 +6422,10 @@ async function loadSectorDesk({ force = false } = {}) {
             ? prevSelected
             : prevBySym[data.selected_symbol];
         const merged = mergeListQuoteFields(
-          mergePickPreserveIntraday(fromList || data.selected_pick, prevSel),
+          mergePickPreserveIntraday(
+            data.selected_pick || fromList,
+            prevSel
+          ),
           prevSel
         );
         if (merged) data.selected_pick = merged;
@@ -5486,25 +6436,361 @@ async function loadSectorDesk({ force = false } = {}) {
     persistPageDataCache();
     const hot = (data.hot_sectors || []).map((s) => s.label).slice(0, 2).join("、");
     const n = (data.picks || []).length;
+    const lite = Boolean(data.selected_pick?.lite);
     setStatus(
       `板块已更新${data.cached ? "（缓存）" : ""}${
         data.active_sector?.label ? ` · ${data.active_sector.label}` : ""
-      }${n ? ` · ${n} 只成分` : ""}${hot ? ` · 热点 ${hot}` : ""}`
+      }${n ? ` · ${n} 只成分` : ""}${hot ? ` · 热点 ${hot}` : ""}${
+        lite ? " · 走势补全中" : ""
+      }`
     );
-    await mapPromise;
+    // Don't await map — paint desk immediately; map fills when ready.
+    void mapPromise;
+    if (lite || !pickHasIntraday(data.selected_pick)) {
+      void refreshActiveIntraday({ force: true });
+    }
+    // One delayed chart upgrade per symbol — avoid reload loops.
+    const sel = data.selected_symbol || "";
+    if (sel && !pickHasChart(data.selected_pick) && state.chartUpgradeSym !== sel) {
+      state.chartUpgradeSym = sel;
+      window.setTimeout(() => {
+        if (state.sectorSymbol === sel && !pickHasChart(state.sectors?.selected_pick)) {
+          ensureMultiTfChartUpgrade({ force: true });
+        }
+      }, 700);
+    }
+    // GN news warms in background — soft re-fetch once if still empty.
+    const newsEmpty = !(data.symbol_news || []).length;
+    if (sel && newsEmpty && state.symbolNewsRetrySym !== sel) {
+      state.symbolNewsRetrySym = sel;
+      window.setTimeout(() => {
+        if (
+          state.sectorSymbol === sel &&
+          !(state.sectors?.symbol_news || []).length
+        ) {
+          void loadSectorDesk({ force: false });
+        }
+      }, 2800);
+    }
     return data;
   } catch (err) {
-    setStatus(`板块加载失败：${err.message || err}`);
-    await mapPromise;
+    if (seq === state.sectorsLoadSeq) {
+      const msg = err?.name === "TimeoutError" ? "请求超时" : err.message || err;
+      setStatus(`板块加载失败：${msg}`);
+      // One automatic retry on gateway blips (Render cold restart / 502).
+      const transient =
+        /HTTP 502|HTTP 503|HTTP 504|TimeoutError|Failed to fetch|NetworkError/i.test(
+          String(msg)
+        );
+      if (transient && !force) {
+        window.setTimeout(() => {
+          if (PAGE === "sectors" && state.sectorsLoadSeq === seq) {
+            void loadSectorDesk({ force: true });
+          }
+        }, 1200);
+      } else {
+        paintSectorDeskError(msg);
+      }
+    }
+    void mapPromise;
     return null;
   } finally {
+    if (seq === state.sectorsLoadSeq) state.sectorsLoadBusy = false;
     if (els.sectorsRefresh) els.sectorsRefresh.disabled = false;
+    const pending = state.sectorsLoadPending;
+    if (pending && seq === state.sectorsLoadSeq) {
+      state.sectorsLoadPending = null;
+      if (pending.sectorId) state.sectorId = pending.sectorId;
+      if (pending.sectorSymbol) state.sectorSymbol = pending.sectorSymbol;
+      void loadSectorDesk({ force: Boolean(pending.force) });
+    }
   }
+}
+
+function usStripSparkHtml(row) {
+  const pts = (row?.points || [])
+    .map((p) => Number(p?.v ?? p?.c))
+    .filter((n) => Number.isFinite(n));
+  if (pts.length < 2) return "";
+  const w = 56;
+  const h = 28;
+  const min = Math.min(...pts);
+  const max = Math.max(...pts);
+  const span = max - min || 1;
+  const step = (w - 2) / (pts.length - 1);
+  const d = pts
+    .map((v, i) => {
+      const x = 1 + i * step;
+      const y = 1 + (1 - (v - min) / span) * (h - 2);
+      return `${i === 0 ? "M" : "L"}${x.toFixed(1)},${y.toFixed(1)}`;
+    })
+    .join(" ");
+  const up = pts[pts.length - 1] >= pts[0];
+  const stroke = up ? TAPE_UP : TAPE_DOWN;
+  return `<svg class="us-strip-spark" viewBox="0 0 ${w} ${h}" preserveAspectRatio="none" aria-hidden="true"><path d="${d}" fill="none" stroke="${stroke}" stroke-width="1.2" vector-effect="non-scaling-stroke"></path></svg>`;
+}
+
+function renderUsMarketsStrip(strip) {
+  if (!els.usMarketsStrip) return;
+  const rows = strip || [];
+  if (!rows.length) {
+    els.usMarketsStrip.innerHTML = '<p class="empty">暂无美国市场行情</p>';
+    return;
+  }
+  els.usMarketsStrip.innerHTML = rows
+    .map((row) => {
+      const pct = row.change_pct;
+      const cls = pctClass(pct);
+      return `
+        <article class="us-strip-card ${cls}" data-us-sym="${escapeHtml(
+          row.symbol || ""
+        )}">
+          <div class="us-strip-meta">
+            <span class="us-strip-name">${escapeHtml(row.label || row.short || "")}</span>
+            <span class="us-strip-price ${cls}">${escapeHtml(
+              row.price == null ? "—" : formatNumber(row.price, "")
+            )}</span>
+            <span class="us-strip-chg ${cls}">${escapeHtml(pctText(pct))}</span>
+          </div>
+          ${usStripSparkHtml(row)}
+        </article>
+      `;
+    })
+    .join("");
+}
+
+function renderUsFuturesCharts() {
+  if (!els.usFuturesGrid) return;
+  const data = state.usMarkets || {};
+  const futures = data.futures || [];
+  const tf = state.usFuturesTf || "intraday";
+  if (els.usFuturesTfFilters) {
+    els.usFuturesTfFilters.querySelectorAll("[data-uftf]").forEach((btn) => {
+      const on = btn.getAttribute("data-uftf") === tf;
+      btn.classList.toggle("is-active", on);
+      btn.setAttribute("aria-selected", on ? "true" : "false");
+    });
+  }
+  if (!futures.length) {
+    els.usFuturesGrid.innerHTML = '<p class="empty">暂无指数期货走势</p>';
+    return;
+  }
+  els.usFuturesGrid.innerHTML = futures
+    .map((fut) => {
+      const id = String(fut.id || fut.symbol || "").toLowerCase();
+      const resolved = resolveSectorChartSeries(fut, tf);
+      const series = resolved.series;
+      const points = resolved.points;
+      const kind = resolved.kind;
+      const pct =
+        series?.change_pct != null
+          ? series.change_pct
+          : fut.change_pct;
+      const up = !(typeof pct === "number" && pct < 0);
+      return `
+        <article class="us-futures-card" data-fut-id="${escapeHtml(id)}">
+          <div class="us-futures-card-head">
+            <div>
+              <h3>${escapeHtml(fut.short || fut.label || fut.symbol || "")}</h3>
+              <p class="us-futures-sub">${escapeHtml(fut.label || "")} · ${escapeHtml(
+                fut.symbol || ""
+              )}</p>
+            </div>
+            <div class="us-futures-quote">
+              <span class="us-futures-price ${up ? "up" : "down"}">${escapeHtml(
+                fut.price == null ? "—" : formatNumber(fut.price, "")
+              )}</span>
+              <span class="us-futures-chg ${up ? "up" : "down"}">${escapeHtml(
+                pctText(pct)
+              )}</span>
+            </div>
+          </div>
+          <div class="chart-canvas us-futures-canvas" data-zoom-host="us-fut-${escapeHtml(
+            id
+          )}" data-fut-key="${escapeHtml(id)}"></div>
+          ${
+            points.length < 2
+              ? `<p class="chart-placeholder">暂无${escapeHtml(
+                  { intraday: "分时", day: "日图", month: "月图", quarter: "季图" }[
+                    tf
+                  ] || "走势"
+                )}数据</p>`
+              : ""
+          }
+        </article>
+      `;
+    })
+    .join("");
+
+  futures.forEach((fut) => {
+    const id = String(fut.id || fut.symbol || "").toLowerCase();
+    const host = els.usFuturesGrid.querySelector(`[data-fut-key="${id}"]`);
+    if (!host) return;
+    const resolved = resolveSectorChartSeries(fut, tf);
+    const points = resolved.points;
+    if (points.length < 2) return;
+    const series = resolved.series;
+    const kind = resolved.kind;
+    const pct =
+      series?.change_pct != null ? series.change_pct : fut.change_pct;
+    const up = !(typeof pct === "number" && pct < 0);
+    bindZoomableChart(host, {
+      key: `us-fut-${id}`,
+      scope: `${fut.symbol || id}:${tf}`,
+      points,
+      tf,
+      kind,
+      up,
+      sessions: series?.sessions || null,
+      previousClose: series?.previous_close ?? fut.previous_close ?? null,
+      cycleStart: series?.cycle_start ?? null,
+      cycleEnd: series?.cycle_end ?? null,
+      axis: series?.axis || (tf === "intraday" ? "futures_bj" : null),
+    });
+  });
+}
+
+function renderUsMarketsDesk(data) {
+  state.usMarkets = data || null;
+  if (els.usMarketsBlurb) {
+    const n = (data?.futures || []).length;
+    const src = data?.source || "Yahoo";
+    els.usMarketsBlurb.textContent = `${src}${
+      data?.cached ? " · 缓存" : ""
+    }${n ? ` · ${n} 条期货主连` : ""}`;
+  }
+  renderUsMarketsStrip(data?.strip || []);
+  renderUsFuturesCharts();
+}
+
+function mergeUsMarketsPayload(prev, next) {
+  if (!prev?.futures?.length || !next?.futures?.length) return next;
+  const prevBy = Object.fromEntries(
+    prev.futures.map((f) => [String(f.id || f.symbol || "").toLowerCase(), f])
+  );
+  next.futures = next.futures.map((fut) => {
+    const key = String(fut.id || fut.symbol || "").toLowerCase();
+    const old = prevBy[key];
+    if (!old) return fut;
+    const series = { ...(old.series || {}) };
+    Object.entries(fut.series || {}).forEach(([tf, row]) => {
+      if ((row?.points || []).length >= 2) series[tf] = row;
+    });
+    return {
+      ...old,
+      ...fut,
+      series,
+      points: fut.points?.length ? fut.points : old.points,
+      lite: false,
+    };
+  });
+  if ((!next.strip || !next.strip.length) && prev.strip?.length) {
+    next.strip = prev.strip;
+  }
+  return next;
+}
+
+function futuresTfReady(tf) {
+  const want = tf || state.usFuturesTf || "intraday";
+  return (state.usMarkets?.futures || []).some(
+    (f) => ((f.series || {})[want]?.points || []).length >= 2
+  );
+}
+
+async function loadUsMarketsDesk({ force = false, mode = "full" } = {}) {
+  if (PAGE !== "sectors") return null;
+  if (state.usMarketsPollBusy) {
+    // Never stack parallel tape/full polls; keep the latest intent.
+    state.usMarketsPollPending = {
+      force: Boolean(force || state.usMarketsPollPending?.force),
+      mode: mode === "full" || state.usMarketsPollPending?.mode === "full" ? "full" : "tape",
+    };
+    return state.usMarkets;
+  }
+  state.usMarketsPollBusy = true;
+  state.usMarketsPollPending = null;
+  const want = mode === "tape" ? "tape" : "full";
+  try {
+    const params = new URLSearchParams();
+    params.set("mode", want);
+    if (force) params.set("refresh", "true");
+    const res = await fetch(`/api/us-markets?${params.toString()}`, {
+      // Backend hard-caps ~9s tape / ~14s full; leave FE headroom + retry.
+      signal: AbortSignal.timeout(want === "tape" ? 16000 : 28000),
+    });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    let data = await res.json();
+    data = mergeUsMarketsPayload(state.usMarkets, data);
+    renderUsMarketsDesk(data);
+    persistPageDataCache();
+    return data;
+  } catch (err) {
+    const msg = String(err?.message || err || "");
+    // Keep last good paint — never blank the whole US markets block on a blip.
+    if (state.usMarkets?.strip?.length || state.usMarkets?.futures?.length) {
+      if (els.usMarketsBlurb) {
+        els.usMarketsBlurb.textContent = `美国市场 · 沿用缓存（${msg.slice(0, 40)}）`;
+      }
+      if (force || want === "tape") {
+        window.setTimeout(() => {
+          if (PAGE === "sectors") {
+            void loadUsMarketsDesk({ force: false, mode: "tape" });
+          }
+        }, 2000);
+      }
+      return state.usMarkets;
+    }
+    if (els.usMarketsBlurb) {
+      els.usMarketsBlurb.textContent = `美国市场加载失败：${msg}`;
+    }
+    if (els.usMarketsStrip) {
+      els.usMarketsStrip.innerHTML = `<p class="empty">加载失败：${escapeHtml(
+        msg
+      )} · <button type="button" class="btn ghost btn-compact" data-retry-usm="1">重试</button></p>`;
+      els.usMarketsStrip
+        .querySelector("[data-retry-usm]")
+        ?.addEventListener("click", () =>
+          loadUsMarketsDesk({ force: true, mode: "tape" })
+        );
+    }
+    window.setTimeout(() => {
+      if (PAGE === "sectors" && !(state.usMarkets?.strip || []).length) {
+        void loadUsMarketsDesk({ force: true, mode: "tape" });
+      }
+    }, 2500);
+    return null;
+  } finally {
+    state.usMarketsPollBusy = false;
+    const pending = state.usMarketsPollPending;
+    state.usMarketsPollPending = null;
+    if (pending && PAGE === "sectors") {
+      void loadUsMarketsDesk(pending);
+    }
+  }
+}
+
+function bindUsMarketsDesk() {
+  if (PAGE !== "sectors") return;
+  els.usFuturesTfFilters?.querySelectorAll("[data-uftf]").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      const tf = btn.getAttribute("data-uftf");
+      if (!tf || tf === state.usFuturesTf) return;
+      state.usFuturesTf = tf;
+      renderUsFuturesCharts();
+      if (!futuresTfReady(tf)) {
+        void loadUsMarketsDesk({ force: true, mode: "full" });
+      }
+    });
+  });
 }
 
 function bindSectorDesk() {
   if (PAGE !== "sectors") return;
-  els.sectorsRefresh?.addEventListener("click", () => loadSectorDesk({ force: true }));
+  bindUsMarketsDesk();
+  els.sectorsRefresh?.addEventListener("click", () => {
+    loadSectorDesk({ force: true });
+    loadUsMarketsDesk({ force: true, mode: "full" });
+  });
   els.sectorTfFilters?.querySelectorAll("[data-stf]").forEach((btn) => {
     btn.addEventListener("click", () => {
       const tf = btn.getAttribute("data-stf");
@@ -5650,9 +6936,10 @@ function renderEarningsDesk(data) {
               )}">
                 <span class="top">
                   <span class="sym">${escapeHtml(row.symbol)}</span>
-                  <span class="when">${escapeHtml(row.date || "")} · ${escapeHtml(
-                    row.time_zh || ""
-                  )}</span>
+                  <span class="when">
+                    <span class="when-date">${escapeHtml(row.date || "")}</span>
+                    <span class="when-session">${escapeHtml(row.time_zh || "")}</span>
+                  </span>
                 </span>
                 <span class="name">${escapeHtml(row.name || "")}</span>
                 <span class="cap">预期 ${escapeHtml(
@@ -5760,6 +7047,7 @@ async function loadEarningsDesk({ force = false } = {}) {
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     const data = await res.json();
     renderEarningsDesk(data);
+    persistPageDataCache();
     const errN = (data.errors || []).length;
     setStatus(
       `财报已更新${data.cached ? "（缓存）" : ""} · ${data.window_start || ""}→${
@@ -5812,7 +7100,11 @@ function clearPageTimers() {
 }
 
 function trackPageInterval(fn, ms) {
-  const id = window.setInterval(fn, ms);
+  const id = window.setInterval(() => {
+    // Background tabs / covered WebViews should not hammer APIs.
+    if (document.hidden) return;
+    fn();
+  }, ms);
   pageTimers.push(id);
   return id;
 }
@@ -5849,6 +7141,8 @@ function persistPageDataCache() {
           sectorSymbol: state.sectorSymbol,
           sectorTf: state.sectorTf,
           sectorCache: state.sectorCache || {},
+          usMarkets: state.usMarkets || null,
+          usFuturesTf: state.usFuturesTf || "intraday",
         })
       );
     }
@@ -5859,6 +7153,46 @@ function persistPageDataCache() {
           at: Date.now(),
           markets: state.markets,
           marketTf: state.marketTf,
+        })
+      );
+    }
+    if (PAGE === "earnings" && state.earnings) {
+      sessionStorage.setItem(
+        pageDataKey("earnings"),
+        JSON.stringify({
+          at: Date.now(),
+          earnings: state.earnings,
+          earningsDate: state.earningsDate,
+          earningsSession: state.earningsSession,
+          earningsQ: state.earningsQ,
+        })
+      );
+    }
+    if (PAGE === "intel" && state.intel) {
+      sessionStorage.setItem(
+        pageDataKey("intel"),
+        JSON.stringify({
+          at: Date.now(),
+          intel: state.intel,
+          category: state.category,
+          sentiment: state.sentiment,
+          sort: state.sort,
+          q: state.q,
+          watchOnly: state.watchOnly,
+          holdingsOnly: state.holdingsOnly,
+          holdingFilter: state.holdingFilter,
+        })
+      );
+    }
+    if (PAGE === "chains" && state.chains) {
+      // Persist last desk paint so tab switches don't wait on /api/chains.
+      sessionStorage.setItem(
+        pageDataKey("chains"),
+        JSON.stringify({
+          at: Date.now(),
+          chains: state.chains,
+          chainId: state.chainId,
+          chainQ: state.chainQ,
         })
       );
     }
@@ -5891,12 +7225,45 @@ function paintFromPageDataCache(page = PAGE) {
     return true;
   }
   if (page === "sectors" && row.sectors) {
-    state.sectors = row.sectors;
-    if (row.sectorId) state.sectorId = row.sectorId;
-    if (row.sectorSymbol) state.sectorSymbol = row.sectorSymbol;
-    if (row.sectorTf) state.sectorTf = row.sectorTf;
     if (row.sectorCache) state.sectorCache = row.sectorCache;
-    renderSectorDesk(row.sectors);
+    if (row.sectorTf) state.sectorTf = row.sectorTf;
+    // URL deep-link (?sector=&symbol=) wins over stale localStorage.
+    const params = new URLSearchParams(location.search);
+    const qSector = (params.get("sector") || "").trim().toLowerCase();
+    const qSymbol = (params.get("symbol") || "").trim().toUpperCase();
+    const wantSector = qSector || row.sectorId || "";
+    const wantSymbol = qSymbol || row.sectorSymbol || "";
+    if (wantSector) state.sectorId = wantSector;
+    if (wantSymbol) state.sectorSymbol = wantSymbol;
+    const desk =
+      (wantSector && sectorCacheGet(wantSector)) ||
+      (wantSector &&
+      row.sectors?.active_sector_id === wantSector
+        ? row.sectors
+        : null);
+    if (desk) {
+      state.sectors = desk;
+      if (wantSymbol) {
+        state.sectors = {
+          ...desk,
+          selected_symbol: wantSymbol,
+          selected_pick:
+            (desk.picks || []).find((p) => p.symbol === wantSymbol) ||
+            desk.selected_pick,
+        };
+      }
+      renderSectorDesk(state.sectors);
+    } else {
+      // Don't flash the wrong sector while network refresh runs.
+      state.sectors = null;
+      if (els.sectorPickList) {
+        els.sectorPickList.innerHTML = '<p class="empty">加载成分股…</p>';
+      }
+    }
+    if (row.usMarkets) {
+      if (row.usFuturesTf) state.usFuturesTf = row.usFuturesTf;
+      renderUsMarketsDesk(row.usMarkets);
+    }
     return true;
   }
   if (page === "markets" && row.markets) {
@@ -5905,7 +7272,522 @@ function paintFromPageDataCache(page = PAGE) {
     renderMarkets(row.markets);
     return true;
   }
+  if (page === "earnings" && row.earnings) {
+    if (row.earningsDate != null) state.earningsDate = row.earningsDate;
+    if (row.earningsSession) state.earningsSession = row.earningsSession;
+    if (row.earningsQ != null) state.earningsQ = row.earningsQ;
+    if (els.earningsQ && state.earningsQ) els.earningsQ.value = state.earningsQ;
+    renderEarningsDesk(row.earnings);
+    return true;
+  }
+  if (page === "intel" && row.intel) {
+    if (row.category) state.category = row.category;
+    if (row.sentiment) state.sentiment = row.sentiment;
+    if (row.sort) state.sort = row.sort;
+    if (row.q != null) state.q = row.q;
+    if (row.watchOnly != null) state.watchOnly = row.watchOnly;
+    if (row.holdingsOnly != null) state.holdingsOnly = row.holdingsOnly;
+    if (row.holdingFilter != null) state.holdingFilter = row.holdingFilter;
+    state.intel = row.intel;
+    const data = row.intel;
+    const allEvents = [
+      ...(data.event_threads || []),
+      ...(data.events || []),
+    ];
+    state.eventsById = {};
+    for (const event of allEvents) {
+      if (event?.id) state.eventsById[event.id] = event;
+    }
+    renderMood(data.sentiment_summary);
+    renderLiveBriefing(data.live_briefing);
+    renderSpotlight(data.bearish_spotlight);
+    renderWarDesk(data.war_desk);
+    renderBriefStrip(data);
+    renderEventThreads(data.event_threads);
+    renderDayTimeline(data.timeline);
+    renderWatchHits(data.watch_hits);
+    renderFeed(data.items);
+    renderDigest(data.digest);
+    return true;
+  }
+  if (page === "chains" && row.chains) {
+    if (row.chainId != null) state.chainId = row.chainId;
+    if (row.chainQ != null) state.chainQ = row.chainQ;
+    if (els.chainsQ && state.chainQ) els.chainsQ.value = state.chainQ;
+    renderChainsDesk(row.chains);
+    return true;
+  }
   return false;
+}
+
+function syncChainsQuery() {
+  // Preserve ?app=1 and other existing query flags (match syncSectorQuery).
+  const params = new URLSearchParams(location.search);
+  if (state.chainQ) params.set("q", state.chainQ);
+  else params.delete("q");
+  if (state.chainId) params.set("chain", state.chainId);
+  else params.delete("chain");
+  const qs = params.toString();
+  const next = `${location.pathname}${qs ? `?${qs}` : ""}${location.hash || ""}`;
+  if (next !== `${location.pathname}${location.search}${location.hash || ""}`) {
+    history.replaceState(null, "", next);
+  }
+}
+
+function renderChainsSuggest(catalog) {
+  if (!els.chainsSuggest) return;
+  const list = catalog || [];
+  els.chainsSuggest.innerHTML = list
+    .map(
+      (c) =>
+        `<button type="button" class="chains-suggest-chip" data-chain-id="${escapeHtml(
+          c.id
+        )}" data-chain-q="${escapeHtml(c.label)}">${escapeHtml(
+          c.label
+        )}</button>`
+    )
+    .join("");
+}
+
+function chainsCompanyRowHtml(c) {
+  const sym = String(c.symbol || "").toUpperCase();
+  const held = isInHoldings(sym);
+  const sector = c.sector || "technology";
+  const core = Boolean(c.core);
+  return `
+    <div class="chains-co-row ${held ? "in-holding" : ""} ${
+      core ? "is-core" : ""
+    }" data-symbol="${escapeHtml(sym)}">
+      <a class="chains-co-main" href="/sectors?sector=${encodeURIComponent(
+        sector
+      )}&symbol=${encodeURIComponent(sym)}">
+        <span class="chains-co-name">${escapeHtml(c.name || sym)}</span>
+        <span class="chains-co-sym-wrap">
+          <span class="chains-co-sym">${escapeHtml(sym)}</span>
+          ${
+            core
+              ? '<span class="chains-co-core-tag" title="核心标的">核心</span>'
+              : ""
+          }
+        </span>
+        ${
+          c.note
+            ? `<span class="chains-co-note">${escapeHtml(c.note)}</span>`
+            : ""
+        }
+      </a>
+      <button
+        type="button"
+        class="sector-hold-btn ${held ? "is-held" : ""}"
+        data-hold-symbol="${escapeHtml(sym)}"
+        data-hold-name="${escapeHtml(c.name || "")}"
+        data-hold-action="${held ? "remove" : "add"}"
+        title="${held ? `从持仓移除 ${sym}` : `加入持仓 ${sym}`}"
+        aria-label="${held ? `从持仓移除 ${sym}` : `加入持仓 ${sym}`}"
+      >${held ? "−" : "+"}</button>
+    </div>
+  `;
+}
+
+function sortChainCompanies(list) {
+  return (list || [])
+    .slice()
+    .sort((a, b) => {
+      const ac = a?.core ? 0 : 1;
+      const bc = b?.core ? 0 : 1;
+      if (ac !== bc) return ac - bc;
+      return String(a?.symbol || "").localeCompare(String(b?.symbol || ""));
+    });
+}
+
+function chainsMindmapStages(chain) {
+  const flow = Array.isArray(chain.top_flow) ? chain.top_flow : [];
+  const defaults = [
+    { id: "support", label: "上游支撑", tone: "support" },
+    { id: "core", label: "中游核心", tone: "core" },
+    { id: "downstream", label: "下游应用", tone: "app" },
+  ];
+  const stages = (flow.length ? flow : defaults).map((stage, idx) => ({
+    id: stage.id || defaults[idx]?.id || `stage_${idx}`,
+    label: stage.label || defaults[idx]?.label || "环节",
+    tone: stage.tone || defaults[idx]?.tone || "core",
+    panels: [],
+  }));
+  const byTone = { support: 0, core: 1, app: 2 };
+  const fallbackIdx = (tone) =>
+    byTone[tone] != null ? Math.min(byTone[tone], stages.length - 1) : 1;
+
+  for (const panel of chain.panels || []) {
+    const tone = panel.tone || "core";
+    let idx = stages.findIndex((s) => s.tone === tone || s.id === tone);
+    if (idx < 0) idx = fallbackIdx(tone);
+    stages[idx].panels.push(panel);
+  }
+  // Prefer branch node labels when a stage has no panels yet.
+  for (const branch of chain.branches || []) {
+    const tone = branch.tone || "core";
+    let idx = stages.findIndex(
+      (s) => s.tone === tone || s.id === branch.parent || s.id === tone
+    );
+    if (idx < 0 || stages[idx].panels.length) continue;
+    for (const node of branch.nodes || []) {
+      stages[idx].panels.push({
+        id: node.id,
+        label: node.label || node.id,
+        tone,
+        _virtual: true,
+      });
+    }
+  }
+  return stages.filter((s) => s.panels.length);
+}
+
+function chainsMmLeafHtml(panel, tone) {
+  const id = panel.id || "";
+  const tag = panel._virtual ? "span" : "button";
+  const attrs = panel._virtual
+    ? ""
+    : ` type="button" data-panel-id="${escapeHtml(id)}"`;
+  return `<${tag} class="chains-mm-leaf tone-${escapeHtml(tone)}"${attrs}>${escapeHtml(
+    panel.label || id
+  )}</${tag}>`;
+}
+
+function chainsMmStageBlock(stage, side) {
+  if (!stage) return '<div class="chains-mm-stage is-empty"></div>';
+  const leaves = (stage.panels || [])
+    .map((p) => chainsMmLeafHtml(p, stage.tone))
+    .join("");
+  return `
+    <div class="chains-mm-stage side-${escapeHtml(side)} tone-${escapeHtml(
+      stage.tone
+    )}" data-tone="${escapeHtml(stage.tone)}" data-side="${escapeHtml(side)}">
+      <div class="chains-mm-stage-label">${escapeHtml(stage.label)}</div>
+      <div class="chains-mm-leaves">${leaves}</div>
+    </div>`;
+}
+
+function renderChainsMindmap(chain) {
+  if (!els.chainsMindmap) return;
+  const stages = chainsMindmapStages(chain);
+  const rootLabel = (chain.label || "产业链").replace(/产业链$/, "") || "产业链";
+  const left =
+    stages.find((s) => s.tone === "support") ||
+    stages.find((s) => /support|upstream|上游|材料/.test(`${s.id}${s.label}`));
+  const right =
+    stages.find((s) => s.tone === "app") ||
+    stages.find((s) => /app|downstream|下游|应用|补能|出行/.test(`${s.id}${s.label}`));
+  const bottom =
+    stages.find((s) => s.tone === "core") ||
+    stages.find((s) => s !== left && s !== right) ||
+    stages[0];
+  // Any leftover stages append under bottom so nothing is dropped.
+  const extras = stages.filter(
+    (s) => s && s !== left && s !== right && s !== bottom
+  );
+
+  els.chainsMindmap.innerHTML = `
+    <div class="chains-mm-shell is-lr">
+      <svg class="chains-mm-links" aria-hidden="true"></svg>
+      <div class="chains-mm-lr">
+        <div class="chains-mm-rail left">${chainsMmStageBlock(left, "left")}</div>
+        <div class="chains-mm-center">
+          <div class="chains-mm-root">
+            <span class="chains-mm-root-kicker">产业逻辑脑图</span>
+            <strong>${escapeHtml(rootLabel)}</strong>
+          </div>
+          ${chainsMmStageBlock(bottom, "bottom")}
+          ${extras.map((s) => chainsMmStageBlock(s, "bottom")).join("")}
+        </div>
+        <div class="chains-mm-rail right">${chainsMmStageBlock(right, "right")}</div>
+      </div>
+    </div>`;
+
+  els.chainsMindmap.querySelectorAll("[data-panel-id]").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      const id = btn.getAttribute("data-panel-id");
+      const target = id && document.getElementById(`chain-panel-${id}`);
+      if (!target) return;
+      target.scrollIntoView({ behavior: "smooth", block: "nearest" });
+      target.classList.add("is-flash");
+      window.setTimeout(() => target.classList.remove("is-flash"), 1200);
+    });
+  });
+
+  requestAnimationFrame(() => {
+    drawChainsMindmapLinks();
+    requestAnimationFrame(() => drawChainsMindmapLinks());
+  });
+}
+
+function drawChainsMindmapLinks() {
+  const shell = els.chainsMindmap?.querySelector(".chains-mm-shell");
+  const svg = els.chainsMindmap?.querySelector(".chains-mm-links");
+  const root = els.chainsMindmap?.querySelector(".chains-mm-root");
+  if (!shell || !svg || !root) return;
+  if (window.matchMedia("(max-width: 900px)").matches) {
+    svg.innerHTML = "";
+    return;
+  }
+  const shellBox = shell.getBoundingClientRect();
+  const rootBox = root.getBoundingClientRect();
+  const w = Math.max(1, shell.clientWidth);
+  const h = Math.max(1, shell.clientHeight);
+  svg.setAttribute("viewBox", `0 0 ${w} ${h}`);
+  svg.setAttribute("width", String(w));
+  svg.setAttribute("height", String(h));
+
+  const rx = rootBox.left + rootBox.width / 2 - shellBox.left;
+  const ry = rootBox.top + rootBox.height / 2 - shellBox.top;
+  const paths = [];
+
+  els.chainsMindmap.querySelectorAll(".chains-mm-stage:not(.is-empty)").forEach((stage) => {
+    const side = stage.dataset.side || "bottom";
+    const label = stage.querySelector(".chains-mm-stage-label");
+    if (!label) return;
+    const lb = label.getBoundingClientRect();
+    const lx = lb.left + lb.width / 2 - shellBox.left;
+    const ly = lb.top + lb.height / 2 - shellBox.top;
+    const tone = stage.dataset.tone || "core";
+
+    let x0 = rx;
+    let y0 = ry;
+    if (side === "left") {
+      x0 = rootBox.left - shellBox.left;
+      y0 = ry;
+    } else if (side === "right") {
+      x0 = rootBox.right - shellBox.left;
+      y0 = ry;
+    } else {
+      x0 = rx;
+      y0 = rootBox.bottom - shellBox.top;
+    }
+
+    const c1x =
+      side === "left" ? x0 - Math.abs(x0 - lx) * 0.35 : side === "right" ? x0 + Math.abs(lx - x0) * 0.35 : x0;
+    const c1y = side === "bottom" ? y0 + Math.abs(ly - y0) * 0.35 : y0;
+    const c2x =
+      side === "left" ? lx + Math.abs(x0 - lx) * 0.35 : side === "right" ? lx - Math.abs(lx - x0) * 0.35 : lx;
+    const c2y = side === "bottom" ? ly - Math.abs(ly - y0) * 0.35 : ly;
+    paths.push(
+      `<path class="chains-mm-link tone-${tone}" d="M ${x0} ${y0} C ${c1x} ${c1y}, ${c2x} ${c2y}, ${lx} ${ly}" fill="none" />`
+    );
+
+    stage.querySelectorAll(".chains-mm-leaf").forEach((leaf) => {
+      const fb = leaf.getBoundingClientRect();
+      const fx = fb.left + fb.width / 2 - shellBox.left;
+      const fy = fb.top + fb.height / 2 - shellBox.top;
+      let sx = lx;
+      let sy = ly;
+      if (side === "left") {
+        sx = lb.left - shellBox.left;
+        sy = ly;
+      } else if (side === "right") {
+        sx = lb.right - shellBox.left;
+        sy = ly;
+      } else {
+        sx = lx;
+        sy = lb.bottom - shellBox.top;
+      }
+      const mx = (sx + fx) / 2;
+      const my = (sy + fy) / 2;
+      paths.push(
+        `<path class="chains-mm-link soft tone-${tone}" d="M ${sx} ${sy} Q ${mx} ${my}, ${fx} ${fy}" fill="none" />`
+      );
+    });
+  });
+  svg.innerHTML = paths.join("");
+}
+
+function renderChainsPanorama(chain) {
+  if (!els.chainsPanels) return;
+  renderChainsMindmap(chain);
+
+  els.chainsPanels.innerHTML = (chain.panels || [])
+    .map((panel) => {
+      const cos = sortChainCompanies(panel.companies || []);
+      const coreN = cos.filter((c) => c.core).length;
+      return `
+        <article class="chains-panel tone-${escapeHtml(panel.tone || "core")}" id="chain-panel-${escapeHtml(
+          panel.id
+        )}">
+          <header class="chains-panel-head">
+            <h3>${escapeHtml(panel.label || "")}</h3>
+            <p>${escapeHtml(
+              panel.blurb || ""
+            )}${
+              cos.length
+                ? `${panel.blurb ? " · " : ""}${cos.length} 只${
+                    coreN ? ` · 核心 ${coreN}` : ""
+                  }`
+                : ""
+            }</p>
+          </header>
+          <div class="chains-panel-list" tabindex="0" aria-label="${escapeHtml(
+            panel.label || "股票列表"
+          )}可滚动">
+            ${
+              cos.length
+                ? cos.map(chainsCompanyRowHtml).join("")
+                : '<p class="empty">暂无美股映射</p>'
+            }
+          </div>
+        </article>`;
+    })
+    .join("");
+
+  els.chainsPanels.querySelectorAll(".sector-hold-btn").forEach((btn) => {
+    btn.addEventListener("click", (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      const sym = btn.getAttribute("data-hold-symbol") || "";
+      const name = btn.getAttribute("data-hold-name") || "";
+      const action = btn.getAttribute("data-hold-action") || "add";
+      if (action === "remove") {
+        if (!confirm(`确定从持仓移除 ${sym}？`)) return;
+      }
+      toggleSectorHolding(sym, name);
+    });
+  });
+  // Keep wheel/trackpad scroll inside panel lists without growing the card.
+  els.chainsPanels.querySelectorAll(".chains-panel-list").forEach((list) => {
+    list.addEventListener(
+      "wheel",
+      (event) => {
+        if (list.scrollHeight <= list.clientHeight + 1) return;
+        const dy = event.deltaY;
+        const top = list.scrollTop;
+        const max = list.scrollHeight - list.clientHeight;
+        const atTop = top <= 0 && dy < 0;
+        const atBottom = top >= max - 1 && dy > 0;
+        if (!atTop && !atBottom) {
+          event.stopPropagation();
+        }
+      },
+      { passive: true }
+    );
+  });
+
+  if (!window.__chainsMindmapResizeBound) {
+    window.__chainsMindmapResizeBound = true;
+    window.addEventListener("resize", () => {
+      if (els.chainsMindmap && !els.chainsMap?.classList.contains("is-hidden")) {
+        drawChainsMindmapLinks();
+      }
+    });
+  }
+}
+
+function renderChainsDesk(data) {
+  if (!data) return;
+  state.chains = data;
+  state.chainQ = data.q || state.chainQ || "";
+  state.chainId = data.matched ? data.chain?.id || "" : "";
+  if (els.chainsQ && state.chainQ && els.chainsQ.value !== state.chainQ) {
+    els.chainsQ.value = state.chainQ;
+  }
+  renderChainsSuggest(data.catalog || []);
+
+  const matched = Boolean(data.matched && data.chain);
+  if (els.chainsEmpty) {
+    els.chainsEmpty.classList.toggle("is-hidden", matched);
+    if (!matched) {
+      const title = els.chainsEmpty.querySelector(".chains-empty-title");
+      const text = els.chainsEmpty.querySelector(".chains-empty-text");
+      if (title) {
+        title.textContent = data.q ? "未匹配到产业链" : "从搜索开始";
+      }
+      if (text) {
+        text.textContent =
+          data.message ||
+          "输入行业关键词后，将生成全产业链逻辑图，并列出对应美股。";
+      }
+    }
+  }
+  if (els.chainsMap) els.chainsMap.classList.toggle("is-hidden", !matched);
+
+  if (matched) {
+    const chain = data.chain;
+    if (els.chainsMapTitle) els.chainsMapTitle.textContent = chain.label || "产业链";
+    if (els.chainsMapBlurb) {
+      els.chainsMapBlurb.textContent = chain.blurb || "";
+    }
+    if (els.chainsBlurb) {
+      els.chainsBlurb.textContent =
+        chain.blurb ||
+        "输入行业关键词，生成上下游逻辑图，并标注美股代码；可一键加入持仓。";
+    }
+    renderChainsPanorama(chain);
+    setStatus(
+      data.generated
+        ? `${chain.label} · 已按关键词自动生成`
+        : `${chain.label} · 全景逻辑图已生成`
+    );
+  } else {
+    setStatus(data.message || "输入行业关键词生成产业链");
+  }
+  syncChainsQuery();
+}
+
+async function loadChainsDesk({ q, chain } = {}) {
+  if (PAGE !== "chains") return null;
+  const query = q ?? state.chainQ;
+  const chainId = chain ?? state.chainId;
+  if (query) {
+    setStatus(`正在根据「${query}」生成全产业链逻辑图…`);
+    if (els.chainsEmpty) {
+      els.chainsEmpty.classList.remove("is-hidden");
+      const title = els.chainsEmpty.querySelector(".chains-empty-title");
+      const text = els.chainsEmpty.querySelector(".chains-empty-text");
+      if (title) title.textContent = "正在生成…";
+      if (text) {
+        text.textContent =
+          "正在组合上下游环节并检索相关美股，通常几秒内完成。";
+      }
+    }
+    if (els.chainsMap) els.chainsMap.classList.add("is-hidden");
+  }
+  try {
+    const params = new URLSearchParams();
+    if (query) params.set("q", query);
+    if (chainId) params.set("chain", chainId);
+    const res = await fetch(`/api/chains?${params.toString()}`);
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const data = await res.json();
+    renderChainsDesk(data);
+    persistPageDataCache();
+    return data;
+  } catch (err) {
+    setStatus(`产业链加载失败：${err.message || err}`);
+    if (els.chainsEmpty) {
+      els.chainsEmpty.classList.remove("is-hidden");
+      const text = els.chainsEmpty.querySelector(".chains-empty-text");
+      if (text) text.textContent = `加载失败：${err.message || err}`;
+    }
+    if (els.chainsMap) els.chainsMap.classList.add("is-hidden");
+    return null;
+  }
+}
+
+function bindChainsDesk() {
+  if (PAGE !== "chains" || state.chainsBound) return;
+  state.chainsBound = true;
+  els.chainsSearch?.addEventListener("submit", (event) => {
+    event.preventDefault();
+    state.chainQ = (els.chainsQ?.value || "").trim();
+    state.chainId = "";
+    void loadChainsDesk({ q: state.chainQ, chain: "" });
+  });
+  els.chainsSuggest?.addEventListener("click", (event) => {
+    const chip = event.target.closest("[data-chain-id]");
+    if (!chip) return;
+    const id = chip.getAttribute("data-chain-id") || "";
+    const label = chip.getAttribute("data-chain-q") || "";
+    state.chainId = id;
+    state.chainQ = label;
+    if (els.chainsQ) els.chainsQ.value = label;
+    void loadChainsDesk({ q: label, chain: id });
+  });
 }
 
 function bootPage() {
@@ -5943,12 +7825,17 @@ function bootPage() {
         soft: true,
       });
     }, 90 * 1000);
+    // Align with backend snap TTL (~0.75–1s); 500ms was pure waste.
     trackPageInterval(() => refreshActiveIntraday(), 1000);
   } else if (PAGE === "markets") {
     const painted = paintFromPageDataCache("markets");
-    if (painted) restoreScrollPosition();
+    if (painted) {
+      restoreScrollPosition();
+      setStatus("已恢复市场缓存 · 后台刷新中…");
+    }
     loadMarketsDesk();
-    trackPageInterval(() => loadMarketsDesk(), 90 * 1000);
+    // Markets board TTL ~2s; avoid force so FRED isn't hammered.
+    trackPageInterval(() => loadMarketsDesk({ force: false }), 2500);
   } else if (PAGE === "sectors") {
     const params = new URLSearchParams(location.search);
     const qSector = (params.get("sector") || "").trim().toLowerCase();
@@ -5956,29 +7843,98 @@ function bootPage() {
     if (qSector) state.sectorId = qSector;
     if (qSymbol) state.sectorSymbol = qSymbol;
     const painted = paintFromPageDataCache("sectors");
+    // Deep-link query wins over stale localStorage (e.g. ?sector=health).
+    if (qSector) state.sectorId = qSector;
+    if (qSymbol) state.sectorSymbol = qSymbol;
     if (painted) {
+      const cachedDesk = qSector ? sectorCacheGet(qSector) : null;
+      if (cachedDesk) {
+        renderSectorDesk(cachedDesk);
+      } else if (
+        qSector &&
+        state.sectors?.active_sector_id &&
+        state.sectors.active_sector_id !== qSector
+      ) {
+        // Avoid flashing the wrong sector while the network refresh runs.
+        if (els.sectorPickList) {
+          els.sectorPickList.innerHTML = '<p class="empty">加载成分股…</p>';
+        }
+      } else if (state.sectors) {
+        renderSectorDesk(state.sectors);
+      }
       restoreScrollPosition();
       setStatus("已恢复板块缓存 · 后台刷新中…");
     }
     bindSectorDesk();
-    refreshHoldingSymbols().finally(() =>
-      loadSectorDesk().then(() => {
-        if (state.sectorTf === "intraday") refreshActiveIntraday();
-        if (!pickHasChart(state.sectors?.selected_pick)) {
-          ensureMultiTfChartUpgrade();
-        }
-      })
-    );
+    // Tape first (quotes + 分时), then upgrade 日/月/季 in background.
+    void loadUsMarketsDesk({ mode: "tape", force: true }).then(() => {
+      persistPageDataCache();
+      void loadUsMarketsDesk({ mode: "full", force: false });
+    });
+    void refreshHoldingSymbols().then(() => {
+      if (state.sectors) renderSectorPicks(state.sectors);
+    });
+    void loadSectorDesk().then(() => {
+      // Lite list returns first; chart/news catch up without blocking 成分股.
+      if (state.sectorTf === "intraday") {
+        refreshActiveIntraday({ force: true });
+      }
+      if (
+        !pickHasChart(state.sectors?.selected_pick) ||
+        !pickHasIntraday(state.sectors?.selected_pick)
+      ) {
+        ensureMultiTfChartUpgrade({ force: false });
+      }
+      persistPageDataCache();
+    });
     trackPageInterval(() => loadSectorDesk(), 90 * 1000);
-    trackPageInterval(() => refreshActiveIntraday(), 1000);
+    // Keep 盘前/盘中/盘后/夜盘 badges in sync with ET clock between polls.
+    trackPageInterval(() => {
+      if (state.sectors?.picks?.length) renderSectorPicks(state.sectors);
+    }, 30 * 1000);
+    // Soft tape poll — never force over an in-flight request.
+    trackPageInterval(() => {
+      if ((state.usFuturesTf || "intraday") === "intraday") {
+        loadUsMarketsDesk({ force: false, mode: "tape" });
+      }
+    }, 5000);
+    trackPageInterval(() => {
+      loadUsMarketsDesk({ force: false, mode: "full" });
+    }, 90 * 1000);
+    trackPageInterval(() => refreshHoldingSymbols({ force: true }), 120 * 1000);
+    trackPageInterval(() => refreshActiveIntraday(), 1500);
   } else if (PAGE === "earnings") {
     bindEarningsDesk();
+    const painted = paintFromPageDataCache("earnings");
+    if (painted) {
+      restoreScrollPosition();
+      setStatus("已恢复财报缓存 · 后台刷新中…");
+    }
     loadEarningsDesk();
     trackPageInterval(() => loadEarningsDesk(), 5 * 60 * 1000);
   } else if (PAGE === "intel") {
     readIntelQueryFlags();
+    const painted = paintFromPageDataCache("intel");
+    if (painted) {
+      restoreScrollPosition();
+      setStatus("已恢复情报缓存 · 后台刷新中…");
+    }
     loadIntel();
     trackPageInterval(() => loadIntel(), 5 * 60 * 1000);
+  } else if (PAGE === "chains") {
+    const params = new URLSearchParams(location.search);
+    const qText = (params.get("q") || "").trim();
+    const qChain = (params.get("chain") || "").trim();
+    if (qText) state.chainQ = qText;
+    if (qChain) state.chainId = qChain;
+    if (els.chainsQ && qText) els.chainsQ.value = qText;
+    bindChainsDesk();
+    const painted = paintFromPageDataCache("chains");
+    if (painted) {
+      restoreScrollPosition();
+      setStatus("已恢复产业链缓存 · 后台刷新中…");
+    }
+    void refreshHoldingSymbols().then(() => loadChainsDesk());
   } else if (PAGE === "settings") {
     loadSettingsPage();
     loadAccessTip();
@@ -6037,6 +7993,7 @@ function restoreScrollPosition() {
 
 function navCycleRoutes() {
   const settingsHref = AUTHED ? "/settings" : "/login";
+  // Keep order aligned with mobile tabbar (includes 产业链).
   return [
     {
       id: "desk",
@@ -6044,14 +8001,14 @@ function navCycleRoutes() {
       match: (p) => p === "/",
     },
     {
-      id: "markets",
-      href: "/markets",
-      match: (p) => p === "/markets",
-    },
-    {
       id: "sectors",
       href: "/sectors",
       match: (p) => p === "/sectors",
+    },
+    {
+      id: "markets",
+      href: "/markets",
+      match: (p) => p === "/markets",
     },
     {
       id: "earnings",
@@ -6062,6 +8019,11 @@ function navCycleRoutes() {
       id: "intel",
       href: "/intel",
       match: (p) => p === "/intel",
+    },
+    {
+      id: "chains",
+      href: "/chains",
+      match: (p) => p === "/chains",
     },
     {
       id: AUTHED ? "settings" : "login",
@@ -6092,19 +8054,28 @@ function navigateToHref(href) {
   const url = new URL(href, location.origin);
   const samePath = url.pathname === location.pathname;
 
+  // Keep native shell mode when opened via ?app=1 (UA-based apps are fine either way).
+  if (
+    /[?&]app=1(?:&|$)/.test(location.search) &&
+    !url.searchParams.has("app")
+  ) {
+    url.searchParams.set("app", "1");
+  }
+
   // Snapshot desk/sectors data before leaving so the next visit paints instantly.
   persistPageDataCache();
   saveScrollPosition();
 
   if (samePath) {
+    const search = url.search || "";
     if (url.hash) {
-      history.pushState(null, "", `${url.pathname}${url.hash}`);
+      history.pushState(null, "", `${url.pathname}${search}${url.hash}`);
       syncNavActive();
       restoreScrollPosition();
       return;
     }
     if (location.hash) {
-      history.pushState(null, "", url.pathname);
+      history.pushState(null, "", `${url.pathname}${search}`);
       syncNavActive();
       restoreScrollPosition();
       return;
@@ -6316,6 +8287,104 @@ function bindThemeChrome() {
   scheduleAutoThemeRefresh();
 }
 
+function isCompactViewport() {
+  return (
+    window.matchMedia("(max-width: 720px)").matches ||
+    document.documentElement.classList.contains("pulse-native-phone")
+  );
+}
+
+function bindSectorsDepthToggles() {
+  const futuresBlock = document.getElementById("us-futures-block");
+  const futuresBtn = document.getElementById("btn-us-futures-toggle");
+  const mapPane = document.getElementById("sector-map");
+  const mapCanvas = document.getElementById("sector-map-canvas");
+  const mapBtn = document.getElementById("btn-sector-map-toggle");
+  if (!futuresBlock && !mapPane) return;
+
+  const compact = isCompactViewport();
+
+  if (futuresBlock && futuresBtn) {
+    const setFutures = (open) => {
+      futuresBlock.hidden = !open;
+      futuresBtn.setAttribute("aria-expanded", open ? "true" : "false");
+      futuresBtn.textContent = open ? "收起期货" : "期货图";
+    };
+    // Phone: strip first, charts on demand. Desktop/tablet: keep charts open.
+    setFutures(!compact);
+    futuresBtn.addEventListener("click", () => setFutures(futuresBlock.hidden));
+  }
+
+  if (mapPane && mapCanvas && mapBtn) {
+    const setMap = (open, { loadIfOpening = false } = {}) => {
+      const wasCollapsed = mapPane.classList.contains("is-map-collapsed");
+      mapPane.classList.toggle("is-map-collapsed", !open);
+      mapBtn.setAttribute("aria-expanded", open ? "true" : "false");
+      mapBtn.textContent = open ? "收起" : "涨跌图";
+      // Lazy-load map only when user expands a previously collapsed pane.
+      if (open && loadIfOpening && wasCollapsed) {
+        void loadSectorMap({ force: false });
+      }
+    };
+    // Phone native: collapse map by default to reach desk faster.
+    const phoneApp = document.documentElement.classList.contains("pulse-native-phone");
+    setMap(!phoneApp);
+    mapBtn.addEventListener("click", () =>
+      setMap(mapPane.classList.contains("is-map-collapsed"), {
+        loadIfOpening: true,
+      }),
+    );
+  }
+}
+
+function bindVisibilityResume() {
+  document.addEventListener("visibilitychange", () => {
+    if (document.hidden) return;
+    if (PAGE === "desk" && AUTHED) {
+      void refreshActiveIntraday();
+    } else if (PAGE === "markets") {
+      void loadMarketsDesk({ force: false });
+    } else if (PAGE === "sectors") {
+      void refreshActiveIntraday();
+      void loadUsMarketsDesk({ force: false, mode: "tape" });
+    }
+  });
+}
+
+function bindNavPrefetch() {
+  // Warm next module HTML on hover/touch so tab switches feel snappier.
+  document.querySelectorAll("[data-nav-cycle] a[href]").forEach((a) => {
+    let warmed = false;
+    const warm = () => {
+      if (warmed) return;
+      warmed = true;
+      const href = a.getAttribute("href");
+      if (!href || href.startsWith("#")) return;
+      try {
+        const url = new URL(href, location.origin);
+        if (
+          /[?&]app=1(?:&|$)/.test(location.search) &&
+          !url.searchParams.has("app")
+        ) {
+          url.searchParams.set("app", "1");
+        }
+        const link = document.createElement("link");
+        link.rel = "prefetch";
+        link.href = `${url.pathname}${url.search}`;
+        document.head.appendChild(link);
+      } catch {
+        /* ignore */
+      }
+    };
+    a.addEventListener("pointerenter", warm, { once: true });
+    a.addEventListener("touchstart", warm, { once: true, passive: true });
+  });
+}
+
+// Collapse phone map / futures BEFORE boot fetches, so map API can be skipped.
+bindSectorsDepthToggles();
 bootPage();
 bindStickyNavChrome();
 bindThemeChrome();
+bindVisibilityResume();
+bindNavPrefetch();

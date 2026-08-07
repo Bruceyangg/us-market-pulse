@@ -42,7 +42,9 @@ from us_market_pulse.earnings_calendar import (
     parse_day_param,
 )
 from us_market_pulse.market_map import build_market_map
+from us_market_pulse.chains import build_chains_desk
 from us_market_pulse.sectors import build_sector_desk, fetch_intraday_snapshot
+from us_market_pulse.us_markets import build_us_markets_desk
 from us_market_pulse.symbol_lookup import resolve_holding_query, suggest_holdings
 from us_market_pulse.topics import build_war_desk
 from us_market_pulse.portfolio import (
@@ -194,6 +196,11 @@ async def intel_page(request: Request) -> HTMLResponse:
     return _page(request, "intel.html", "intel")
 
 
+@app.get("/chains", response_class=HTMLResponse)
+async def chains_page(request: Request) -> HTMLResponse:
+    return _page(request, "chains.html", "chains")
+
+
 @app.get("/settings", response_class=HTMLResponse)
 async def settings_page(request: Request) -> HTMLResponse:
     return _page(request, "settings.html", "settings")
@@ -262,11 +269,14 @@ async def api_sectors(
     sector: str | None = Query(default=None),
     symbol: str | None = Query(default=None),
 ) -> dict[str, Any]:
-    # Avoid refresh_intel() here — it may refresh the unrelated market board.
-    items = peek_intel_items()
-    if not items and refresh:
-        intel = await refresh_intel(force=False)
-        items = intel.get("items") or []
+    # Never block the desk on a full intel RSS refresh — peek + background warm.
+    # Sector/symbol cards primarily use on-demand Google News in build_sector_desk.
+    items = peek_intel_items() or []
+    if not items:
+        try:
+            asyncio.get_running_loop().create_task(refresh_intel(force=False))
+        except RuntimeError:
+            pass
     desk = await build_sector_desk(
         items,
         force=refresh,
@@ -278,7 +288,7 @@ async def api_sectors(
 
 @app.get("/api/quote/intraday")
 async def api_quote_intraday(
-    symbol: str = Query(..., min_length=1, max_length=16),
+    symbol: str = Query(..., min_length=1, max_length=24),
     refresh: bool = Query(default=False),
 ) -> dict[str, Any]:
     """Shared Yahoo-first 分时 snapshot for holdings + sectors auto-refresh."""
@@ -291,6 +301,22 @@ async def api_quote_intraday(
 @app.get("/api/sectors/map")
 async def api_sectors_map(refresh: bool = Query(default=False)) -> dict[str, Any]:
     return await build_market_map(force=refresh)
+
+
+@app.get("/api/us-markets")
+async def api_us_markets(
+    refresh: bool = Query(default=False),
+    mode: str = Query(default="full"),
+) -> dict[str, Any]:
+    """US markets strip + NQ/ES/YM futures charts for the sectors page.
+
+    mode=tape: refresh strip + 分时 only, preserve cached 日/月/季.
+    mode=full: rebuild all timeframes (first load / TF upgrade).
+    """
+    m = (mode or "full").strip().lower()
+    if m not in {"full", "tape"}:
+        m = "full"
+    return await build_us_markets_desk(force=refresh, mode=m)
 
 
 @app.get("/api/earnings")
@@ -338,6 +364,15 @@ async def api_portfolio_intel(
         "errors": data.get("errors") or [],
         **summary,
     }
+
+
+@app.get("/api/chains")
+async def api_chains(
+    chain: str | None = Query(default=None),
+    node: str | None = Query(default=None),
+    q: str | None = Query(default=None),
+) -> dict[str, Any]:
+    return await build_chains_desk(chain_id=chain, node_id=node, q=q)
 
 
 @app.get("/api/intel")
@@ -491,6 +526,24 @@ async def api_portfolio_lookup(
         "q": query,
         "resolved": resolved,
         "suggestions": suggest_holdings(query, limit=limit) if query else [],
+    }
+
+
+@app.get("/api/portfolio/symbols")
+async def api_portfolio_symbols(request: Request) -> dict[str, Any]:
+    """Lightweight holdings symbols for cross-page +/- tags (no quotes)."""
+    username = require_user(request)
+    data = load_portfolio(username)
+    symbols = [
+        str(h.get("symbol") or "").upper()
+        for h in (data.get("holdings") or [])
+        if str(h.get("symbol") or "").strip()
+    ]
+    return {
+        "symbols": symbols,
+        "selected": str(data.get("selected") or "").upper(),
+        "count": len(symbols),
+        "updated_at": data.get("updated_at") or 0,
     }
 
 

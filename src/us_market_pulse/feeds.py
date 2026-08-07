@@ -8,6 +8,7 @@ import time
 from datetime import datetime, timezone
 from email.utils import parsedate_to_datetime
 from typing import Any
+from urllib.parse import quote_plus
 
 _TAG_RE = re.compile(r"<[^>]+>")
 
@@ -209,7 +210,7 @@ _CACHE: dict[str, Any] = {
     "errors": [],
 }
 _CACHE_TTL = 300  # seconds (intel / RSS)
-_MARKETS_TTL = 90  # fresher tape for intraday charts
+_MARKETS_TTL = 2  # near-real-time for 分时 charts (same sources)
 _FRED_TTL = 300  # FRED indicators on the markets page
 
 
@@ -319,10 +320,13 @@ def _clean_text(value: str | None, limit: int = 280) -> str:
 
 
 async def _fetch_feed(
-    client: httpx.AsyncClient, source: dict[str, str]
+    client: httpx.AsyncClient,
+    source: dict[str, str],
+    *,
+    timeout: float = 20.0,
 ) -> tuple[list[dict[str, Any]], str | None]:
     try:
-        resp = await client.get(source["url"], timeout=20.0)
+        resp = await client.get(source["url"], timeout=timeout)
         resp.raise_for_status()
         parsed = feedparser.parse(resp.content)
     except Exception as exc:  # noqa: BLE001 — surface per-source failures
@@ -413,6 +417,66 @@ async def _fetch_fred_series(
 def peek_intel_items() -> list[dict[str, Any]]:
     """Return cached intel items without refreshing RSS or the market board."""
     return list(_CACHE.get("items") or [])
+
+
+_GN_CACHE: dict[str, dict[str, Any]] = {}
+_GN_TTL = 180.0
+
+
+def google_news_search_url(query: str) -> str:
+    """Build a Google News RSS search URL (en-US)."""
+    q = (query or "").strip() or "US stocks"
+    return (
+        "https://news.google.com/rss/search?q="
+        f"{quote_plus(q)}&hl=en-US&gl=US&ceid=US:en"
+    )
+
+
+async def fetch_google_news(
+    query: str,
+    *,
+    limit: int = 12,
+    source_name: str = "Google News",
+    source_id: str = "gn-search",
+    force: bool = False,
+) -> list[dict[str, Any]]:
+    """On-demand Google News RSS for sector / ticker desks (short TTL cache)."""
+    q = (query or "").strip()
+    if not q:
+        return []
+    cache_key = f"{source_id}:{q.casefold()}:{max(1, min(limit, 20))}"
+    now = time.time()
+    hit = _GN_CACHE.get(cache_key)
+    if (
+        not force
+        and hit
+        and now - float(hit.get("fetched_at") or 0) < _GN_TTL
+    ):
+        return list(hit.get("items") or [])
+
+    source = {
+        "id": source_id,
+        "name": source_name,
+        "category": "markets",
+        "url": google_news_search_url(q),
+    }
+    async with httpx.AsyncClient(
+        headers={"User-Agent": USER_AGENT},
+        follow_redirects=True,
+        timeout=8.0,
+    ) as client:
+        items, _err = await _fetch_feed(client, source, timeout=7.0)
+    # _fetch_feed caps at 12; trim further if needed.
+    out = list(items or [])[: max(1, min(int(limit), 20))]
+    _GN_CACHE[cache_key] = {"fetched_at": now, "items": out}
+    # Bound cache growth.
+    if len(_GN_CACHE) > 48:
+        oldest = sorted(
+            _GN_CACHE.items(), key=lambda kv: float(kv[1].get("fetched_at") or 0)
+        )[:16]
+        for key, _ in oldest:
+            _GN_CACHE.pop(key, None)
+    return out
 
 
 async def refresh_intel(force: bool = False) -> dict[str, Any]:

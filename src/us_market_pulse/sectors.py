@@ -23,15 +23,23 @@ from us_market_pulse.markets import (
     _session_segments,
     fetch_symbol_bundle,
 )
+from us_market_pulse.feeds import fetch_google_news
+from us_market_pulse.feeds import fetch_google_news
 from us_market_pulse.portfolio_intel import match_portfolio_intel
+from us_market_pulse.sentiment import enrich_sentiment
+from us_market_pulse.translate import enrich_titles
 from us_market_pulse.quotes import (
     apply_list_quote_fields,
     build_nasdaq_ohlc_series,
+    derive_list_realtime,
     fetch_day_quotes,
     fetch_nasdaq_daily_bars,
     fetch_nasdaq_intraday,
     fetch_nasdaq_intraday_many,
-    session_from_status,
+    peek_overnight_quote,
+    resolve_list_session,
+    restamp_list_session,
+    session_from_clock,
 )
 from us_market_pulse.topics import TOPICS, filter_topic_items, topic_bearish_analysis
 
@@ -269,43 +277,104 @@ SECTOR_TOPIC_PATTERNS: dict[str, dict[str, Any]] = {
         "label": "AI 板块",
         "blurb": "人工智能、算力、大模型与 AI 基础设施",
         "query": "人工智能 OR AI OR Nvidia",
+        "gn_query": (
+            '("artificial intelligence" OR Nvidia OR OpenAI OR "data center" OR GPU) '
+            "when:7d"
+        ),
     },
     "semis": {
         "id": "semis",
         "label": "半导体",
         "blurb": "芯片、代工、设备与存储周期",
         "query": "半导体 OR chip OR semiconductor",
+        "gn_query": (
+            "(semiconductor OR chip OR TSMC OR ASML OR Nvidia OR AMD) stock when:7d"
+        ),
     },
     "tech": {
         "id": "tech",
         "label": "科技",
         "blurb": "科技巨头与软件硬件联动",
         "query": "科技股 OR Big Tech OR Nasdaq",
+        "gn_query": (
+            '("Big Tech" OR Apple OR Microsoft OR Google OR Meta OR Nasdaq) '
+            "stock when:7d"
+        ),
     },
     "cloud": {
         "id": "cloud",
         "label": "云计算",
         "blurb": "云资本开支、SaaS 与数据中心",
         "query": "云计算 OR cloud OR data center",
+        "gn_query": (
+            '("cloud computing" OR AWS OR Azure OR "data center" OR SaaS) '
+            "stock when:7d"
+        ),
     },
     "energy": {
         "id": "energy",
         "label": "能源",
         "blurb": "油价、天然气与能源股",
         "query": "原油 OR oil OR energy stocks",
+        "gn_query": (
+            "(crude OR oil OR energy stocks OR Exxon OR Chevron) when:7d"
+        ),
     },
     "finance": {
         "id": "finance",
         "label": "金融",
         "blurb": "银行、利率与金融监管",
         "query": "银行 OR banks OR financials",
+        "gn_query": (
+            "(banks OR financials OR Wall Street OR JPMorgan OR Fed rate) "
+            "stock when:7d"
+        ),
     },
     "health": {
         "id": "health",
         "label": "医疗",
         "blurb": "制药、医保与生物科技",
         "query": "制药 OR biotech OR healthcare",
+        "gn_query": (
+            "(biotech OR healthcare OR pharma OR Eli Lilly OR FDA) stock when:7d"
+        ),
     },
+}
+
+# Ticker → English name for Google News queries (VALUE_CHAIN names are often CN).
+_SYMBOL_GN_ALIAS: dict[str, str] = {
+    "NVDA": "Nvidia",
+    "AMD": "AMD",
+    "AVGO": "Broadcom",
+    "ARM": "Arm Holdings",
+    "SMCI": "Super Micro",
+    "PLTR": "Palantir",
+    "SNOW": "Snowflake",
+    "META": "Meta",
+    "GOOGL": "Google",
+    "GOOG": "Google",
+    "MSFT": "Microsoft",
+    "AAPL": "Apple",
+    "AMZN": "Amazon",
+    "TSLA": "Tesla",
+    "JPM": "JPMorgan",
+    "BAC": "Bank of America",
+    "GS": "Goldman Sachs",
+    "XOM": "Exxon",
+    "CVX": "Chevron",
+    "LLY": "Eli Lilly",
+    "JNJ": "Johnson & Johnson",
+    "PFE": "Pfizer",
+    "MRK": "Merck",
+    "ABBV": "AbbVie",
+    "ORCL": "Oracle",
+    "DDOG": "Datadog",
+    "NFLX": "Netflix",
+    "ISRG": "Intuitive Surgical",
+    "PATH": "UiPath",
+    "QCOM": "Qualcomm",
+    "TSM": "TSMC",
+    "ASML": "ASML",
 }
 
 VALUE_CHAIN: dict[str, dict[str, Any]] = {
@@ -550,12 +619,15 @@ _CACHE_TTL = 180.0
 # Per-sector pick boards (quotes + earnings) — avoids refetch on every symbol click
 _PICKS_CACHE: dict[str, Any] = {}
 _PICKS_TTL = 180.0
+# Serve slightly stale pick boards with a soft quote refresh (SWR).
+_PICKS_STALE_TTL = 900.0
 # Per-symbol Yahoo quote/earnings snippets shared across sectors
 _SYM_CACHE: dict[str, Any] = {}
 _SYM_TTL = 180.0
 # Shared holdings/sectors 分时 poll — short TTL so Yahoo-like tape stays fresh
 _INTRADAY_SNAP_CACHE: dict[str, Any] = {}
-_INTRADAY_SNAP_TTL = 1.0
+# Match FE 分时 poll (~0.5–1s); still coalesces bursts.
+_INTRADAY_SNAP_TTL = 0.75
 
 
 def _pick_has_chart(row: dict[str, Any] | None) -> bool:
@@ -666,14 +738,14 @@ async def fetch_intraday_snapshot(
         headers=yahoo_headers,
         follow_redirects=True,
         trust_env=False,
-        timeout=httpx.Timeout(2.2, connect=1.0),
+        timeout=httpx.Timeout(4.0, connect=2.0),
     ) as client:
-        # Fast path: Nasdaq only (typical 200–800ms).
+        # Fast path: Nasdaq only (typical 200–800ms; allow more in 盘前).
         nd = None
         try:
             nd = await asyncio.wait_for(
                 fetch_nasdaq_intraday(client, sym, max_points=480),
-                timeout=2.0,
+                timeout=3.5,
             )
         except Exception:  # noqa: BLE001
             nd = None
@@ -734,32 +806,112 @@ async def fetch_intraday_snapshot(
             return dict(cached["data"])
         return None
 
-    # Prefer last tape point's session; fall back to ET clock.
-    sid = "regular"
+    # Badge: ET clock is authoritative (vendors/tape lag stick on 盘前).
     last_pts = list(series_row.get("points") or [])
-    if last_pts:
-        sid = str(last_pts[-1].get("session") or "") or sid
-    if sid not in {"pre", "regular", "post", "night"}:
-        sid, _label = session_from_status(None)
+    clock_sid, clock_label = session_from_clock()
+    sid, _label = clock_sid, clock_label
+
+    prev_close = series_row.get("previous_close")
+    day_price = price if isinstance(price, (int, float)) else None
+    day_change = change if isinstance(change, (int, float)) else None
+    day_change_pct = change_pct if isinstance(change_pct, (int, float)) else None
+    prev_num = prev_close if isinstance(prev_close, (int, float)) else None
+
+    # During 盘前/盘后, Nasdaq lastSale is the extended print — pull the day
+    # quote so 收盘 + 盘前% match Yahoo (vs last regular close).
+    day_q: dict[str, Any] | None = None
+    if sid in {"pre", "post", "night"}:
+        try:
+            from us_market_pulse.quotes import fetch_day_quotes
+
+            day_map = await fetch_day_quotes([sym])
+            day_q = day_map.get(sym) if isinstance(day_map, dict) else None
+        except Exception:  # noqa: BLE001
+            day_q = None
+        if isinstance(day_q, dict):
+            if day_q.get("price") is not None:
+                price = day_q.get("price")
+                day_price = price if isinstance(price, (int, float)) else day_price
+            if day_q.get("change") is not None:
+                change = day_q.get("change")
+                day_change = change if isinstance(change, (int, float)) else day_change
+            if day_q.get("change_pct") is not None:
+                change_pct = day_q.get("change_pct")
+                day_change_pct = (
+                    change_pct
+                    if isinstance(change_pct, (int, float))
+                    else day_change_pct
+                )
+            if day_q.get("previous_close") is not None:
+                prev_close = day_q.get("previous_close")
+                prev_num = (
+                    prev_close if isinstance(prev_close, (int, float)) else prev_num
+                )
+            # Chart 昨收 guide = last regular close during 盘前 (Yahoo At close).
+            if sid == "pre" and day_q.get("price") is not None:
+                series_row["previous_close"] = day_q.get("price")
+            elif day_q.get("previous_close") is not None:
+                series_row["previous_close"] = day_q.get("previous_close")
+
+    # 夜盘: Yahoo Overnight only (distinct from 盘后). No tape invented.
+    if sid == "night":
+        rt_fields: dict[str, Any] = {}
+        try:
+            # Cache-only on the request path (see PULSE_OVERNIGHT_FETCH).
+            y_night = peek_overnight_quote(sym)
+        except Exception:  # noqa: BLE001
+            y_night = None
+        if isinstance(y_night, dict) and y_night.get("overnight"):
+            if day_price is None and y_night.get("price") is not None:
+                price = y_night.get("price")
+                change = y_night.get("change")
+                change_pct = y_night.get("change_pct")
+                day_price = price if isinstance(price, (int, float)) else day_price
+                day_change = change if isinstance(change, (int, float)) else day_change
+                day_change_pct = (
+                    change_pct
+                    if isinstance(change_pct, (int, float))
+                    else day_change_pct
+                )
+            if y_night.get("previous_close") is not None:
+                prev_close = y_night.get("previous_close")
+                prev_num = (
+                    prev_close if isinstance(prev_close, (int, float)) else prev_num
+                )
+            for key in ("rt_price", "rt_change", "rt_change_pct"):
+                if y_night.get(key) is not None:
+                    rt_fields[key] = y_night[key]
+        # No overnight → leave rt_* empty (show 夜盘: --), never use 盘后.
+        if not rt_fields:
+            rt_fields = {}
+    elif sid in {"pre", "post"} and isinstance(day_q, dict) and day_q.get("rt_price") is not None:
+        # Trust CNBC/Yahoo extended quote for list RT (synced with Yahoo page).
+        rt_fields = {
+            k: day_q[k]
+            for k in ("rt_price", "rt_change", "rt_change_pct")
+            if day_q.get(k) is not None
+        }
     else:
-        _label = {"pre": "盘前", "regular": "盘中", "post": "盘后", "night": "夜盘"}.get(
-            sid, "盘中"
+        rt_fields = derive_list_realtime(
+            session=sid,
+            day_price=day_price,
+            day_change=day_change,
+            day_change_pct=day_change_pct,
+            previous_close=prev_num,
+            tape_points=last_pts,
         )
-        # If tape still says regular but clock is pre/post, prefer clock for badge.
-        clock_sid, clock_label = session_from_status(None)
-        if clock_sid in {"pre", "post", "night"}:
-            sid, _label = clock_sid, clock_label
     data = {
         "symbol": sym,
         "price": price,
         "change": change,
         "change_pct": change_pct,
-        "previous_close": series_row.get("previous_close"),
+        "previous_close": prev_close,
         "series": {"intraday": series_row},
         "source": source,
         "session": sid,
         "session_label": _label,
         "fetched_at": time.time(),
+        **rt_fields,
     }
     _INTRADAY_SNAP_CACHE[cache_key] = {"at": time.time(), "data": data}
     return dict(data)
@@ -987,8 +1139,8 @@ async def _hydrate_list_intraday_sparks(
 
     try:
         nd_map = await asyncio.wait_for(
-            fetch_nasdaq_intraday_many(missing, concurrency=5, max_points=96),
-            timeout=12.0,
+            fetch_nasdaq_intraday_many(missing, concurrency=8, max_points=64),
+            timeout=6.0,
         )
     except (asyncio.TimeoutError, httpx.HTTPError):
         nd_map = {}
@@ -1030,12 +1182,12 @@ async def _hydrate_list_intraday_sparks(
             )
             break
 
-    # Optional Yahoo fill only for stragglers Nasdaq missed (keep short budget)
+    # Optional Yahoo fill only for a few stragglers (hard budget).
     still = [
         str(r.get("symbol") or "").upper()
         for r in pick_rows
         if str(r.get("symbol") or "") and not _spark_points_from_row(r)
-    ][:6]
+    ][:4]
     if not still:
         return
 
@@ -1043,13 +1195,19 @@ async def _hydrate_list_intraday_sparks(
         try:
             pts = await asyncio.wait_for(
                 _fetch_intraday_spark(client, sym, force=force),
-                timeout=2.5,
+                timeout=1.6,
             )
             return sym, pts
         except (asyncio.TimeoutError, httpx.HTTPError):
             return sym, []
 
-    results = await asyncio.gather(*(one(sym) for sym in still))
+    try:
+        results = await asyncio.wait_for(
+            asyncio.gather(*(one(sym) for sym in still)),
+            timeout=2.0,
+        )
+    except asyncio.TimeoutError:
+        results = []
     by_sym = {sym: pts for sym, pts in results if pts}
     for row in pick_rows:
         sym = str(row.get("symbol") or "").upper()
@@ -1190,6 +1348,64 @@ def _match_sector_news(items: list[dict[str, Any]], topic_id: str) -> list[dict[
     return rows[:12]
 
 
+def _news_dedupe_key(item: dict[str, Any]) -> str:
+    url = str(item.get("url") or "").strip().casefold()
+    if url:
+        return f"u:{url}"
+    title = str(item.get("title") or "").strip().casefold()
+    return f"t:{title}" if title else f"id:{item.get('id')}"
+
+
+def _merge_news_latest(
+    *buckets: list[dict[str, Any]],
+    limit: int = 12,
+) -> list[dict[str, Any]]:
+    """Merge news buckets, prefer fresher published_ts, dedupe by url/title."""
+    best: dict[str, dict[str, Any]] = {}
+    for bucket in buckets:
+        for raw in bucket or []:
+            if not isinstance(raw, dict):
+                continue
+            key = _news_dedupe_key(raw)
+            if not key or key in {"u:", "t:", "id:"}:
+                continue
+            prev = best.get(key)
+            if prev is None or float(raw.get("published_ts") or 0) >= float(
+                prev.get("published_ts") or 0
+            ):
+                best[key] = dict(raw)
+    rows = sorted(
+        best.values(),
+        key=lambda x: float(x.get("published_ts") or 0),
+        reverse=True,
+    )
+    return [_slim_news_item(r) for r in rows[: max(1, min(int(limit), 16))]]
+
+
+def _symbol_google_query(symbol: str, name: str | None = None) -> str:
+    sym = (symbol or "").strip().upper()
+    if not sym:
+        return ""
+    alias = _SYMBOL_GN_ALIAS.get(sym)
+    if not alias:
+        # Prefer ASCII / Latin company names from the pick row.
+        raw = (name or "").strip()
+        if raw and all(ord(ch) < 128 for ch in raw) and raw.upper() != sym:
+            alias = raw
+    if alias:
+        return f'({sym} OR "{alias}") stock when:7d'
+    return f"{sym} stock when:7d"
+
+
+def _sector_google_query(topic_id: str, label: str | None = None) -> str:
+    meta = SECTOR_TOPIC_PATTERNS.get(topic_id) or {}
+    q = str(meta.get("gn_query") or "").strip()
+    if q:
+        return q
+    label_en = (label or topic_id or "US stocks").strip()
+    return f"({label_en}) stock when:7d"
+
+
 def _match_symbol_news(
     items: list[dict[str, Any]],
     symbol: str,
@@ -1206,6 +1422,86 @@ def _match_symbol_news(
         [{"symbol": sym, "name": (name or "").strip() or sym}],
     )
     return [_slim_news_item(dict(i)) for i in hits[: max(1, min(limit, 16))]]
+
+
+async def _hydrate_sector_symbol_news(
+    news_items: list[dict[str, Any]],
+    *,
+    topic_id: str,
+    sector_label: str,
+    selected_symbol: str,
+    selected_name: str | None,
+    force: bool = False,
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    """Google News–first latest headlines for sector + selected ticker."""
+    sector_matched = _match_sector_news(news_items, topic_id)
+    symbol_matched = _match_symbol_news(
+        news_items,
+        selected_symbol,
+        name=selected_name,
+        limit=8,
+    )
+    sector_q = _sector_google_query(topic_id, sector_label)
+    symbol_q = _symbol_google_query(selected_symbol, selected_name)
+    async def _empty_news() -> list[dict[str, Any]]:
+        return []
+
+    sector_gn_task = fetch_google_news(
+        sector_q,
+        limit=12,
+        source_name="Google News",
+        source_id=f"gn-sector-{topic_id or 'hot'}",
+        force=force,
+    )
+    symbol_gn_task = (
+        fetch_google_news(
+            symbol_q,
+            limit=10,
+            source_name="Google News",
+            source_id=f"gn-sym-{(selected_symbol or 'x').lower()}",
+            force=force,
+        )
+        if symbol_q
+        else _empty_news()
+    )
+    try:
+        sector_gn, symbol_gn = await asyncio.wait_for(
+            asyncio.gather(sector_gn_task, symbol_gn_task),
+            timeout=4.5,
+        )
+    except asyncio.TimeoutError:
+        sector_gn, symbol_gn = [], []
+    sector_news = _merge_news_latest(sector_gn, sector_matched, limit=12)
+    symbol_news = (
+        _merge_news_latest(symbol_gn, symbol_matched, limit=8) if symbol_q else []
+    )
+    try:
+        sector_news, symbol_news = await asyncio.wait_for(
+            asyncio.gather(
+                _polish_desk_news(sector_news, online_limit=8),
+                _polish_desk_news(symbol_news, online_limit=6),
+            ),
+            timeout=3.5,
+        )
+    except asyncio.TimeoutError:
+        # Keep headlines without waiting on translation.
+        sector_news = [_slim_news_item(dict(r)) for r in enrich_sentiment(sector_news)]
+        symbol_news = [_slim_news_item(dict(r)) for r in enrich_sentiment(symbol_news)]
+    return sector_news, symbol_news
+
+
+async def _polish_desk_news(
+    rows: list[dict[str, Any]] | None,
+    *,
+    online_limit: int = 12,
+) -> list[dict[str, Any]]:
+    """Translate headlines to Chinese + score 多/空 for sector desk cards."""
+    items = [dict(r) for r in (rows or []) if isinstance(r, dict)]
+    if not items:
+        return []
+    titled = await enrich_titles(items, online=True, online_limit=online_limit)
+    scored = enrich_sentiment(titled)
+    return [_slim_news_item(dict(r)) for r in scored]
 
 
 async def _fetch_quote(
@@ -2176,7 +2472,8 @@ async def build_sector_desk(
         # Fast ETF strip via CNBC/Yahoo light quotes (avoid 8× multi-TF Yahoo charts)
         errors: list[str] = []
         etf_symbols = [row["symbol"] for row in SECTOR_ETFS]
-        etf_quotes = await fetch_day_quotes(etf_symbols)
+        # ETF strip: skip Yahoo Overnight page scrapes (keep desk cold-start fast).
+        etf_quotes = await fetch_day_quotes(etf_symbols, overnight_priority=[])
         sectors: list[dict[str, Any]] = []
         for spec in SECTOR_ETFS:
             quote = etf_quotes.get(str(spec["symbol"]).upper())
@@ -2269,15 +2566,28 @@ async def build_sector_desk(
     earnings_by_symbol: dict[str, Any] = {}
     picks_key = f"v2:{sector_id}:{'|'.join(pick_symbols)}"
     picks_cached = _PICKS_CACHE.get(sector_id) or {}
-    picks_fresh = (
-        not force
-        and picks_cached.get("key") == picks_key
-        and time.time() - float(picks_cached.get("fetched_at") or 0) < _PICKS_TTL
-        and picks_cached.get("pick_rows")
+    picks_age = time.time() - float(picks_cached.get("fetched_at") or 0)
+    picks_key_ok = picks_cached.get("key") == picks_key and bool(
+        picks_cached.get("pick_rows")
     )
-    if picks_fresh:
+    picks_fresh = not force and picks_key_ok and picks_age < _PICKS_TTL
+    picks_stale_ok = (
+        not force and picks_key_ok and picks_age < _PICKS_STALE_TTL
+    )
+    picks_from_cache = False
+    if picks_fresh or picks_stale_ok:
         pick_rows = [dict(r) for r in picks_cached["pick_rows"]]
         earnings_by_symbol = dict(picks_cached.get("earnings_by_symbol") or {})
+        priced_cached = sum(
+            1
+            for r in pick_rows
+            if isinstance(r.get("price"), (int, float))
+            or isinstance(r.get("change_pct"), (int, float))
+        )
+        # Poisoned cache (sparks without quotes) — keep rows but force quote repair.
+        if pick_rows and priced_cached < max(3, len(pick_rows) // 2):
+            picks_fresh = False
+        picks_from_cache = True
 
     selected = (selected_symbol or "").strip().upper()
     universe = {str(s).strip().upper() for s in pick_symbols if str(s).strip()}
@@ -2302,12 +2612,33 @@ async def build_sector_desk(
 
     # Fast path: batch day quotes for the whole list; full multi-TF chart only
     # for the selected symbol (biggest latency win on sector switch).
-    if not picks_fresh and pick_symbols:
-        day_quotes = await fetch_day_quotes(pick_symbols)
+    if not picks_from_cache and pick_symbols:
+        # Overnight page scrape only for the selected symbol — never N× Yahoo HTML.
+        # At 夜盘 hydrate Overnight for the visible list (not only selected).
+        if session_from_clock()[0] == "night":
+            night_pri = []
+            if selected:
+                night_pri.append(selected)
+            for sym in pick_symbols:
+                if sym not in night_pri:
+                    night_pri.append(sym)
+                if len(night_pri) >= 3:
+                    break
+        else:
+            night_pri = [selected] if selected else []
+        try:
+            day_quotes = await asyncio.wait_for(
+                fetch_day_quotes(
+                    pick_symbols,
+                    overnight_priority=night_pri,
+                    bypass_cache=force,
+                ),
+                timeout=3.5,
+            )
+        except asyncio.TimeoutError:
+            day_quotes = {}
         for sym in pick_symbols:
             quote = day_quotes.get(sym)
-            if not quote and sym != selected:
-                continue
             pick_rows.append(
                 _lite_pick_from_quote(
                     sym,
@@ -2331,91 +2662,263 @@ async def build_sector_desk(
             and selected not in universe
         ):
             selected = pick_rows[0]["symbol"] if pick_rows else selected
+    else:
+        priced = sum(
+            1
+            for r in pick_rows
+            if isinstance(r.get("price"), (int, float))
+            or isinstance(r.get("change_pct"), (int, float))
+        )
+        missing_prices = bool(pick_rows) and priced < max(3, len(pick_rows) // 2)
+        soft_refresh = picks_from_cache and pick_symbols and (
+            not picks_fresh
+            or missing_prices
+            or session_from_clock()[0] in {"night", "pre", "post"}
+        )
+        if soft_refresh:
+            # Soft-refresh day tape with a hard budget — never stall the list paint.
+            # Also repair caches that kept sparks but lost price/% after a quote timeout.
+            if session_from_clock()[0] == "night":
+                night_pri = []
+                if selected:
+                    night_pri.append(selected)
+                for sym in pick_symbols:
+                    if sym not in night_pri:
+                        night_pri.append(sym)
+                    if len(night_pri) >= 3:
+                        break
+            else:
+                night_pri = [selected] if selected else []
+            try:
+                day_quotes = await asyncio.wait_for(
+                    fetch_day_quotes(
+                        pick_symbols,
+                        overnight_priority=night_pri,
+                        bypass_cache=bool(missing_prices or force),
+                    ),
+                    timeout=6.0 if missing_prices else 1.8,
+                )
+            except asyncio.TimeoutError:
+                day_quotes = {}
+            for row in pick_rows:
+                sym = str(row.get("symbol") or "").upper()
+                quote = day_quotes.get(sym)
+                if not quote:
+                    continue
+                apply_list_quote_fields(row, quote)
+                if quote.get("price") is not None:
+                    row["price"] = quote.get("price")
+                if quote.get("change") is not None:
+                    row["change"] = quote.get("change")
+                if quote.get("change_pct") is not None:
+                    row["change_pct"] = quote.get("change_pct")
+                    row["momentum"] = float(quote["change_pct"] or 0)
 
-    # Ensure selected symbol has day/month/quarter (not just list 分时 spark).
-    # Skip per-symbol earnings here — Yahoo quoteSummary can take 20s+ and blocks the desk.
+    # List first: sparks from cache. Selected chart races briefly (≤2s), then
+    # continues in background so 成分股 never waits on a full multi-TF fetch.
     selected_pick = next((p for p in pick_rows if p.get("symbol") == selected), None)
-    # Intraday-only rows must still upgrade — otherwise 日/月/季 stay empty.
-    need_selected_chart = bool(selected) and not _pick_has_chart(selected_pick)
-    if selected and need_selected_chart:
+    # Upgrade when day/month missing OR desk 分时 is empty (avoids "正在加载分时…").
+    need_selected_chart = bool(selected) and (
+        not _pick_has_chart(selected_pick) or not _series_intraday_ok(selected_pick)
+    )
+    _hydrate_sparks_from_cache(pick_rows)
+
+    async def _apply_selected_bundle(bundle: dict[str, Any]) -> None:
+        nonlocal selected_pick
+        if not bundle or not (
+            _bundle_has_full_chart(bundle) or _pick_has_intraday(bundle)
+        ):
+            return
+        vc = _value_chain_for(selected)
+        rs = _relative_strength(bundle, home_etf)
+        wave = _momentum_fields(bundle)
+        day_pct = bundle.get("change_pct")
+        sector_label = (active or {}).get("label") or ""
+        prev_row = next((p for p in pick_rows if p.get("symbol") == selected), None)
+        rich = {
+            **bundle,
+            "name": vc.get("name") or selected,
+            "month_change_pct": wave["month_change_pct"],
+            "quarter_change_pct": wave["quarter_change_pct"],
+            "vs_sector_pct": rs,
+            "momentum": wave["momentum"],
+            "is_wave": wave["is_wave"],
+            "is_strong": wave["is_wave"]
+            or (rs is not None and rs > 0)
+            or float(day_pct or 0) > float((home_etf or {}).get("change_pct") or 0),
+            "sector_id": sector_id,
+            "sector_label": sector_label,
+            "earnings": earnings_by_symbol.get(selected),
+            "value_chain": vc,
+            "move_analysis": None,
+            "lite": False,
+            "chart_attempted": True,
+        }
+        apply_list_quote_fields(rich, prev_row)
+        for idx, row in enumerate(pick_rows):
+            if row.get("symbol") == selected:
+                pick_rows[idx] = rich
+                break
+        else:
+            pick_rows.insert(0, rich)
+        selected_pick = rich
+
+    async def _upgrade_selected_chart() -> None:
+        if not (selected and need_selected_chart):
+            return
         try:
             async with httpx.AsyncClient(
                 headers=yahoo_headers,
                 follow_redirects=True,
                 trust_env=False,
-                # Nasdaq daily OHLC (~25y) can take a few seconds when Yahoo is blocked
                 timeout=httpx.Timeout(16.0, connect=3.0),
             ) as client:
                 bundle, errs = await asyncio.wait_for(
                     _fetch_quote_limited(client, selected, selected, force=force),
-                    timeout=16.0,
+                    timeout=14.0,
                 )
         except (asyncio.TimeoutError, httpx.HTTPError) as exc:
-            bundle, errs = None, [f"{selected}: chart timeout ({exc.__class__.__name__})"]
-        pick_errors.extend(errs)
-        if bundle and (_bundle_has_full_chart(bundle) or _pick_has_intraday(bundle)):
-            vc = _value_chain_for(selected)
-            rs = _relative_strength(bundle, home_etf)
-            wave = _momentum_fields(bundle)
-            day_pct = bundle.get("change_pct")
-            sector_label = (active or {}).get("label") or ""
-            rich = {
-                **bundle,
-                "name": vc.get("name") or selected,
-                "month_change_pct": wave["month_change_pct"],
-                "quarter_change_pct": wave["quarter_change_pct"],
-                "vs_sector_pct": rs,
-                "momentum": wave["momentum"],
-                "is_wave": wave["is_wave"],
-                "is_strong": wave["is_wave"]
-                or (rs is not None and rs > 0)
-                or float(day_pct or 0) > float((home_etf or {}).get("change_pct") or 0),
-                "sector_id": sector_id,
-                "sector_label": sector_label,
-                "earnings": earnings_by_symbol.get(selected),
-                "value_chain": vc,
-                "move_analysis": None,
-                "lite": False,
-                "chart_attempted": True,
-            }
-            # Keep 收盘涨跌幅 / 实时涨跌幅 / 时段 from day quote (list UI).
-            apply_list_quote_fields(rich, selected_pick)
-            replaced = False
-            for idx, row in enumerate(pick_rows):
+            pick_errors.append(f"{selected}: chart timeout ({exc.__class__.__name__})")
+            return
+        pick_errors.extend(errs or [])
+        await _apply_selected_bundle(bundle or {})
+        # Persist into picks cache even if the HTTP response already left.
+        if selected_pick and not selected_pick.get("lite"):
+            cached = _PICKS_CACHE.get(sector_id) or {}
+            rows = [dict(r) for r in (cached.get("pick_rows") or pick_rows)]
+            for idx, row in enumerate(rows):
                 if row.get("symbol") == selected:
-                    pick_rows[idx] = rich
-                    replaced = True
+                    rows[idx] = dict(selected_pick)
                     break
-            if not replaced:
-                pick_rows.insert(0, rich)
-            selected_pick = rich
-        else:
-            for row in pick_rows:
-                if row.get("symbol") == selected:
-                    row["chart_attempted"] = True
-                    break
-            if selected_pick is not None:
-                selected_pick["chart_attempted"] = True
-
-    # List column always shows 24h sparklines (independent of day/month/quarter desk TF).
-    try:
-        async with httpx.AsyncClient(
-            headers=yahoo_headers,
-            follow_redirects=True,
-            trust_env=False,
-            timeout=httpx.Timeout(4.0, connect=2.0),
-        ) as spark_client:
-            await asyncio.wait_for(
-                _hydrate_list_intraday_sparks(
-                    spark_client,
-                    pick_rows,
-                    force=force,
-                    limit=min(18, len(pick_rows) or 1),
+            else:
+                rows.insert(0, dict(selected_pick))
+            _PICKS_CACHE[sector_id] = {
+                "key": picks_key,
+                "pick_rows": rows,
+                "earnings_by_symbol": dict(
+                    cached.get("earnings_by_symbol") or earnings_by_symbol
                 ),
-                timeout=14.0,
+                "fetched_at": cached.get("fetched_at") or time.time(),
+            }
+
+    # Chart + list sparks in parallel. Prefer finishing sparks before reply
+    # so the left column isn't blank; chart may continue warming cache.
+    sparked = sum(1 for r in pick_rows[:12] if _spark_points_from_row(r))
+    need_sparks = bool(pick_rows) and sparked < min(8, len(pick_rows))
+    chart_task = (
+        asyncio.create_task(_upgrade_selected_chart())
+        if need_selected_chart and selected
+        else None
+    )
+    sparks_task = None
+    if need_sparks:
+
+        async def _sparks_job() -> None:
+            try:
+                async with httpx.AsyncClient(
+                    headers=yahoo_headers,
+                    follow_redirects=True,
+                    trust_env=False,
+                    timeout=httpx.Timeout(4.0, connect=2.0),
+                ) as spark_client:
+                    await _hydrate_list_intraday_sparks(
+                        spark_client,
+                        pick_rows,
+                        force=False,
+                        limit=min(12, len(pick_rows) or 1),
+                    )
+            except (asyncio.TimeoutError, httpx.HTTPError):
+                _hydrate_sparks_from_cache(pick_rows)
+
+        sparks_task = asyncio.create_task(_sparks_job())
+
+    waiters = []
+    if chart_task is not None:
+        waiters.append(asyncio.shield(chart_task))
+    if sparks_task is not None:
+        waiters.append(asyncio.shield(sparks_task))
+    if waiters:
+        try:
+            await asyncio.wait_for(
+                asyncio.gather(*waiters, return_exceptions=True),
+                timeout=8.0,
             )
-    except (asyncio.TimeoutError, httpx.HTTPError):
-        _hydrate_sparks_from_cache(pick_rows)
+        except asyncio.TimeoutError:
+            pass
+    # If sparks still thin, give them a short extra beat before we freeze the list.
+    if sparks_task is not None and not sparks_task.done():
+        sparked_now = sum(1 for r in pick_rows[:12] if _spark_points_from_row(r))
+        if sparked_now < min(6, len(pick_rows)):
+            try:
+                await asyncio.wait_for(asyncio.shield(sparks_task), timeout=3.5)
+            except asyncio.TimeoutError:
+                pass
+    # Selected chart is more important than a perfect spark fill — wait briefly
+    # if the desk still has no multi-TF / 分时 for the clicked symbol.
+    if chart_task is not None and not chart_task.done():
+        selected_pick = next(
+            (p for p in pick_rows if p.get("symbol") == selected), selected_pick
+        )
+        if not (
+            _pick_has_chart(selected_pick) or _pick_has_intraday(selected_pick)
+        ):
+            try:
+                await asyncio.wait_for(asyncio.shield(chart_task), timeout=4.0)
+            except asyncio.TimeoutError:
+                pass
+            selected_pick = next(
+                (p for p in pick_rows if p.get("symbol") == selected), selected_pick
+            )
+    _hydrate_sparks_from_cache(pick_rows)
+    # Last-resort list prices from spark endpoints when day quotes timed out.
+    for row in pick_rows:
+        pts = _spark_points_from_row(row)
+        if len(pts) < 2:
+            continue
+        last = pts[-1].get("v")
+        first = pts[0].get("v")
+        if row.get("price") is None and isinstance(last, (int, float)):
+            row["price"] = round(float(last), 4)
+        if (
+            row.get("change_pct") is None
+            and isinstance(first, (int, float))
+            and isinstance(last, (int, float))
+            and abs(float(first)) > 1e-9
+        ):
+            row["change_pct"] = round(
+                (float(last) - float(first)) / abs(float(first)) * 100.0, 3
+            )
+            row["momentum"] = float(row["change_pct"])
+
+    async def _persist_sparks_later() -> None:
+        if sparks_task is None:
+            return
+        try:
+            await sparks_task
+        except Exception:  # noqa: BLE001
+            return
+        cached = _PICKS_CACHE.get(sector_id) or {}
+        if not cached.get("pick_rows"):
+            return
+        rows = [dict(r) for r in cached["pick_rows"]]
+        by = {str(r.get("symbol") or "").upper(): r for r in pick_rows}
+        for row in rows:
+            src = by.get(str(row.get("symbol") or "").upper())
+            if not src:
+                continue
+            pts = _spark_points_from_row(src)
+            if pts and not _spark_points_from_row(row):
+                _apply_intraday_spark(row, pts, change_pct=src.get("change_pct"))
+        _PICKS_CACHE[sector_id] = {
+            **cached,
+            "pick_rows": rows,
+        }
+
+    if sparks_task is not None and not sparks_task.done():
+        try:
+            asyncio.get_running_loop().create_task(_persist_sparks_later())
+        except RuntimeError:
+            pass
 
     if pick_rows:
         pick_rows.sort(
@@ -2466,33 +2969,55 @@ async def build_sector_desk(
             row["earnings"] = earn
             earnings_by_symbol[sym] = earn
 
-    if selected and not _earnings_has_core(earnings_by_symbol.get(selected)):
-        try:
-            async with httpx.AsyncClient(
-                headers={
-                    "User-Agent": USER_AGENT,
-                    "Accept": "application/json, text/plain, */*",
-                },
-                follow_redirects=True,
-                trust_env=False,
-                timeout=httpx.Timeout(3.5, connect=2.0),
-            ) as client:
-                earn = await asyncio.wait_for(
-                    _fetch_earnings_nasdaq(
-                        client,
-                        selected,
-                        upcoming=upcoming_peek.get(selected),
-                    ),
-                    timeout=3.5,
-                )
-        except (asyncio.TimeoutError, httpx.HTTPError):
-            earn = None
-        if earn:
-            earnings_by_symbol[selected] = earn
-            for row in pick_rows:
+    # Earnings surprise API is slow — warm it in the background only.
+    if (
+        selected
+        and not picks_from_cache
+        and not _earnings_has_core(earnings_by_symbol.get(selected))
+    ):
+
+        async def _earn_bg() -> None:
+            try:
+                async with httpx.AsyncClient(
+                    headers={
+                        "User-Agent": USER_AGENT,
+                        "Accept": "application/json, text/plain, */*",
+                    },
+                    follow_redirects=True,
+                    trust_env=False,
+                    timeout=httpx.Timeout(2.0, connect=1.2),
+                ) as client:
+                    earn = await asyncio.wait_for(
+                        _fetch_earnings_nasdaq(
+                            client,
+                            selected,
+                            upcoming=upcoming_peek.get(selected),
+                        ),
+                        timeout=2.0,
+                    )
+            except (asyncio.TimeoutError, httpx.HTTPError):
+                return
+            if not earn:
+                return
+            cached = _PICKS_CACHE.get(sector_id) or {}
+            earn_map = dict(cached.get("earnings_by_symbol") or {})
+            earn_map[selected] = earn
+            rows = [dict(r) for r in (cached.get("pick_rows") or [])]
+            for row in rows:
                 if row.get("symbol") == selected:
                     row["earnings"] = earn
-                    break
+            if rows:
+                _PICKS_CACHE[sector_id] = {
+                    "key": cached.get("key") or picks_key,
+                    "pick_rows": rows,
+                    "earnings_by_symbol": earn_map,
+                    "fetched_at": cached.get("fetched_at") or time.time(),
+                }
+
+        try:
+            asyncio.get_running_loop().create_task(_earn_bg())
+        except RuntimeError:
+            pass
 
     if selected_pick is not None:
         selected_pick = next(
@@ -2520,21 +3045,120 @@ async def build_sector_desk(
         except RuntimeError:
             pass
 
-    sector_news = _match_sector_news(
-        news_items, (active or {}).get("topic_id") or sector_id
+    topic_key = str((active or {}).get("topic_id") or sector_id or "")
+    selected_name = None
+    for row in pick_rows:
+        if str(row.get("symbol") or "").upper() == str(selected or "").upper():
+            selected_name = str(row.get("name") or "") or None
+            break
+    # Instant news from in-memory intel; GN hydrate warms cache in background.
+    sector_news_slim = [
+        _slim_news_item(dict(i))
+        for i in _match_sector_news(news_items, topic_key)[:12]
+    ]
+    selected_symbol_news = [
+        _slim_news_item(dict(i))
+        for i in _match_symbol_news(
+            news_items,
+            str(selected or ""),
+            name=selected_name,
+            limit=8,
+        )
+    ]
+
+    def _stash_news(
+        sector_gn: list[dict[str, Any]],
+        symbol_gn: list[dict[str, Any]],
+    ) -> None:
+        cached = _PICKS_CACHE.get(sector_id) or {}
+        meta = dict(cached) if cached else {
+            "key": picks_key,
+            "pick_rows": [dict(r) for r in pick_rows],
+            "earnings_by_symbol": dict(earnings_by_symbol),
+            "fetched_at": time.time(),
+        }
+        if sector_gn:
+            meta["sector_news"] = sector_gn
+        sym_map = dict(meta.get("symbol_news") or {})
+        if symbol_gn and selected:
+            sym_map[str(selected).upper()] = symbol_gn
+            meta["symbol_news"] = sym_map
+        if sector_gn or symbol_gn:
+            meta["news_at"] = time.time()
+            _PICKS_CACHE[sector_id] = meta
+
+    async def _news_bg() -> None:
+        try:
+            sector_gn, symbol_gn = await _hydrate_sector_symbol_news(
+                news_items,
+                topic_id=topic_key,
+                sector_label=str((active or {}).get("label") or sector_id or ""),
+                selected_symbol=str(selected or ""),
+                selected_name=selected_name,
+                force=force,
+            )
+        except Exception:  # noqa: BLE001
+            return
+        _stash_news(sector_gn, symbol_gn)
+
+    # Prefer previously warmed GN headlines when available (< 3 min).
+    news_cached = _PICKS_CACHE.get(sector_id) or {}
+    news_age = time.time() - float(news_cached.get("news_at") or 0)
+    warm_sector = list(news_cached.get("sector_news") or [])
+    warm_sym = (news_cached.get("symbol_news") or {}).get(
+        str(selected or "").upper()
     )
-    sector_news_slim = [_slim_news_item(dict(i)) for i in sector_news[:10]]
+    if news_age < 180 and (warm_sector or warm_sym):
+        if warm_sector:
+            sector_news_slim = warm_sector
+        if warm_sym:
+            selected_symbol_news = list(warm_sym)
+    else:
+        # Brief inline hydrate so 个股信息流 isn't empty on first paint.
+        # Finish in background if Yahoo/GN is slow.
+        try:
+            sector_gn, symbol_gn = await asyncio.wait_for(
+                _hydrate_sector_symbol_news(
+                    news_items,
+                    topic_id=topic_key,
+                    sector_label=str((active or {}).get("label") or sector_id or ""),
+                    selected_symbol=str(selected or ""),
+                    selected_name=selected_name,
+                    force=force,
+                ),
+                timeout=3.2,
+            )
+            if sector_gn:
+                sector_news_slim = list(sector_gn)
+            if symbol_gn:
+                selected_symbol_news = list(symbol_gn)
+            _stash_news(sector_gn or [], symbol_gn or [])
+        except asyncio.TimeoutError:
+            try:
+                asyncio.get_running_loop().create_task(_news_bg())
+            except RuntimeError:
+                pass
+        except Exception:  # noqa: BLE001
+            try:
+                asyncio.get_running_loop().create_task(_news_bg())
+            except RuntimeError:
+                pass
+    sector_news = sector_news_slim
     # Enrich move analysis + per-symbol news once news is available
     for row in pick_rows:
         home_etf = next(
             (s for s in sectors if s.get("id") == row.get("sector_id")), active
         )
-        row["symbol_news"] = _match_symbol_news(
-            news_items,
-            str(row.get("symbol") or ""),
-            name=str(row.get("name") or "") or None,
-            limit=8,
-        )
+        sym = str(row.get("symbol") or "").upper()
+        if sym and sym == str(selected or "").upper() and selected_symbol_news:
+            row["symbol_news"] = list(selected_symbol_news)
+        else:
+            row["symbol_news"] = _match_symbol_news(
+                news_items,
+                sym,
+                name=str(row.get("name") or "") or None,
+                limit=8,
+            )
         # Prefer symbol-matched headlines for move factors; fall back to sector
         move_news = row["symbol_news"] or sector_news_slim
         row["move_analysis"] = _move_analysis(
@@ -2552,7 +3176,6 @@ async def build_sector_desk(
             news=move_news,
         )
 
-    topic_key = (active or {}).get("topic_id")
     if topic_key in TOPICS:
         sector_bear = topic_bearish_analysis(news_items, topic_key)
     else:
@@ -2566,8 +3189,8 @@ async def build_sector_desk(
             },
             "avg_score": 0,
             "assessment": (
-                f"{(active or {}).get('label') or '该板块'}近端匹配 "
-                f"{len(sector_news)} 条相关报道。"
+                f"{(active or {}).get('label') or '该板块'}近端汇总 "
+                f"{len(sector_news)} 条最新报道（Google News）。"
             ),
             "top_factors": [],
             "spotlight": [i for i in sector_news if i.get("sentiment") == "bearish"][:3],
@@ -2607,13 +3230,22 @@ async def build_sector_desk(
         ),
     )
 
+    # Clock-authoritative session badges (盘前→盘中→盘后→夜盘) on every response.
+    for row in pick_rows:
+        restamp_list_session(row)
+    if selected_pick is not None:
+        restamp_list_session(selected_pick)
+
     wire_picks = [_slim_pick_row(dict(p), selected) for p in pick_rows]
+    for row in wire_picks:
+        restamp_list_session(row)
     wire_selected = next((p for p in wire_picks if p.get("symbol") == selected), None)
     # Always expose the selected desk chart (full multi-TF or Nasdaq 分时 fallback)
     if selected_pick and (
         _pick_has_chart(selected_pick) or _pick_has_intraday(selected_pick)
     ):
         wire_selected = dict(selected_pick)
+        restamp_list_session(wire_selected)
         wire_picks = [
             wire_selected if p.get("symbol") == selected else p for p in wire_picks
         ]
@@ -2621,7 +3253,9 @@ async def build_sector_desk(
     return {
         **payload,
         "sectors": [_slim_sector_etf(dict(s)) for s in sectors],
-        "cached": bool(_CACHE["payload"]) and not force,
+        "cached": bool(picks_fresh) and not force,
+        "market_session": session_from_clock()[0],
+        "market_session_label": session_from_clock()[1],
         "ai_desk": hot_desk,
         "hot_desk": hot_desk,
         "hot_sectors": [s for s in sectors if s.get("is_hot")][:4],

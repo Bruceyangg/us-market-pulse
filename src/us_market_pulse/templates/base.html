@@ -36,19 +36,50 @@
                 : "dark";
           document.documentElement.setAttribute("data-theme", theme);
           document.documentElement.setAttribute("data-theme-mode", mode);
+          var ua = navigator.userAgent || "";
+          var qs = location.search || "";
+          if (/PulseDeskApp/i.test(ua) || /[?&]app=1(?:&|$)/.test(qs)) {
+            document.documentElement.classList.add("pulse-native-app");
+            var vw = window.innerWidth || document.documentElement.clientWidth || 0;
+            document.documentElement.classList.add(
+              vw >= 600 ? "pulse-native-tablet" : "pulse-native-phone",
+            );
+            document.documentElement.setAttribute(
+              "data-pulse-app",
+              vw >= 600 ? "tablet" : "phone",
+            );
+          }
         } catch (e) {
           document.documentElement.setAttribute("data-theme", "light");
           document.documentElement.setAttribute("data-theme-mode", "auto");
         }
       })();
     </script>
-    <link rel="preconnect" href="https://fonts.googleapis.com" />
-    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-    <link
-      href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,500;9..144,700&family=Sora:wght@400;500;600;700&display=swap"
-      rel="stylesheet"
-    />
-    <link rel="stylesheet" href="/static/styles.css?v=20260805bb" />
+    <script>
+      (function () {
+        // Native WebView: skip remote Google Fonts (faster first paint / tab switches).
+        if (document.documentElement.classList.contains("pulse-native-app")) return;
+        var g1 = document.createElement("link");
+        g1.rel = "preconnect";
+        g1.href = "https://fonts.googleapis.com";
+        document.head.appendChild(g1);
+        var g2 = document.createElement("link");
+        g2.rel = "preconnect";
+        g2.href = "https://fonts.gstatic.com";
+        g2.crossOrigin = "anonymous";
+        document.head.appendChild(g2);
+        var fonts = document.createElement("link");
+        fonts.rel = "stylesheet";
+        fonts.href =
+          "https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,500;9..144,700&family=Sora:wght@400;500;600;700&display=swap";
+        fonts.media = "print";
+        fonts.onload = function () {
+          fonts.media = "all";
+        };
+        document.head.appendChild(fonts);
+      })();
+    </script>
+    <link rel="stylesheet" href="/static/styles.css?v=20260806e20" />
     {% block head %}{% endblock %}
   </head>
   <body class="page-{{ page }}" data-page="{{ page }}">
@@ -74,6 +105,7 @@
         <a href="/sectors" data-nav="sectors" class="{% if page == 'sectors' %}is-active{% endif %}">板块</a>
         <a href="/earnings" data-nav="earnings" class="{% if page == 'earnings' %}is-active{% endif %}">财报</a>
         <a href="/intel" data-nav="intel" class="{% if page == 'intel' %}is-active{% endif %}">情报</a>
+        <a href="/chains" data-nav="chains" class="{% if page == 'chains' %}is-active{% endif %}">产业链</a>
         <a href="/settings" data-nav="settings" class="{% if page == 'settings' %}is-active{% endif %}">设置</a>
       </nav>
       <div class="header-meta">
@@ -106,17 +138,20 @@
       <a href="/" data-nav="desk" class="{% if page == 'desk' %}is-active{% endif %}">
         <span class="tab-label">持仓</span>
       </a>
-      <a href="/markets" data-nav="markets" class="{% if page == 'markets' %}is-active{% endif %}">
-        <span class="tab-label">市场</span>
-      </a>
       <a href="/sectors" data-nav="sectors" class="{% if page == 'sectors' %}is-active{% endif %}">
         <span class="tab-label">板块</span>
+      </a>
+      <a href="/markets" data-nav="markets" class="{% if page == 'markets' %}is-active{% endif %}">
+        <span class="tab-label">市场</span>
       </a>
       <a href="/earnings" data-nav="earnings" class="{% if page == 'earnings' %}is-active{% endif %}">
         <span class="tab-label">财报</span>
       </a>
       <a href="/intel" data-nav="intel" class="{% if page == 'intel' %}is-active{% endif %}">
         <span class="tab-label">情报</span>
+      </a>
+      <a href="/chains" data-nav="chains" class="{% if page == 'chains' %}is-active{% endif %}">
+        <span class="tab-label">产业</span>
       </a>
       {% if user %}
       <a href="/settings" data-nav="settings" class="{% if page == 'settings' %}is-active{% endif %}">
@@ -154,7 +189,7 @@
     </div>
     {% endblock %}
 
-    <script src="/static/app.js?v=20260805bb" type="module"></script>
+    <script src="/static/app.js?v=20260806e20" type="module"></script>
     <script>
       if ("serviceWorker" in navigator) {
         window.addEventListener("load", function () {

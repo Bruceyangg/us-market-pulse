@@ -1,0 +1,33 @@
+name: PulseDesk
+options:
+  bundleIdPrefix: com.bruceyangg
+  deploymentTarget:
+    iOS: "16.0"
+  xcodeVersion: "15.0"
+  createIntermediateGroups: true
+settings:
+  base:
+    SWIFT_VERSION: "5.0"
+    TARGETED_DEVICE_FAMILY: "1,2"
+    MARKETING_VERSION: "1.2.4"
+    CURRENT_PROJECT_VERSION: "14"
+targets:
+  PulseDesk:
+    type: application
+    platform: iOS
+    sources:
+      - path: PulseDesk
+        excludes:
+          - "**/*.md"
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.bruceyangg.pulsedesk
+        INFOPLIST_FILE: PulseDesk/Info.plist
+        GENERATE_INFOPLIST_FILE: false
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+        DEVELOPMENT_TEAM: ""
+        CODE_SIGN_STYLE: Automatic
+    info:
+      path: PulseDesk/Info.plist
+      properties:
+        CFBundleDisplayName: Pulse Desk

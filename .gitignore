@@ -18,3 +18,13 @@ data/portfolios/
 .tools/
 .env
 android/local.properties
+
+# docs pptx generator
+docs/node_modules/
+docs/package-lock.json
+
+
+android/.kotlin/
+
+**/xcuserdata/
+*.xcuserstate

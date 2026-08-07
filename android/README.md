@@ -1,57 +1,45 @@
-# Pulse Desk · Android（原生）
+# Pulse Desk · Android
 
-Kotlin + Jetpack Compose 原生安卓客户端，直连线上 API：
+Kotlin + Jetpack Compose **自适应壳** + 全站 WebView，与线上站内容一致：
 
 `https://us-market-pulse-6sqa.onrender.com`
 
-## 已实现
+版本：**1.2.3**（versionCode 13）
 
-- 导航与网站一致六栏：**持仓**（含持仓情报）**/ 市场 / 板块 / 财报 / 情报 / 设置**
-- 顶栏主题切换：**自动 / 白天 / 夜晚**（设置页也可切换）
-- **全板块涨跌图**（可点击下钻）
-- K 线 + 均线，支持 **双指捏合缩放 / 拖动平移**
-- 红涨绿跌配色
+## 手机 / 平板操作设计
+
+| 形态 | 导航 | 页面布局 |
+|------|------|----------|
+| **手机**（smallestWidth &lt;600dp） | 底栏 7 栏等宽（持仓/板块/市场/财报/情报/产业/设置） | 单列；美市条横滑；期货图/涨跌图可折叠 |
+| **平板**（smallestWidth ≥600dp） | 左侧可滚动 NavigationRail | 列表+图表并排；顶栏只留主题/登录 |
+
+其他：
+
+- 单一 WebView 实例，旋转时不销毁页面
+- 隐藏网页主导航与底栏，避免双导航
+- UA 带 `PulseDeskApp/1.2.3`；站点 `pulse-native-app` + `phone|tablet`
+- 下拉刷新、系统返回、外链系统浏览器；Cookie 持久化
 
 ## 环境要求
 
-1. 安装 [Android Studio](https://developer.android.com/studio)（Ladybug / 2024.2+ 推荐）
-2. 安装 SDK 35 与 JDK 17（Studio 自带即可）
-3. 真机打开「开发者选项 → USB 调试」，或使用模拟器
+1. [Android Studio](https://developer.android.com/studio)（Ladybug / 2024.2+）或本仓库 `.tools` JDK/SDK
+2. SDK 35 + JDK 17
+3. 真机 USB 调试或模拟器
 
-## 运行
+## 运行 / 打包
 
 ```bash
-# 用 Android Studio 打开本目录（android/）
-# File → Open → 选择 us-market-pulse/android
-
-# 或命令行（需本机已配置 Android SDK + 生成过 Gradle Wrapper）:
-./gradlew :app:installDebug
+cd android
+./gradlew :app:assembleDebug
+# APK: app/build/outputs/apk/debug/app-debug.apk
+# 同步拷贝：../dist/PulseDesk-debug.apk
 ```
-
-首次打开 Android Studio 会自动下载 Gradle / 依赖；点 **Run ▶** 安装到手机。
 
 ## 配置 API 地址
 
-默认指向 Render 线上服务。若要连本机：
-
-1. 电脑与手机同一 Wi-Fi
-2. 编辑 `app/build.gradle.kts` 里 `API_BASE_URL`，例如：
-
-```kotlin
-buildConfigField("String", "API_BASE_URL", "\"http://192.168.1.20:8765/\"")
-```
-
-3. 同时在 `res/xml/network_security_config.xml` 允许 cleartext（仅调试用）
-
-## 打包正式版
-
-```bash
-./gradlew :app:assembleRelease
-```
-
-生成的 APK / AAB 在 `app/build/outputs/`。上架 Google Play 需要开发者账号，并用正式签名密钥。
+默认 Render 线上。连本机时改 `app/build.gradle.kts` 的 `API_BASE_URL`。
 
 ## 说明
 
-- 持仓页依赖网页端登录态；当前原生端已接 Cookie 登录 / 注册（与网页同一账户）。
-- Render 免费档冷启动首次请求可能较慢（10–30 秒）
+- Render 免费档冷启动首次可能需 20–40 秒唤醒
+- 旧版纯 Compose 页面文件仍保留在工程中，当前入口为 WebView 壳
