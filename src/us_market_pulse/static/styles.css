@@ -3922,14 +3922,20 @@ html[data-theme="dark"] .sector-pick-list .sector-hold-btn.is-held:hover {
   min-width: 0;
 }
 
+.stock-earnings-head > div,
+.move-analysis-head > div {
+  min-width: 0;
+  flex: 1 1 auto;
+}
+
 .stock-earnings-head h3,
 .move-analysis-head h3 {
+  display: block;
   margin: 0.15rem 0 0;
   font-family: var(--font-display);
   font-size: 0.98rem;
   letter-spacing: -0.02em;
   min-width: 0;
-  flex: 1 1 auto;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;

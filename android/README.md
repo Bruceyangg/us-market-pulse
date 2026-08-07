@@ -4,7 +4,7 @@ Kotlin + Jetpack Compose **自适应壳** + 全站 WebView，与线上站内容�
 
 `https://us-market-pulse-6sqa.onrender.com`
 
-版本：**1.2.3**（versionCode 13）
+版本：**1.2.4**（versionCode 14）
 
 ## 手机 / 平板操作设计
 
@@ -17,7 +17,7 @@ Kotlin + Jetpack Compose **自适应壳** + 全站 WebView，与线上站内容�
 
 - 单一 WebView 实例，旋转时不销毁页面
 - 隐藏网页主导航与底栏，避免双导航
-- UA 带 `PulseDeskApp/1.2.3`；站点 `pulse-native-app` + `phone|tablet`
+- UA 带 `PulseDeskApp/1.2.4`；站点 `pulse-native-app` + `phone|tablet`
 - 下拉刷新、系统返回、外链系统浏览器；Cookie 持久化
 
 ## 环境要求

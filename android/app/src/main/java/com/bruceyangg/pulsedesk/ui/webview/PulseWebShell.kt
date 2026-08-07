@@ -100,7 +100,7 @@ private fun pathKey(url: String?): String {
     }
 }
 
-private const val APP_UA_SUFFIX = " PulseDeskApp/1.2.3"
+private const val APP_UA_SUFFIX = " PulseDeskApp/1.2.4"
 
 /** Injects viewport class so site CSS can distinguish phone vs tablet in the app shell. */
 private fun injectJs(isTablet: Boolean): String {

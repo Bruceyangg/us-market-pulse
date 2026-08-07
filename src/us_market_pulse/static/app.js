@@ -5443,6 +5443,55 @@ function mergePickPreserveIntraday(next, prev) {
   };
 }
 
+function paintSectorSwitchPlaceholder(sectorId) {
+  const sectors = state.sectors?.sectors || [];
+  const meta = sectors.find((s) => s.id === sectorId) || {
+    id: sectorId,
+    label: sectorId,
+  };
+  const label = meta.label || sectorId;
+  const symbols = (meta.universe || meta.picks || meta.pick_preview || [])
+    .map((x) => (typeof x === "string" ? x : x?.symbol || ""))
+    .map((s) => String(s || "").toUpperCase())
+    .filter(Boolean);
+  const picks = symbols.map((symbol) => ({
+    symbol,
+    name: symbol,
+    sector_label: label,
+    change_pct: null,
+    month_change_pct: null,
+    points: [],
+    series: {},
+    lite: true,
+  }));
+  const stub = {
+    ...(state.sectors || {}),
+    active_sector_id: sectorId,
+    active_sector: {
+      id: sectorId,
+      label,
+      pick_count: symbols.length || meta.pick_count || picks.length,
+    },
+    picks,
+    selected_symbol: "",
+    selected_pick: null,
+    selected_earnings: null,
+    symbol_news: [],
+    value_chain: null,
+    wave_leaders: [],
+    sectors,
+  };
+  state.sectors = stub;
+  state.sectorSymbol = "";
+  renderSectorEtfs(sectors);
+  renderSectorPicks(stub);
+  if (els.sectorPicksBlurb) {
+    els.sectorPicksBlurb.textContent = picks.length
+      ? `${picks.length} 只成分 · 行情刷新中…`
+      : "加载成分股…";
+  }
+}
+
 function openSectorDesk(id, { scroll = true } = {}) {
   const sectorId = (id || "").trim().toLowerCase();
   if (!sectorId) return;
@@ -5452,32 +5501,33 @@ function openSectorDesk(id, { scroll = true } = {}) {
     state.sectorSymbol = "";
     state.chartUpgradeSym = "";
     state.symbolNewsRetrySym = "";
-    state.sectorsLoadPending = null;
+    // Keep any in-flight request from painting the previous sector.
+    state.sectorsLoadPending = {
+      force: false,
+      sectorId,
+      sectorSymbol: "",
+    };
   }
   syncSectorQuery();
 
-  // Optimistic: paint cached desk immediately while a refresh runs in background
+  // Optimistic: cache first; otherwise paint ticker shells from ETF card metadata
+  // so the left list never keeps showing the previous module.
   const cached = sectorCacheGet(sectorId);
   if (cached && (!same || !state.sectors)) {
     renderSectorDesk(cached);
-  } else if (!same && els.sectorPickList) {
-    els.sectorPickList.innerHTML = '<p class="empty">加载成分股…</p>';
-    if (els.sectorPicksTitle) {
-      const label =
-        (state.sectors?.sectors || []).find((s) => s.id === sectorId)?.label ||
-        sectorId;
-      els.sectorPicksTitle.textContent = `${label} · 成分`;
-    }
+  } else if (!same) {
+    paintSectorSwitchPlaceholder(sectorId);
   }
 
-  // Always refresh when switching sectors so list prices/sparks don't stick empty.
+  // Soft refresh on switch (server picks cache). force=true was making every
+  // module click wait on a full rebuild and feel stuck / show stale data.
   const load =
     same &&
     state.sectors &&
     pickHasChart(state.sectors.selected_pick) &&
     sectorDeskQuoteCoverage(state.sectors) >= 0.4
       ? Promise.resolve(state.sectors)
-      : loadSectorDesk({ force: !same });
+      : loadSectorDesk({ force: false });
   Promise.resolve(load).finally(() => {
     if (scroll && els.sectorsDesk) {
       els.sectorsDesk.scrollIntoView({ behavior: "smooth", block: "start" });
@@ -5740,12 +5790,16 @@ function renderStockEarnings(earn, pick) {
       );
       return;
     }
+    // Keep the same head structure as 涨跌解读 (wrapper div) so the name
+    // never flexes onto the same row as the kicker.
     els.stockEarnings.innerHTML = `
       <div class="stock-earnings-head">
-        <p class="move-kicker">个股财报</p>
-        <h3>${escapeHtml(pick.name || pick.symbol || "")} · ${escapeHtml(
-          pick.symbol || ""
-        )}</h3>
+        <div>
+          <p class="move-kicker">个股财报</p>
+          <h3>${escapeHtml(pick.name || pick.symbol || "")} · ${escapeHtml(
+            pick.symbol || ""
+          )}</h3>
+        </div>
       </div>
       <div class="earn-date-row">
         <div>
@@ -6371,9 +6425,11 @@ async function loadSectorDesk({ force = false } = {}) {
   const seq = ++state.sectorsLoadSeq;
   state.sectorsLoadBusy = true;
   state.sectorsLoadPending = null;
+  const reqSector = (state.sectorId || "").trim().toLowerCase();
+  const reqSymbol = (state.sectorSymbol || "").trim().toUpperCase();
   const params = new URLSearchParams();
-  if (state.sectorId) params.set("sector", state.sectorId);
-  if (state.sectorSymbol) params.set("symbol", state.sectorSymbol);
+  if (reqSector) params.set("sector", reqSector);
+  if (reqSymbol) params.set("symbol", reqSymbol);
   if (force) params.set("refresh", "true");
   setStatus(force ? "强制刷新板块…" : "同步板块行情与情报…");
   if (els.sectorsRefresh) els.sectorsRefresh.disabled = true;
@@ -6386,10 +6442,27 @@ async function loadSectorDesk({ force = false } = {}) {
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     const data = await res.json();
     if (seq !== state.sectorsLoadSeq) return data;
+    const nowSector = (state.sectorId || "").trim().toLowerCase();
+    // User clicked another module while this request was in flight — never paint
+    // the old module over the new selection (causes "先显示上一个板块").
+    if (reqSector && nowSector && reqSector !== nowSector) {
+      return data;
+    }
+    if (
+      data?.active_sector_id &&
+      nowSector &&
+      data.active_sector_id !== nowSector
+    ) {
+      return data;
+    }
     if (data?.active_sector_id) sectorCachePut(data.active_sector_id, data);
-    // Keep previously upgraded picks / 分时 when the new payload is still lite
-    // or arrives with day/month candles but an empty intraday series.
-    if (state.sectors?.picks?.length && data?.picks?.length) {
+    // Keep previously upgraded picks / 分时 only within the SAME sector.
+    const prevSector =
+      state.sectors?.active_sector_id || state.sectors?.active_sector?.id || "";
+    const nextSector = data?.active_sector_id || "";
+    const sameSector =
+      prevSector && nextSector && prevSector === nextSector;
+    if (sameSector && state.sectors?.picks?.length && data?.picks?.length) {
       const prevBySym = Object.fromEntries(
         state.sectors.picks.map((p) => [p.symbol, p])
       );
