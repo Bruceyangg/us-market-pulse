@@ -4091,6 +4091,13 @@ html[data-theme="dark"] .sector-pick-list .sector-hold-btn.is-held:hover {
   flex: 0 0 auto;
   min-height: 1.7rem;
   padding: 0 0.05rem;
+  position: relative;
+  z-index: 6;
+  pointer-events: auto;
+}
+
+.chart-zoom-bar-standalone {
+  margin-top: 0.25rem;
 }
 
 .chart-zoom-hint {
@@ -4114,6 +4121,10 @@ html[data-theme="dark"] .sector-pick-list .sector-hold-btn.is-held:hover {
   display: inline-grid;
   place-items: center;
   cursor: pointer;
+  position: relative;
+  z-index: 7;
+  touch-action: manipulation;
+  pointer-events: auto;
   box-shadow: 0 1px 0 color-mix(in srgb, #2f7cf6 18%, transparent);
   transition: background 0.15s ease, color 0.15s ease, border-color 0.15s ease,
     transform 0.15s ease, opacity 0.15s ease;

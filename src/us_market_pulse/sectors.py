@@ -36,9 +36,11 @@ from us_market_pulse.quotes import (
     fetch_nasdaq_daily_bars,
     fetch_nasdaq_intraday,
     fetch_nasdaq_intraday_many,
+    fetch_yahoo_overnight_quote,
     peek_overnight_quote,
     resolve_list_session,
     restamp_list_session,
+    schedule_overnight_refresh,
     session_from_clock,
 )
 from us_market_pulse.topics import TOPICS, filter_topic_items, topic_bearish_analysis
@@ -857,11 +859,38 @@ async def fetch_intraday_snapshot(
     if sid == "night":
         rt_fields: dict[str, Any] = {}
         try:
-            # Cache-only on the request path (see PULSE_OVERNIGHT_FETCH).
             y_night = peek_overnight_quote(sym)
         except Exception:  # noqa: BLE001
             y_night = None
-        if isinstance(y_night, dict) and y_night.get("overnight"):
+        # Manual 分时刷新 (force) must hit Yahoo Overnight — cache-only left 夜盘: —.
+        if not (isinstance(y_night, dict) and y_night.get("rt_price") is not None):
+            if force:
+                try:
+                    async with httpx.AsyncClient(
+                        headers=yahoo_headers,
+                        follow_redirects=True,
+                        trust_env=False,
+                        timeout=httpx.Timeout(12.0, connect=3.0),
+                    ) as night_client:
+                        y_night = await asyncio.wait_for(
+                            fetch_yahoo_overnight_quote(
+                                night_client,
+                                sym,
+                                allow_page=True,
+                                page_timeout=9.0,
+                                chart_timeout=3.0,
+                                bypass_cache=True,
+                            ),
+                            timeout=11.0,
+                        )
+                except Exception:  # noqa: BLE001
+                    y_night = None
+            else:
+                # Warm cache in background so the next poll can fill 夜盘.
+                schedule_overnight_refresh([sym])
+        if isinstance(y_night, dict) and (
+            y_night.get("overnight") or y_night.get("rt_price") is not None
+        ):
             if day_price is None and y_night.get("price") is not None:
                 price = y_night.get("price")
                 change = y_night.get("change")
@@ -881,8 +910,9 @@ async def fetch_intraday_snapshot(
             for key in ("rt_price", "rt_change", "rt_change_pct"):
                 if y_night.get(key) is not None:
                     rt_fields[key] = y_night[key]
-        # No overnight → leave rt_* empty (show 夜盘: --), never use 盘后.
-        if not rt_fields:
+            if rt_fields.get("rt_price") is not None:
+                rt_fields["overnight"] = True
+        else:
             rt_fields = {}
     elif sid in {"pre", "post"} and isinstance(day_q, dict) and day_q.get("rt_price") is not None:
         # Trust CNBC/Yahoo extended quote for list RT (synced with Yahoo page).

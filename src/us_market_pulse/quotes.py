@@ -1038,6 +1038,11 @@ _OVERNIGHT_REFRESH_INFLIGHT: set[str] = set()
 _OVERNIGHT_BG_LOCK = False
 
 
+def schedule_overnight_refresh(symbols: list[str]) -> None:
+    """Public alias: warm Overnight cache without blocking the caller."""
+    _schedule_overnight_refresh(symbols)
+
+
 def _schedule_overnight_refresh(symbols: list[str]) -> None:
     """Fire-and-forget Overnight scrape; never block the request path."""
     import asyncio

@@ -492,12 +492,35 @@ async function refreshChartLive(key) {
     btn.classList.add("is-busy");
     btn.disabled = true;
   }
+  setStatus("正在刷新分时…");
   try {
     if (String(key || "").startsWith("us-fut-")) {
-      await loadUsMarketsDesk({ force: true });
+      await loadUsMarketsDesk({ force: true, mode: "tape" });
     } else {
       await refreshActiveIntraday({ force: true });
+      const pick =
+        PAGE === "desk"
+          ? state.portfolio?.selected_board
+          : state.sectors?.selected_pick;
+      const clock = sessionFromClock();
+      if (
+        clock.id === "night" &&
+        pick &&
+        (pick.rt_price == null || pick.rt_change_pct == null)
+      ) {
+        setStatus("夜盘报价暂未同步 · 已强制刷新，请稍后再试");
+      } else {
+        setStatus(
+          pick?.symbol
+            ? `分时已刷新 · ${pick.symbol}${
+                pick.session_label ? ` · ${pick.session_label}` : ""
+              }`
+            : "分时已刷新",
+        );
+      }
     }
+  } catch (err) {
+    setStatus(`分时刷新失败：${err?.message || err || "请重试"}`);
   } finally {
     if (btn) {
       btn.classList.remove("is-busy");
@@ -1574,7 +1597,7 @@ function bindZoomableChart(
   if (!zoomRoot) return;
   bindIntradayCrosshair(zoomRoot, key);
 
-  zoomRoot.addEventListener("click", (event) => {
+  const onZoomAct = (event) => {
     const btn = event.target.closest("[data-zoom-act]");
     if (!btn || !zoomRoot.contains(btn)) return;
     const act = btn.getAttribute("data-zoom-act");
@@ -1583,9 +1606,19 @@ function bindZoomableChart(
     else if (act === "reset") zoomChartWindow(key, 1);
     else if (act === "live-refresh") {
       event.preventDefault();
+      event.stopPropagation();
       void refreshChartLive(key);
     }
-  });
+  };
+  zoomRoot.addEventListener("click", onZoomAct);
+  // Direct bind so mobile WebView / touch-action on the chart shell can't swallow it.
+  zoomRoot
+    .querySelector('[data-zoom-act="live-refresh"]')
+    ?.addEventListener("click", (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      void refreshChartLive(key);
+    });
 
   zoomRoot.addEventListener(
     "wheel",
@@ -5395,14 +5428,18 @@ async function refreshActiveIntraday({ force = false } = {}) {
     const url = `/api/quote/intraday?symbol=${encodeURIComponent(sym)}${
       force ? "&refresh=true" : ""
     }`;
+    // Night force refresh may scrape Yahoo Overnight (slower than Nasdaq tape).
+    const timeoutMs =
+      force && sessionFromClock().id === "night" ? 16000 : force ? 12000 : 8000;
     const res = await fetch(url, {
       credentials: "same-origin",
-      signal: AbortSignal.timeout(8000),
+      signal: AbortSignal.timeout(timeoutMs),
     });
     if (!res.ok) {
       if (PAGE === "sectors" && !pickHasIntraday(state.sectors?.selected_pick)) {
         renderSectorPickChart();
       }
+      if (force) throw new Error(`HTTP ${res.status}`);
       return;
     }
     const snap = await res.json();
@@ -5410,14 +5447,15 @@ async function refreshActiveIntraday({ force = false } = {}) {
     const current =
       PAGE === "desk"
         ? state.portfolioPreview || state.portfolio?.selected || ""
-        : state.sectorSymbol || "";
+        : state.sectorSymbol || state.sectors?.selected_symbol || "";
     if (String(current).toUpperCase() !== String(sym).toUpperCase()) return;
     applyIntradaySnapshot(sym, snap);
-  } catch {
+  } catch (err) {
     if (PAGE === "sectors" && !pickHasIntraday(state.sectors?.selected_pick)) {
       // Stop eternal "正在加载分时…" — show retry placeholder.
       renderSectorPickChart();
     }
+    if (force) throw err;
   } finally {
     state.intradayPollBusy = false;
   }
@@ -6038,9 +6076,24 @@ function renderSectorPickChart() {
       <p class="chart-placeholder">${
         loading
           ? `正在加载${escapeHtml(tfLabel)}…`
-          : `暂无${escapeHtml(tfLabel)}数据 · 点右上角刷新重试`
+          : `暂无${escapeHtml(tfLabel)}数据`
       }</p>
+      <div class="chart-zoom-bar chart-zoom-bar-standalone">
+        <button type="button" class="chart-live-refresh" data-intraday-retry="1" title="实时刷新分时" aria-label="实时刷新分时">${chartLiveRefreshIconHtml()}</button>
+      </div>
     `;
+    els.sectorPickChart
+      .querySelector("[data-intraday-retry]")
+      ?.addEventListener("click", (event) => {
+        event.preventDefault();
+        const btn = event.currentTarget;
+        btn?.classList.add("is-busy");
+        if (btn) btn.disabled = true;
+        void refreshActiveIntraday({ force: true }).finally(() => {
+          btn?.classList.remove("is-busy");
+          if (btn) btn.disabled = false;
+        });
+      });
     renderMonthPanel(pick);
     renderStockEarnings(data.selected_earnings || pick.earnings, pick);
     renderMoveAnalysis(pick);
