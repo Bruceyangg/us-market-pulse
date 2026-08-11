@@ -3240,15 +3240,17 @@ html[data-theme="dark"] .us-futures-card {
 
 .sector-pulse-grid {
   display: grid;
-  grid-template-columns: minmax(0, 1.35fr) minmax(14rem, 0.9fr);
-  gap: 0.75rem 1rem;
+  /* Left analysis wider; right ranking stays a compact rail. */
+  grid-template-columns: minmax(0, 2.2fr) minmax(11.25rem, 13.75rem);
+  gap: 0.75rem 0.85rem;
   align-items: stretch;
 }
 
 .sector-pulse-main {
   display: grid;
-  gap: 0.55rem;
+  gap: 0.6rem;
   min-width: 0;
+  padding-right: 0.1rem;
 }
 
 .sector-pulse-horizon-bar {
@@ -3287,18 +3289,20 @@ html[data-theme="dark"] .us-futures-card {
 
 .sector-pulse-summary {
   margin: 0;
-  font-size: 0.92rem;
-  line-height: 1.55;
+  max-width: 62ch;
+  font-size: 0.94rem;
+  line-height: 1.58;
   color: var(--ink);
 }
 
 .sector-pulse-playbook {
   margin: 0;
-  padding: 0.55rem 0.7rem;
+  max-width: 62ch;
+  padding: 0.55rem 0.75rem;
   border-left: 2px solid color-mix(in srgb, #6aa8d4 70%, var(--line));
   background: color-mix(in srgb, #6aa8d4 8%, transparent);
   font-size: 0.84rem;
-  line-height: 1.5;
+  line-height: 1.52;
   color: var(--ink);
 }
 
@@ -3312,14 +3316,15 @@ html[data-theme="dark"] .us-futures-card {
   padding: 0;
   list-style: none;
   display: grid;
-  gap: 0.28rem;
+  gap: 0.3rem;
+  max-width: 64ch;
 }
 
 .sector-pulse-factors li {
   position: relative;
   padding-left: 0.85rem;
   font-size: 0.8rem;
-  line-height: 1.45;
+  line-height: 1.48;
   color: var(--ink-soft);
 }
 
@@ -3359,15 +3364,16 @@ html[data-theme="dark"] .us-futures-card {
 
 .sector-pulse-rank-label {
   margin: 0;
-  font-size: 0.7rem;
+  font-size: 0.68rem;
   font-weight: 750;
-  letter-spacing: 0.04em;
+  letter-spacing: 0.035em;
   color: var(--ink-soft);
+  line-height: 1.35;
 }
 
 .sector-pulse-rank-list {
   display: grid;
-  gap: 0.28rem;
+  gap: 0.24rem;
 }
 
 .sector-pulse-rank-scroll {
@@ -3375,19 +3381,19 @@ html[data-theme="dark"] .us-futures-card {
   max-height: 100%;
   overflow-x: hidden;
   overflow-y: auto;
-  padding-right: 0.15rem;
+  padding-right: 0.1rem;
   overscroll-behavior: contain;
   scrollbar-gutter: stable;
 }
 
 .sector-pulse-rank {
   display: grid;
-  gap: 0.22rem;
+  gap: 0.16rem;
   width: 100%;
   margin: 0;
-  padding: 0.45rem 0.55rem 0.4rem;
+  padding: 0.38rem 0.42rem 0.34rem;
   border: 1px solid color-mix(in srgb, var(--line) 80%, transparent);
-  border-radius: 10px;
+  border-radius: 8px;
   background: color-mix(in srgb, var(--panel) 70%, transparent);
   color: inherit;
   font: inherit;
@@ -3403,37 +3409,32 @@ html[data-theme="dark"] .us-futures-card {
 
 .sector-pulse-rank-top {
   display: flex;
-  align-items: flex-start;
+  align-items: center;
   justify-content: space-between;
-  gap: 0.5rem;
+  gap: 0.35rem;
+  min-width: 0;
 }
 
 .sector-pulse-rank .name-wrap {
   min-width: 0;
-  display: grid;
-  grid-template-columns: auto minmax(0, 1fr);
-  column-gap: 0.35rem;
-  row-gap: 0.05rem;
+  display: flex;
   align-items: baseline;
+  gap: 0.28rem;
+  flex: 1 1 auto;
 }
 
 .sector-pulse-rank .rank-no {
-  grid-row: 1 / span 2;
-  align-self: center;
-  font-size: 0.7rem;
+  flex: 0 0 auto;
+  min-width: 0.95rem;
+  font-size: 0.68rem;
   font-weight: 750;
   font-variant-numeric: tabular-nums;
   color: var(--ink-soft);
   opacity: 0.85;
 }
 
-.sector-pulse-rank .name,
-.sector-pulse-rank .sym {
-  grid-column: 2;
-}
-
 .sector-pulse-rank .name {
-  font-size: 0.84rem;
+  font-size: 0.78rem;
   font-weight: 700;
   min-width: 0;
   overflow: hidden;
@@ -3442,28 +3443,27 @@ html[data-theme="dark"] .us-futures-card {
 }
 
 .sector-pulse-rank .sym {
-  font-size: 0.66rem;
+  flex: 0 0 auto;
+  font-size: 0.62rem;
   font-weight: 650;
-  letter-spacing: 0.04em;
+  letter-spacing: 0.03em;
   color: var(--ink-soft);
 }
 
 .sector-pulse-rank .pct-wrap {
-  display: grid;
-  justify-items: end;
-  gap: 0.02rem;
+  display: flex;
+  align-items: baseline;
+  justify-content: flex-end;
+  gap: 0.2rem;
   flex: 0 0 auto;
 }
 
 .sector-pulse-rank .pct-label {
-  font-size: 0.62rem;
-  font-weight: 700;
-  letter-spacing: 0.04em;
-  color: var(--ink-soft);
+  display: none;
 }
 
 .sector-pulse-rank .pct {
-  font-size: 0.9rem;
+  font-size: 0.82rem;
   font-weight: 780;
   font-variant-numeric: tabular-nums;
   line-height: 1.1;
@@ -3473,12 +3473,12 @@ html[data-theme="dark"] .us-futures-card {
   display: flex;
   align-items: baseline;
   justify-content: space-between;
-  gap: 0.45rem;
+  gap: 0.35rem;
   min-width: 0;
 }
 
 .sector-pulse-rank .day {
-  font-size: 0.7rem;
+  font-size: 0.66rem;
   font-weight: 650;
   font-variant-numeric: tabular-nums;
   color: var(--ink-soft);
@@ -3494,7 +3494,7 @@ html[data-theme="dark"] .us-futures-card {
 }
 
 .sector-pulse-rank .note {
-  font-size: 0.68rem;
+  font-size: 0.64rem;
   color: var(--ink-soft);
   min-width: 0;
   overflow: hidden;
@@ -3513,9 +3513,9 @@ html[data-theme="dark"] .us-futures-card {
 
 .sector-pulse-spark {
   width: 100%;
-  height: 1.05rem;
+  height: 0.85rem;
   display: block;
-  opacity: 0.9;
+  opacity: 0.88;
 }
 
 .sector-pulse-spark.up {
@@ -3528,28 +3528,29 @@ html[data-theme="dark"] .us-futures-card {
 
 .sector-pulse-stocks {
   display: grid;
-  gap: 0.45rem;
-  margin-top: 0.15rem;
-  padding-top: 0.55rem;
+  gap: 0.5rem;
+  margin-top: 0.2rem;
+  padding-top: 0.65rem;
   border-top: 1px solid color-mix(in srgb, var(--line) 70%, transparent);
 }
 
 .sector-pulse-stocks-head {
   display: grid;
-  gap: 0.2rem;
+  gap: 0.22rem;
+  max-width: 64ch;
 }
 
 .sector-pulse-stocks-summary {
   margin: 0;
   font-size: 0.8rem;
-  line-height: 1.45;
+  line-height: 1.48;
   color: var(--ink-soft);
 }
 
 .sector-pulse-stock-cols {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 0.55rem;
+  gap: 0.65rem;
 }
 
 .sector-pulse-stock-col {
@@ -3565,10 +3566,10 @@ html[data-theme="dark"] .us-futures-card {
 
 .sector-pulse-stock {
   display: grid;
-  gap: 0.18rem;
+  gap: 0.2rem;
   width: 100%;
   margin: 0;
-  padding: 0.42rem 0.5rem;
+  padding: 0.48rem 0.58rem;
   border: 1px solid color-mix(in srgb, var(--line) 80%, transparent);
   border-radius: 10px;
   background: color-mix(in srgb, var(--panel) 72%, transparent);
@@ -3577,6 +3578,7 @@ html[data-theme="dark"] .us-futures-card {
   text-align: left;
   cursor: pointer;
   transition: border-color 0.15s ease, background 0.15s ease;
+  min-height: 5.1rem;
 }
 
 .sector-pulse-stock:hover {
@@ -3663,9 +3665,9 @@ html[data-theme="dark"] .us-futures-card {
 
 .sector-pulse-intel {
   display: grid;
-  gap: 0.35rem;
-  margin-top: 0.2rem;
-  padding-top: 0.55rem;
+  gap: 0.4rem;
+  margin-top: 0.25rem;
+  padding-top: 0.65rem;
   border-top: 1px solid color-mix(in srgb, var(--line) 70%, transparent);
 }
 
@@ -3696,6 +3698,12 @@ html[data-theme="dark"] .us-futures-card {
   gap: 0.35rem;
 }
 
+@media (max-width: 980px) {
+  .sector-pulse-grid {
+    grid-template-columns: minmax(0, 1.7fr) minmax(10.75rem, 12.5rem);
+  }
+}
+
 @media (max-width: 860px) {
   .sector-pulse-grid {
     grid-template-columns: 1fr;
@@ -3705,6 +3713,13 @@ html[data-theme="dark"] .us-futures-card {
     height: auto;
     min-height: 0;
     max-height: 22rem;
+  }
+
+  .sector-pulse-summary,
+  .sector-pulse-playbook,
+  .sector-pulse-factors,
+  .sector-pulse-stocks-head {
+    max-width: none;
   }
 }
 

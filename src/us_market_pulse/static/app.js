@@ -5077,7 +5077,7 @@ function renderSectorPulse(data) {
         <div class="sector-pulse-rank-block sector-pulse-rank-block-full">
           <p class="sector-pulse-rank-label">${escapeHtml(
             windowShort,
-          )}涨跌幅排名 · 高→低</p>
+          )}排名 · 高→低</p>
           <div class="sector-pulse-rank-list sector-pulse-rank-scroll">
             ${
               ranking.length
