@@ -2064,7 +2064,7 @@ def _pct_from_closes(closes: list[float], lookback: int) -> float | None:
 
 
 async def _attach_sector_horizon_returns(sectors: list[dict[str, Any]]) -> None:
-    """Stamp week5 / week10 ETF returns (+ spark) onto sector rows in-place."""
+    """Stamp week5/10/15/20/42 ETF returns (+ spark) onto sector rows in-place."""
     now = time.time()
     need: list[str] = []
     for row in sectors or []:
@@ -2075,10 +2075,16 @@ async def _attach_sector_horizon_returns(sectors: list[dict[str, Any]]) -> None:
         if (
             isinstance(hit, dict)
             and now - float(hit.get("at") or 0) < _PULSE_RET_TTL
-            and hit.get("week10_pct") is not None
+            and any(
+                hit.get(k) is not None
+                for k in ("week5_pct", "week10_pct", "week20_pct", "week42_pct")
+            )
         ):
             row["week5_pct"] = hit.get("week5_pct")
             row["week10_pct"] = hit.get("week10_pct")
+            row["week15_pct"] = hit.get("week15_pct")
+            row["week20_pct"] = hit.get("week20_pct")
+            row["week42_pct"] = hit.get("week42_pct")
             row["week_spark"] = list(hit.get("spark") or [])
         else:
             need.append(sym)
@@ -2086,7 +2092,8 @@ async def _attach_sector_horizon_returns(sectors: list[dict[str, Any]]) -> None:
         return
 
     uniq = list(dict.fromkeys(need))
-    from_d = date.today() - timedelta(days=45)
+    # ~42 trading sessions ≈ 2 months → need ~90 calendar days of bars.
+    from_d = date.today() - timedelta(days=100)
 
     async def _one(
         client: httpx.AsyncClient, sym: str, sem: asyncio.Semaphore
@@ -2113,11 +2120,17 @@ async def _attach_sector_horizon_returns(sectors: list[dict[str, Any]]) -> None:
                 return
             week5 = _pct_from_closes(closes, 5)
             week10 = _pct_from_closes(closes, 10)
-            spark = [round(c, 4) for c in closes[-12:]]
+            week15 = _pct_from_closes(closes, 15)
+            week20 = _pct_from_closes(closes, 20)
+            week42 = _pct_from_closes(closes, 42)
+            spark = [round(c, 4) for c in closes[-20:]]
             _PULSE_RET_CACHE[sym] = {
                 "at": time.time(),
                 "week5_pct": week5,
                 "week10_pct": week10 if week10 is not None else week5,
+                "week15_pct": week15,
+                "week20_pct": week20,
+                "week42_pct": week42,
                 "spark": spark,
             }
 
@@ -2125,7 +2138,7 @@ async def _attach_sector_horizon_returns(sectors: list[dict[str, Any]]) -> None:
         async with httpx.AsyncClient(
             follow_redirects=True,
             trust_env=False,
-            timeout=httpx.Timeout(8.0, connect=2.5),
+            timeout=httpx.Timeout(10.0, connect=2.5),
         ) as client:
             sem = asyncio.Semaphore(5)
             await asyncio.wait_for(
@@ -2133,7 +2146,7 @@ async def _attach_sector_horizon_returns(sectors: list[dict[str, Any]]) -> None:
                     *[_one(client, s, sem) for s in uniq],
                     return_exceptions=True,
                 ),
-                timeout=7.0,
+                timeout=10.0,
             )
     except Exception:  # noqa: BLE001
         pass
@@ -2145,6 +2158,9 @@ async def _attach_sector_horizon_returns(sectors: list[dict[str, Any]]) -> None:
             continue
         row["week5_pct"] = hit.get("week5_pct")
         row["week10_pct"] = hit.get("week10_pct")
+        row["week15_pct"] = hit.get("week15_pct")
+        row["week20_pct"] = hit.get("week20_pct")
+        row["week42_pct"] = hit.get("week42_pct")
         row["week_spark"] = list(hit.get("spark") or [])
 
 
@@ -2699,8 +2715,10 @@ def _build_sector_pulse(
         day = _pct(raw.get("change_pct"))
         week5 = _pct(raw.get("week5_pct"))
         week10 = _pct(raw.get("week10_pct"))
-        # True horizon = ~10 trading days (≈2 weeks). Fall back to 5d, never
-        # silently reuse day% as "近两周" (that misled the desk UI).
+        week15 = _pct(raw.get("week15_pct"))
+        week20 = _pct(raw.get("week20_pct"))
+        week42 = _pct(raw.get("week42_pct"))
+        # Default surface horizon ≈ 2 weeks; fall back shorter, never day-as-week.
         horizon_pct = week10 if week10 is not None else week5
         horizon_ok = horizon_pct is not None
         score_basis = horizon_pct if horizon_ok else day
@@ -2715,9 +2733,12 @@ def _build_sector_pulse(
                 "day_pct": day,
                 "week5_pct": week5,
                 "week10_pct": week10,
+                "week15_pct": week15,
+                "week20_pct": week20,
+                "week42_pct": week42,
                 "horizon_pct": horizon_pct,
                 "horizon_ok": horizon_ok,
-                "week_spark": list(raw.get("week_spark") or [])[-12:],
+                "week_spark": list(raw.get("week_spark") or [])[-20:],
                 "momentum": score,
                 "is_hot": bool(raw.get("is_hot")),
                 "is_wave": bool(raw.get("is_wave")),
@@ -2787,22 +2808,23 @@ def _build_sector_pulse(
         if len(intel_rows) >= 5:
             break
 
-    view_1w = _build_pulse_horizon_view(
-        rows,
-        pct_key="week5_pct",
-        horizon_id="1w",
-        horizon_zh="近 5 个交易日（约一周）",
-        window_short="近一周",
-        active_label=active_label,
+    horizon_specs = (
+        ("1w", "week5_pct", "近 5 个交易日（约一周）", "近一周"),
+        ("2w", "week10_pct", "近 10 个交易日（约两周）", "近两周"),
+        ("3w", "week15_pct", "近 15 个交易日（约三周）", "近三周"),
+        ("4w", "week20_pct", "近 20 个交易日（约四周）", "近四周"),
+        ("2m", "week42_pct", "近 42 个交易日（约两个月）", "近两月"),
     )
-    view_2w = _build_pulse_horizon_view(
-        rows,
-        pct_key="week10_pct",
-        horizon_id="2w",
-        horizon_zh="近 10 个交易日（约两周）",
-        window_short="近两周",
-        active_label=active_label,
-    )
+    views: dict[str, dict[str, Any]] = {}
+    for hid, pct_key, hz_zh, win_short in horizon_specs:
+        views[hid] = _build_pulse_horizon_view(
+            rows,
+            pct_key=pct_key,
+            horizon_id=hid,
+            horizon_zh=hz_zh,
+            window_short=win_short,
+            active_label=active_label,
+        )
 
     # Attach shared intel note onto each horizon's factors (keep lists short).
     intel_note = ""
@@ -2811,7 +2833,7 @@ def _build_sector_pulse(
             f"相关情报 {len(intel_rows)} 条（利多 {bull_n} / 利空 {bear_n}），"
             "需与涨跌方向交叉验证"
         )
-        for view in (view_1w, view_2w):
+        for view in views.values():
             fac = list(view.get("factors") or [])
             if intel_note and intel_note not in fac:
                 fac.append(intel_note)
@@ -2837,8 +2859,14 @@ def _build_sector_pulse(
         ),
     )
 
-    # Default surface = 2w (fallback to 1w fields for older clients).
-    primary = view_2w if (view_2w.get("ranking") or []) else view_1w
+    # Default surface = 2w; fall back along longer→shorter then day-fallback views.
+    primary = views.get("2w") or {}
+    if not (primary.get("ranking") or []):
+        for hid in ("1w", "3w", "4w", "2m"):
+            cand = views.get(hid) or {}
+            if cand.get("ranking"):
+                primary = cand
+                break
     return {
         "horizon": primary.get("id") or "2w",
         "horizon_zh": primary.get("horizon_zh") or "近 10 个交易日（约两周）",
@@ -2854,7 +2882,7 @@ def _build_sector_pulse(
         "leaders": primary.get("leaders") or [],
         "laggards": primary.get("laggards") or [],
         "ranking": primary.get("ranking") or [],
-        "horizons": {"1w": view_1w, "2w": view_2w},
+        "horizons": views,
         "stock_desk": stock_desk,
         "breadth": primary.get("breadth") or {},
         "themes": themes[:4],

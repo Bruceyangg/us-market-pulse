@@ -2936,6 +2936,40 @@ html[data-theme="dark"] .desk-chg-row {
   display: none;
 }
 
+.sector-map-tf-bar {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.28rem;
+  flex-wrap: wrap;
+}
+
+.sector-map-tf {
+  appearance: none;
+  margin: 0;
+  border: 1px solid var(--line);
+  background: color-mix(in srgb, var(--panel) 75%, transparent);
+  color: var(--ink-soft);
+  border-radius: 8px;
+  padding: 0.24rem 0.55rem;
+  font: inherit;
+  font-size: 0.72rem;
+  font-weight: 650;
+  letter-spacing: 0.02em;
+  cursor: pointer;
+  transition: border-color 0.15s ease, background 0.15s ease, color 0.15s ease;
+}
+
+.sector-map-tf:hover {
+  color: var(--ink);
+  border-color: color-mix(in srgb, #6aa8d4 40%, var(--line));
+}
+
+.sector-map-tf.is-active {
+  color: var(--ink);
+  border-color: color-mix(in srgb, #6aa8d4 55%, var(--line));
+  background: color-mix(in srgb, #6aa8d4 14%, var(--panel));
+}
+
 .sector-map-head-actions {
   display: flex;
   align-items: center;

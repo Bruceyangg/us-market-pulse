@@ -2,10 +2,14 @@
 
 from __future__ import annotations
 
+import asyncio
 import time
+from datetime import date, timedelta
 from typing import Any
 
-from us_market_pulse.quotes import fetch_day_quotes
+import httpx
+
+from us_market_pulse.quotes import fetch_day_quotes, fetch_nasdaq_daily_bars
 
 # Nested market map (sector → subgroup → stocks). Weights are relative tile sizes.
 MARKET_MAP: list[dict[str, Any]] = [
@@ -390,6 +394,111 @@ MARKET_MAP: list[dict[str, Any]] = [
 
 _MAP_CACHE: dict[str, Any] = {"fetched_at": 0.0, "payload": None}
 _MAP_TTL = 120.0
+# Multi-week stock returns (Nasdaq daily bars) — longer TTL; day quotes refresh separately.
+_MAP_RET_CACHE: dict[str, dict[str, Any]] = {}
+_MAP_RET_TTL = 900.0
+
+
+def _pct_from_closes(closes: list[float], sessions: int) -> float | None:
+    """Return % change from close[-sessions-1] → close[-1] (sessions trading days)."""
+    if sessions < 1 or len(closes) < sessions + 1:
+        return None
+    last = closes[-1]
+    base = closes[-(sessions + 1)]
+    if not isinstance(last, (int, float)) or not isinstance(base, (int, float)):
+        return None
+    if abs(base) < 1e-12:
+        return None
+    try:
+        return round((last - base) / abs(base) * 100.0, 2)
+    except (TypeError, ValueError, ZeroDivisionError):
+        return None
+
+
+async def _fetch_map_horizon_returns(symbols: list[str]) -> dict[str, dict[str, Any]]:
+    """Batch ~1–4 week % returns for map stocks (assetclass=stocks)."""
+    now = time.time()
+    out: dict[str, dict[str, Any]] = {}
+    need: list[str] = []
+    for sym in symbols:
+        hit = _MAP_RET_CACHE.get(sym)
+        if (
+            isinstance(hit, dict)
+            and now - float(hit.get("at") or 0) < _MAP_RET_TTL
+            and any(hit.get(f"week{n}_pct") is not None for n in (5, 10, 15, 20))
+        ):
+            out[sym] = hit
+        else:
+            need.append(sym)
+    if not need:
+        return out
+
+    uniq = list(dict.fromkeys(need))
+    from_d = date.today() - timedelta(days=90)
+
+    async def _one(
+        client: httpx.AsyncClient, sym: str, sem: asyncio.Semaphore
+    ) -> None:
+        async with sem:
+            bars: list[dict[str, Any]] = []
+            try:
+                bars = await fetch_nasdaq_daily_bars(
+                    client,
+                    sym,
+                    fromdate=from_d,
+                    todate=date.today(),
+                    assetclass="stocks",
+                )
+            except Exception:  # noqa: BLE001
+                bars = []
+            closes = [
+                float(b["c"])
+                for b in bars
+                if isinstance(b, dict) and isinstance(b.get("c"), (int, float))
+            ]
+            if len(closes) < 6:
+                return
+            row = {
+                "at": time.time(),
+                "week5_pct": _pct_from_closes(closes, 5),
+                "week10_pct": _pct_from_closes(closes, 10),
+                "week15_pct": _pct_from_closes(closes, 15),
+                "week20_pct": _pct_from_closes(closes, 20),
+            }
+            _MAP_RET_CACHE[sym] = row
+            out[sym] = row
+
+    try:
+        async with httpx.AsyncClient(
+            follow_redirects=True,
+            trust_env=False,
+            timeout=httpx.Timeout(10.0, connect=2.5),
+        ) as client:
+            sem = asyncio.Semaphore(8)
+            await asyncio.wait_for(
+                asyncio.gather(
+                    *[_one(client, s, sem) for s in uniq],
+                    return_exceptions=True,
+                ),
+                timeout=14.0,
+            )
+    except Exception:  # noqa: BLE001
+        pass
+    return out
+
+
+def _weighted_avg(
+    items: list[tuple[float | None, float]],
+) -> float | None:
+    num = 0.0
+    den = 0.0
+    for pct, w in items:
+        if isinstance(pct, (int, float)) and w > 0:
+            num += float(pct) * w
+            den += w
+    if den <= 0:
+        return None
+    return round(num / den, 3)
 
 
 def _map_symbols() -> list[str]:
@@ -442,6 +551,7 @@ async def build_market_map(*, force: bool = False) -> dict[str, Any]:
     symbols = _map_symbols()
     # Map has dozens of tickers — never block on Yahoo Overnight HTML scrapes.
     quotes = await fetch_day_quotes(symbols, overnight_priority=[])
+    horizon_rets = await _fetch_map_horizon_returns(symbols)
     errors = [f"{sym}: quote failed" for sym in symbols if sym not in quotes]
 
     sectors_out: list[dict[str, Any]] = []
@@ -449,18 +559,32 @@ async def build_market_map(*, force: bool = False) -> dict[str, Any]:
     for sector in MARKET_MAP:
         groups_out: list[dict[str, Any]] = []
         sector_weights = 0.0
-        sector_weighted_pct = 0.0
-        sector_pct_n = 0
+        sector_bucket: dict[str, list[tuple[float | None, float]]] = {
+            k: [] for k in ("day", "rt", "1w", "2w", "3w", "4w")
+        }
         for group in sector.get("groups") or []:
             children: list[dict[str, Any]] = []
             group_weight = 0.0
-            group_weighted_pct = 0.0
-            group_pct_n = 0
+            group_bucket: dict[str, list[tuple[float | None, float]]] = {
+                k: [] for k in ("day", "rt", "1w", "2w", "3w", "4w")
+            }
             for stock in group.get("stocks") or []:
                 sym = str(stock.get("symbol") or "").upper()
                 q = quotes.get(sym) or {}
                 pct = q.get("change_pct")
+                rt_pct = q.get("rt_change_pct")
+                if rt_pct is None:
+                    rt_pct = pct
+                hr = horizon_rets.get(sym) or {}
                 w = float(stock.get("weight") or 1)
+                returns = {
+                    "day": pct if isinstance(pct, (int, float)) else None,
+                    "rt": rt_pct if isinstance(rt_pct, (int, float)) else None,
+                    "1w": hr.get("week5_pct"),
+                    "2w": hr.get("week10_pct"),
+                    "3w": hr.get("week15_pct"),
+                    "4w": hr.get("week20_pct"),
+                }
                 if isinstance(pct, (int, float)):
                     if pct > 0.05:
                         up += 1
@@ -468,40 +592,44 @@ async def build_market_map(*, force: bool = False) -> dict[str, Any]:
                         down += 1
                     else:
                         flat += 1
-                    group_weighted_pct += float(pct) * w
-                    group_pct_n += w
-                    sector_weighted_pct += float(pct) * w
-                    sector_pct_n += w
+                for key in returns:
+                    group_bucket[key].append((returns[key], w))
+                    sector_bucket[key].append((returns[key], w))
                 children.append(
                     {
                         "symbol": sym,
                         "name": stock.get("name") or sym,
                         "weight": w,
                         "change_pct": pct,
+                        "rt_change_pct": rt_pct,
+                        "week5_pct": returns["1w"],
+                        "week10_pct": returns["2w"],
+                        "week15_pct": returns["3w"],
+                        "week20_pct": returns["4w"],
+                        "returns": returns,
                         "price": q.get("price"),
                     }
                 )
                 group_weight += w
             if not children:
                 continue
-            g_pct = (
-                round(group_weighted_pct / group_pct_n, 3) if group_pct_n else None
-            )
+            g_returns = {k: _weighted_avg(v) for k, v in group_bucket.items()}
+            g_pct = g_returns.get("day")
             groups_out.append(
                 {
                     "id": group["id"],
                     "label": group["label"],
                     "weight": float(group.get("weight") or group_weight or 1),
                     "change_pct": g_pct,
+                    "returns": g_returns,
                     "children": children,
                 }
             )
             sector_weights += float(group.get("weight") or group_weight or 1)
         if not groups_out:
             continue
-        s_pct = (
-            round(sector_weighted_pct / sector_pct_n, 3) if sector_pct_n else None
-        )
+        s_returns = {k: _weighted_avg(v) for k, v in sector_bucket.items()}
+        s_pct = s_returns.get("day")
         sectors_out.append(
             {
                 "id": sector["id"],
@@ -509,12 +637,15 @@ async def build_market_map(*, force: bool = False) -> dict[str, Any]:
                 "desk_id": sector.get("desk_id") or sector["id"],
                 "weight": float(sector.get("weight") or sector_weights or 1),
                 "change_pct": s_pct,
+                "returns": s_returns,
                 "groups": groups_out,
             }
         )
 
     payload = {
         "sectors": sectors_out,
+        "horizons": ["day", "rt", "1w", "2w", "3w", "4w"],
+        "default_horizon": "day",
         "stats": {
             "symbols": len(symbols),
             "quoted": len(quotes),
@@ -525,7 +656,7 @@ async def build_market_map(*, force: bool = False) -> dict[str, Any]:
         "errors": errors[-20:],
         "fetched_at": now,
         "cached": False,
-        "source": "CNBC / Yahoo 日涨跌 · 权重为相对市值近似",
+        "source": "日/实时涨跌 + Nasdaq 日线周涨跌 · 权重为相对市值近似",
     }
     # Never cache an empty quote set — keeps UI stuck on "—" after Yahoo outages.
     if quotes:

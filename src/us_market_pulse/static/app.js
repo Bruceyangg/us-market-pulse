@@ -55,6 +55,8 @@ const state = {
   sectorsLoadSeq: 0,
   sectorsLoadPending: null,
   sectorPulseHorizon: "2w",
+  sectorMap: null,
+  sectorMapTf: "day",
   chartUpgradeSym: "",
   symbolNewsRetrySym: "",
   earnings: null,
@@ -142,6 +144,7 @@ const els = {
   hotSectorsBlurb: document.getElementById("hot-sectors-blurb"),
   sectorMapBlurb: document.getElementById("sector-map-blurb"),
   sectorMapCanvas: document.getElementById("sector-map-canvas"),
+  sectorMapTfFilters: document.getElementById("sector-map-tf-filters"),
   sectorPulse: document.getElementById("sector-pulse"),
   sectorPulseTitle: document.getElementById("sector-pulse-title"),
   sectorPulseBlurb: document.getElementById("sector-pulse-blurb"),
@@ -4825,15 +4828,33 @@ function renderSectorPulse(data) {
   }
 
   const horizons = pulse.horizons || {};
-  const wanted = state.sectorPulseHorizon === "1w" ? "1w" : "2w";
-  const alt = wanted === "1w" ? "2w" : "1w";
-  const view =
-    horizons[wanted] ||
-    horizons[alt] ||
-    {
+  const pulseHzOrder = ["1w", "2w", "3w", "4w", "2m"];
+  const pulseHzLabels = {
+    "1w": "近一周",
+    "2w": "近两周",
+    "3w": "近三周",
+    "4w": "近四周",
+    "2m": "近两月",
+  };
+  const wanted = pulseHzOrder.includes(state.sectorPulseHorizon)
+    ? state.sectorPulseHorizon
+    : "2w";
+  let view = horizons[wanted];
+  if (!view || !(view.ranking || []).length) {
+    for (const hid of pulseHzOrder) {
+      if (hid === wanted) continue;
+      const cand = horizons[hid];
+      if (cand && (cand.ranking || []).length) {
+        view = cand;
+        break;
+      }
+    }
+  }
+  if (!view) {
+    view = {
       id: wanted,
       horizon_zh: pulse.horizon_zh,
-      window_short: wanted === "1w" ? "近一周" : "近两周",
+      window_short: pulseHzLabels[wanted] || "近两周",
       bias: pulse.bias,
       bias_zh: pulse.bias_zh,
       summary: pulse.summary,
@@ -4844,10 +4865,10 @@ function renderSectorPulse(data) {
       ranking: pulse.ranking,
       breadth: pulse.breadth,
     };
-  state.sectorPulseHorizon = view.id === "1w" ? "1w" : "2w";
+  }
+  state.sectorPulseHorizon = pulseHzOrder.includes(view.id) ? view.id : wanted;
   const windowShort =
-    view.window_short ||
-    (state.sectorPulseHorizon === "1w" ? "近一周" : "近两周");
+    view.window_short || pulseHzLabels[state.sectorPulseHorizon] || "近两周";
 
   const kicker = document.getElementById("sector-pulse-kicker");
   if (kicker) {
@@ -4971,7 +4992,13 @@ function renderSectorPulse(data) {
   const stockStrong = (stockDesk.strong || []).slice(0, 4);
   const stockWatch = (stockDesk.watch || []).slice(0, 3);
   const stockWeak = (stockDesk.weak || []).slice(0, 3);
-  const hz1 = state.sectorPulseHorizon === "1w";
+  const pulseHzButtons = [
+    ["1w", "一周"],
+    ["2w", "两周"],
+    ["3w", "三周"],
+    ["4w", "四周"],
+    ["2m", "两月"],
+  ];
 
   const stockCard = (row, tone) => {
     const day = row?.change_pct;
@@ -5076,12 +5103,14 @@ function renderSectorPulse(data) {
     <div class="sector-pulse-grid">
       <div class="sector-pulse-main">
         <div class="sector-pulse-horizon-bar" role="group" aria-label="研判周期">
-          <button type="button" class="sector-pulse-hz ${
-            hz1 ? "is-active" : ""
-          }" data-pulse-horizon="1w">一周分析</button>
-          <button type="button" class="sector-pulse-hz ${
-            hz1 ? "" : "is-active"
-          }" data-pulse-horizon="2w">两周分析</button>
+          ${pulseHzButtons
+            .map(
+              ([hid, label]) => `
+            <button type="button" class="sector-pulse-hz ${
+              state.sectorPulseHorizon === hid ? "is-active" : ""
+            }" data-pulse-horizon="${hid}">${label}</button>`,
+            )
+            .join("")}
         </div>
         <div class="sector-pulse-analysis">
           <p class="sector-pulse-summary">${colorizePctHtml(
@@ -5148,7 +5177,7 @@ function renderSectorPulse(data) {
     .forEach((btn) => {
       btn.addEventListener("click", () => {
         const hz = btn.getAttribute("data-pulse-horizon");
-        if (hz !== "1w" && hz !== "2w") return;
+        if (!["1w", "2w", "3w", "4w", "2m"].includes(hz)) return;
         if (state.sectorPulseHorizon === hz) return;
         state.sectorPulseHorizon = hz;
         renderSectorPulse(data || state.sectors);
@@ -5278,11 +5307,60 @@ function renderSymbolNewsFeed(data) {
   requestAnimationFrame(() => syncSectorsDeskHeights());
 }
 
-function heatColor(pct) {
+const SECTOR_MAP_TF_LABELS = {
+  day: "当日",
+  rt: "实时",
+  "1w": "一周",
+  "2w": "两周",
+  "3w": "三周",
+  "4w": "四周",
+};
+
+const SECTOR_MAP_TF_SCALE = {
+  day: 3.5,
+  rt: 3.5,
+  "1w": 6,
+  "2w": 9,
+  "3w": 12,
+  "4w": 15,
+};
+
+function mapNodePct(node, tf) {
+  const want = tf || state.sectorMapTf || "day";
+  const rets = node?.returns;
+  if (rets && typeof rets === "object" && rets[want] != null && Number.isFinite(Number(rets[want]))) {
+    return Number(rets[want]);
+  }
+  if (want === "rt") {
+    const rt = node?.rt_change_pct;
+    if (rt != null && Number.isFinite(Number(rt))) return Number(rt);
+    return node?.change_pct != null ? Number(node.change_pct) : null;
+  }
+  if (want === "1w" && node?.week5_pct != null) return Number(node.week5_pct);
+  if (want === "2w" && node?.week10_pct != null) return Number(node.week10_pct);
+  if (want === "3w" && node?.week15_pct != null) return Number(node.week15_pct);
+  if (want === "4w" && node?.week20_pct != null) return Number(node.week20_pct);
+  if (want === "day" || want === "rt") {
+    return node?.change_pct != null ? Number(node.change_pct) : null;
+  }
+  return null;
+}
+
+function syncSectorMapTfFilters() {
+  const tf = state.sectorMapTf || "day";
+  els.sectorMapTfFilters?.querySelectorAll("[data-map-tf]").forEach((btn) => {
+    const on = btn.getAttribute("data-map-tf") === tf;
+    btn.classList.toggle("is-active", on);
+    btn.setAttribute("aria-selected", on ? "true" : "false");
+  });
+}
+
+function heatColor(pct, tf) {
   if (pct == null || Number.isNaN(Number(pct))) {
     return "color-mix(in srgb, var(--panel-2, #243041) 88%, #6b7c90)";
   }
-  const t = clamp(Number(pct) / 3.5, -1, 1);
+  const scale = SECTOR_MAP_TF_SCALE[tf || state.sectorMapTf || "day"] || 3.5;
+  const t = clamp(Number(pct) / scale, -1, 1);
   if (t >= 0) {
     const a = 0.22 + t * 0.78;
     return `color-mix(in srgb, ${TAPE_UP} ${Math.round(a * 100)}%, #2a3340)`;
@@ -5358,17 +5436,42 @@ function fitSectorMapLabels() {
 
 function renderSectorMap(map) {
   if (!els.sectorMapCanvas) return;
-  const sectors = map?.sectors || [];
-  const stats = map?.stats || {};
+  if (map) state.sectorMap = map;
+  const payload = map || state.sectorMap;
+  const sectors = payload?.sectors || [];
+  const stats = payload?.stats || {};
+  const tf = ["day", "rt", "1w", "2w", "3w", "4w"].includes(state.sectorMapTf)
+    ? state.sectorMapTf
+    : "day";
+  state.sectorMapTf = tf;
+  syncSectorMapTfFilters();
+
+  let up = 0;
+  let down = 0;
+  let quotedTf = 0;
+  for (const sec of sectors) {
+    for (const grp of sec.groups || []) {
+      for (const st of grp.children || []) {
+        const pct = mapNodePct(st, tf);
+        if (pct == null || Number.isNaN(Number(pct))) continue;
+        quotedTf += 1;
+        if (Number(pct) > 0.05) up += 1;
+        else if (Number(pct) < -0.05) down += 1;
+      }
+    }
+  }
+
   if (els.sectorMapBlurb) {
     if (!sectors.length) {
       els.sectorMapBlurb.textContent = "全板块涨跌图暂不可用，稍后刷新";
     } else {
+      const tfLabel = SECTOR_MAP_TF_LABELS[tf] || "当日";
       const bits = [
-        `已覆盖 ${stats.quoted || 0}/${stats.symbols || 0} 只龙头`,
-        typeof stats.up === "number" ? `涨 ${stats.up}` : "",
-        typeof stats.down === "number" ? `跌 ${stats.down}` : "",
-        map?.cached ? "缓存" : "",
+        `${tfLabel}涨跌`,
+        `已覆盖 ${quotedTf || stats.quoted || 0}/${stats.symbols || 0} 只龙头`,
+        `涨 ${up}`,
+        `跌 ${down}`,
+        payload?.cached ? "缓存" : "",
       ].filter(Boolean);
       els.sectorMapBlurb.textContent = `${bits.join(" · ")} · 点击板块或个股下钻`;
     }
@@ -5402,6 +5505,7 @@ function renderSectorMap(map) {
       const showHead = narrow ? sh > 72 && sw > 86 : sh > 64 && sw > 70;
       const innerW = Math.max(1, sw - 2);
       const innerH = Math.max(1, sh - (showHead ? 17 : 2));
+      const secPct = mapNodePct(sec, tf);
       const groups = (sec.groups || []).map((g) => ({
         ...g,
         value: Math.max(0.4, Number(g.weight) || 1),
@@ -5430,7 +5534,7 @@ function renderSectorMap(map) {
               const showPct = narrow
                 ? st.w > 28 && st.h > 22
                 : st.w / bodyW > 0.18 && st.h / bodyH > 0.22;
-              const pct = st.change_pct;
+              const pct = mapNodePct(st, tf);
               const cls =
                 pct == null || Number.isNaN(Number(pct))
                   ? ""
@@ -5446,7 +5550,7 @@ function renderSectorMap(map) {
                     3
                   )}%;height:${((Math.max(0, st.h - 0.6) / bodyH) * 100).toFixed(
                     3
-                  )}%;background:${heatColor(pct)}"
+                  )}%;background:${heatColor(pct, tf)}"
                   data-symbol="${escapeHtml(st.symbol || "")}"
                   data-desk="${escapeHtml(sec.desk_id || sec.id || "")}"
                   title="${escapeHtml(st.name || st.symbol || "")} ${escapeHtml(
@@ -5496,16 +5600,17 @@ function renderSectorMap(map) {
         )}%;top:${((sy / height) * 100).toFixed(3)}%;width:${((sw / width) * 100).toFixed(
           3
         )}%;height:${((sh / height) * 100).toFixed(3)}%;--sector-tint:${heatColor(
-          sec.change_pct
+          secPct,
+          tf
         )}">
           ${
             showHead
               ? `<button type="button" class="map-sector-label" data-desk="${escapeHtml(
                   sec.desk_id || sec.id || ""
                 )}" title="${escapeHtml(sec.label || "")} ${escapeHtml(
-                  pctText(sec.change_pct)
+                  pctText(secPct)
                 )}">${escapeHtml(sec.label || "")}<span>${escapeHtml(
-                  pctText(sec.change_pct)
+                  pctText(secPct)
                 )}</span></button>`
               : ""
           }
@@ -5565,6 +5670,7 @@ async function loadSectorMap({ force = false } = {}) {
     const res = await fetch(`/api/sectors/map${params}`);
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     const data = await res.json();
+    state.sectorMap = data;
     renderSectorMap(data);
     return data;
   } catch (err) {
@@ -9535,6 +9641,21 @@ function bindSectorsDepthToggles() {
       }),
     );
   }
+
+  els.sectorMapTfFilters?.querySelectorAll("[data-map-tf]").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      const tf = btn.getAttribute("data-map-tf");
+      if (!tf || !["day", "rt", "1w", "2w", "3w", "4w"].includes(tf)) return;
+      if (tf === state.sectorMapTf) return;
+      state.sectorMapTf = tf;
+      syncSectorMapTfFilters();
+      if (state.sectorMap) {
+        renderSectorMap(state.sectorMap);
+      } else {
+        void loadSectorMap({ force: false });
+      }
+    });
+  });
 }
 
 function bindVisibilityResume() {

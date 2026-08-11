@@ -63,9 +63,22 @@
           <div class="sector-map-head">
             <div>
               <h2>全板块涨跌图</h2>
-              <p id="sector-map-blurb">美股主要板块与龙头个股日涨跌全景 · 红涨绿跌</p>
+              <p id="sector-map-blurb">美股主要板块与龙头个股涨跌全景 · 当日/实时/周涨跌 · 红涨绿跌</p>
             </div>
             <div class="sector-map-head-actions">
+              <div
+                class="sector-map-tf-bar"
+                id="sector-map-tf-filters"
+                role="tablist"
+                aria-label="涨跌图周期"
+              >
+                <button type="button" class="sector-map-tf is-active" data-map-tf="day" role="tab" aria-selected="true">当日</button>
+                <button type="button" class="sector-map-tf" data-map-tf="rt" role="tab" aria-selected="false">实时</button>
+                <button type="button" class="sector-map-tf" data-map-tf="1w" role="tab" aria-selected="false">一周</button>
+                <button type="button" class="sector-map-tf" data-map-tf="2w" role="tab" aria-selected="false">两周</button>
+                <button type="button" class="sector-map-tf" data-map-tf="3w" role="tab" aria-selected="false">三周</button>
+                <button type="button" class="sector-map-tf" data-map-tf="4w" role="tab" aria-selected="false">四周</button>
+              </div>
               <div class="sector-map-legend" aria-hidden="true">
                 <span class="map-lg down">跌</span>
                 <span class="map-lg-bar"></span>
@@ -101,7 +114,7 @@
             </div>
           </div>
           <div class="sector-pulse-body" id="sector-pulse-body">
-            <p class="empty">汇总近一周 / 两周板块强弱与情报…</p>
+            <p class="empty">汇总近一周至两月板块强弱与情报…</p>
           </div>
         </section>
 
