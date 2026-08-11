@@ -5121,11 +5121,15 @@ function sectorDeskQuoteCoverage(data) {
   return priced / picks.length;
 }
 
+/** Align with server _PICKS_TTL (180s) + a little headroom for soft switches. */
+const SECTOR_CACHE_TTL_MS = 240_000;
+const sectorInflight = new Map();
+
 function sectorCacheGet(id) {
   const row = state.sectorCache?.[id];
   if (!row?.data) return null;
   // Keep optimistic sector paint warm across tab switches / hover.
-  if (Date.now() - Number(row.at || 0) > 120_000) return null;
+  if (Date.now() - Number(row.at || 0) > SECTOR_CACHE_TTL_MS) return null;
   // Drop spark-only shells that lost day quotes (shows "—" for the whole list).
   if (sectorDeskQuoteCoverage(row.data) < 0.4) {
     delete state.sectorCache[id];
@@ -5174,8 +5178,18 @@ function ensureMultiTfChartUpgrade({ force = false } = {}) {
   }
   if (PAGE === "sectors") {
     const pick = state.sectors?.selected_pick;
-    if (pickHasChart(pick) && !force) return;
-    loadSectorDesk({ force });
+    const sym = String(state.sectorSymbol || pick?.symbol || "").toUpperCase();
+    if (!sym || (pickHasChart(pick) && !force)) return;
+    // Soft upgrade by default — force rebuilds wipe picks cache and feel stuck.
+    if (state.sectorsLoadBusy && !force) {
+      state.sectorsLoadPending = {
+        force: false,
+        sectorId: state.sectorId,
+        sectorSymbol: sym,
+      };
+      return;
+    }
+    loadSectorDesk({ force: false });
   }
 }
 
@@ -5576,13 +5590,30 @@ function openSectorDesk(id, { scroll = true } = {}) {
 function prefetchSectorDesk(id) {
   const sectorId = (id || "").trim().toLowerCase();
   if (!sectorId || sectorCacheGet(sectorId)) return;
+  if (sectorInflight.has(sectorId)) return sectorInflight.get(sectorId);
   const params = new URLSearchParams({ sector: sectorId });
-  fetch(`/api/sectors?${params.toString()}`)
+  const req = fetch(`/api/sectors?${params.toString()}`)
     .then((res) => (res.ok ? res.json() : null))
     .then((data) => {
       if (data) sectorCachePut(sectorId, data);
+      return data;
     })
-    .catch(() => {});
+    .catch(() => null)
+    .finally(() => {
+      sectorInflight.delete(sectorId);
+    });
+  sectorInflight.set(sectorId, req);
+  return req;
+}
+
+function warmHotSectorPrefetch(sectors) {
+  const rows = (sectors || []).filter((r) => r?.id);
+  const hot = rows.filter((r) => r.is_hot).slice(0, 2);
+  const rest = rows.filter((r) => !r.is_hot).slice(0, 1);
+  [...hot, ...rest].forEach((row, i) => {
+    if (!row.id || row.id === state.sectorId) return;
+    window.setTimeout(() => prefetchSectorDesk(row.id), 180 + i * 220);
+  });
 }
 
 function renderSectorEtfs(sectors) {
@@ -5656,12 +5687,16 @@ function renderSectorEtfs(sectors) {
     btn.addEventListener("click", () => {
       openSectorDesk(btn.getAttribute("data-sector"), { scroll: true });
     });
-    btn.addEventListener("pointerenter", () => {
+    const warm = () => {
       const id = btn.getAttribute("data-sector");
       if (!id) return;
       clearTimeout(state.sectorPrefetchTimer);
-      state.sectorPrefetchTimer = setTimeout(() => prefetchSectorDesk(id), 120);
-    });
+      state.sectorPrefetchTimer = setTimeout(() => prefetchSectorDesk(id), 80);
+    };
+    // Desktop hover + mobile press — warm cache before the full click path.
+    btn.addEventListener("pointerenter", warm);
+    btn.addEventListener("pointerdown", warm, { passive: true });
+    btn.addEventListener("focus", warm);
   });
 }
 
@@ -6387,7 +6422,7 @@ function selectSectorSymbol(sym) {
   if (!data || !pick) {
     state.sectorSymbol = symbol;
     syncSectorQuery();
-    loadSectorDesk({ force: true });
+    loadSectorDesk({ force: false });
     return;
   }
   const prevSelected = data.selected_pick;
@@ -6416,8 +6451,19 @@ function selectSectorSymbol(sym) {
     data.selected_pick?.earnings || pick.earnings || null;
   data.value_chain =
     data.selected_pick?.value_chain || pick.value_chain || data.value_chain;
-  data.symbol_news =
+  // Keep prior news briefly when slim rows have no feed yet (avoids empty flash).
+  const nextNews =
     data.selected_pick?.symbol_news || pick.symbol_news || [];
+  if (nextNews.length) {
+    data.symbol_news = nextNews;
+  } else if (
+    prevSelected?.symbol === symbol &&
+    (data.symbol_news || []).length
+  ) {
+    /* keep */
+  } else {
+    data.symbol_news = [];
+  }
   syncSectorQuery();
   paintSectorSelection();
   refreshActiveRowQuote(els.sectorPickList, data.selected_pick || pick, "data-symbol");
@@ -6427,9 +6473,9 @@ function selectSectorSymbol(sym) {
     if (state.sectorTf === "intraday") refreshActiveIntraday({ force: false });
     return;
   }
-  // Has 分时 but missing 日/月/季 — still upgrade in background.
+  // Soft upgrade — force=true wiped picks cache and also force-refreshed the map.
   if (state.sectorTf === "intraday") refreshActiveIntraday({ force: false });
-  loadSectorDesk({ force: true });
+  loadSectorDesk({ force: false });
 }
 
 function renderSectorDesk(data) {
@@ -6463,13 +6509,13 @@ function paintSectorDeskError(message) {
   }
 }
 
-async function loadSectorDesk({ force = false } = {}) {
+async function loadSectorDesk({ force = false, refreshMap = false } = {}) {
   if (PAGE !== "sectors") return null;
   if (state.sectorsLoadBusy) {
-    // Queue the latest sector/symbol so a click during an in-flight load
-    // still upgrades the selected desk chart after the current request.
+    // Soft sector/symbol switches must not inherit a sticky force from 刷新.
     state.sectorsLoadPending = {
-      force: Boolean(force || state.sectorsLoadPending?.force),
+      force: Boolean(force),
+      refreshMap: Boolean(refreshMap || (force && state.sectorsLoadPending?.refreshMap)),
       sectorId: state.sectorId,
       sectorSymbol: state.sectorSymbol,
     };
@@ -6486,14 +6532,36 @@ async function loadSectorDesk({ force = false } = {}) {
   if (force) params.set("refresh", "true");
   setStatus(force ? "强制刷新板块…" : "同步板块行情与情报…");
   if (els.sectorsRefresh) els.sectorsRefresh.disabled = true;
-  // Map is independent — never let it delay the constituent list / chart.
-  const mapPromise = loadSectorMap({ force }).catch(() => null);
+  // Map is independent — never block the desk. Only force-refresh map on explicit 刷新.
+  const wantMap = Boolean(refreshMap || force);
+  const mapPromise = wantMap
+    ? loadSectorMap({ force }).catch(() => null)
+    : loadSectorMap({ force: false }).catch(() => null);
   try {
-    const res = await fetch(`/api/sectors?${params.toString()}`, {
-      signal: AbortSignal.timeout(40000),
-    });
-    if (!res.ok) throw new Error(`HTTP ${res.status}`);
-    const data = await res.json();
+    // Reuse in-flight prefetch for the same soft sector request (no symbol / no force).
+    let data = null;
+    const canReusePrefetch = !force && !reqSymbol && reqSector && sectorInflight.has(reqSector);
+    if (canReusePrefetch) {
+      data = await sectorInflight.get(reqSector);
+    }
+    if (!data) {
+      const fetchKey = `${reqSector}|${reqSymbol}|${force ? 1 : 0}`;
+      const shared = sectorInflight.get(fetchKey);
+      const req =
+        shared ||
+        fetch(`/api/sectors?${params.toString()}`, {
+          signal: AbortSignal.timeout(40000),
+        })
+          .then((res) => {
+            if (!res.ok) throw new Error(`HTTP ${res.status}`);
+            return res.json();
+          })
+          .finally(() => {
+            sectorInflight.delete(fetchKey);
+          });
+      if (!shared) sectorInflight.set(fetchKey, req);
+      data = await req;
+    }
     if (seq !== state.sectorsLoadSeq) return data;
     const nowSector = (state.sectorId || "").trim().toLowerCase();
     // User clicked another module while this request was in flight — never paint
@@ -6560,6 +6628,7 @@ async function loadSectorDesk({ force = false } = {}) {
     renderSectorDesk(data);
     syncSectorQuery();
     persistPageDataCache();
+    warmHotSectorPrefetch(data?.sectors || []);
     const hot = (data.hot_sectors || []).map((s) => s.label).slice(0, 2).join("、");
     const n = (data.picks || []).length;
     const lite = Boolean(data.selected_pick?.lite);
@@ -6572,18 +6641,25 @@ async function loadSectorDesk({ force = false } = {}) {
     );
     // Don't await map — paint desk immediately; map fills when ready.
     void mapPromise;
-    if (lite || !pickHasIntraday(data.selected_pick)) {
-      void refreshActiveIntraday({ force: true });
+    // Soft intraday catch-up only when tape is missing (avoid upgrade storms).
+    if (!pickHasIntraday(data.selected_pick)) {
+      void refreshActiveIntraday({ force: Boolean(force) });
+    } else if (state.sectorTf === "intraday" && force) {
+      void refreshActiveIntraday({ force: false });
     }
-    // One delayed chart upgrade per symbol — avoid reload loops.
+    // One delayed soft chart upgrade per symbol — never force-loop.
     const sel = data.selected_symbol || "";
     if (sel && !pickHasChart(data.selected_pick) && state.chartUpgradeSym !== sel) {
       state.chartUpgradeSym = sel;
       window.setTimeout(() => {
-        if (state.sectorSymbol === sel && !pickHasChart(state.sectors?.selected_pick)) {
-          ensureMultiTfChartUpgrade({ force: true });
+        if (
+          state.sectorSymbol === sel &&
+          !pickHasChart(state.sectors?.selected_pick) &&
+          !state.sectorsLoadBusy
+        ) {
+          ensureMultiTfChartUpgrade({ force: false });
         }
-      }, 700);
+      }, 900);
     }
     // GN news warms in background — soft re-fetch once if still empty.
     const newsEmpty = !(data.symbol_news || []).length;
@@ -6592,11 +6668,12 @@ async function loadSectorDesk({ force = false } = {}) {
       window.setTimeout(() => {
         if (
           state.sectorSymbol === sel &&
-          !(state.sectors?.symbol_news || []).length
+          !(state.sectors?.symbol_news || []).length &&
+          !state.sectorsLoadBusy
         ) {
           void loadSectorDesk({ force: false });
         }
-      }, 2800);
+      }, 3200);
     }
     return data;
   } catch (err) {
@@ -6611,7 +6688,7 @@ async function loadSectorDesk({ force = false } = {}) {
       if (transient && !force) {
         window.setTimeout(() => {
           if (PAGE === "sectors" && state.sectorsLoadSeq === seq) {
-            void loadSectorDesk({ force: true });
+            void loadSectorDesk({ force: true, refreshMap: true });
           }
         }, 1200);
       } else {
@@ -6627,8 +6704,11 @@ async function loadSectorDesk({ force = false } = {}) {
     if (pending && seq === state.sectorsLoadSeq) {
       state.sectorsLoadPending = null;
       if (pending.sectorId) state.sectorId = pending.sectorId;
-      if (pending.sectorSymbol) state.sectorSymbol = pending.sectorSymbol;
-      void loadSectorDesk({ force: Boolean(pending.force) });
+      if (pending.sectorSymbol != null) state.sectorSymbol = pending.sectorSymbol;
+      void loadSectorDesk({
+        force: Boolean(pending.force),
+        refreshMap: Boolean(pending.refreshMap),
+      });
     }
   }
 }
@@ -6914,7 +6994,7 @@ function bindSectorDesk() {
   if (PAGE !== "sectors") return;
   bindUsMarketsDesk();
   els.sectorsRefresh?.addEventListener("click", () => {
-    loadSectorDesk({ force: true });
+    loadSectorDesk({ force: true, refreshMap: true });
     loadUsMarketsDesk({ force: true, mode: "full" });
   });
   els.sectorTfFilters?.querySelectorAll("[data-stf]").forEach((btn) => {
@@ -8003,12 +8083,12 @@ function bootPage() {
     void loadSectorDesk().then(() => {
       // Lite list returns first; chart/news catch up without blocking 成分股.
       if (state.sectorTf === "intraday") {
-        refreshActiveIntraday({ force: true });
+        // Soft when tape already present; force only on empty first paint.
+        refreshActiveIntraday({
+          force: !pickHasIntraday(state.sectors?.selected_pick),
+        });
       }
-      if (
-        !pickHasChart(state.sectors?.selected_pick) ||
-        !pickHasIntraday(state.sectors?.selected_pick)
-      ) {
+      if (!pickHasChart(state.sectors?.selected_pick)) {
         ensureMultiTfChartUpgrade({ force: false });
       }
       persistPageDataCache();

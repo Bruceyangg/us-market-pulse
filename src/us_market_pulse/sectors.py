@@ -2700,10 +2700,10 @@ async def build_sector_desk(
             or isinstance(r.get("change_pct"), (int, float))
         )
         missing_prices = bool(pick_rows) and priced < max(3, len(pick_rows) // 2)
+        # Warm cache hits must return immediately. Extended-hours alone used to
+        # force a 1.8s day-quote wait on every module switch.
         soft_refresh = picks_from_cache and pick_symbols and (
-            not picks_fresh
-            or missing_prices
-            or session_from_clock()[0] in {"night", "pre", "post"}
+            missing_prices or (not picks_fresh and picks_age > 45.0)
         )
         if soft_refresh:
             # Soft-refresh day tape with a hard budget — never stall the list paint.
@@ -3143,6 +3143,18 @@ async def build_sector_desk(
             sector_news_slim = warm_sector
         if warm_sym:
             selected_symbol_news = list(warm_sym)
+        # Keep warming in background without blocking the desk response.
+        if news_age > 60 or not warm_sym:
+            try:
+                asyncio.get_running_loop().create_task(_news_bg())
+            except RuntimeError:
+                pass
+    elif picks_fresh and not force:
+        # Warm picks board: never stall module switch on Google News.
+        try:
+            asyncio.get_running_loop().create_task(_news_bg())
+        except RuntimeError:
+            pass
     else:
         # Brief inline hydrate so 个股信息流 isn't empty on first paint.
         # Finish in background if Yahoo/GN is slow.
@@ -3156,7 +3168,7 @@ async def build_sector_desk(
                     selected_name=selected_name,
                     force=force,
                 ),
-                timeout=3.2,
+                timeout=2.2 if force else 1.4,
             )
             if sector_gn:
                 sector_news_slim = list(sector_gn)
