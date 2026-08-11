@@ -100,11 +100,17 @@ private fun pathKey(url: String?): String {
     }
 }
 
-private const val APP_UA_SUFFIX = " PulseDeskApp/1.2.5"
+private const val APP_UA_SUFFIX = " PulseDeskApp/1.2.7"
 
 /** Injects viewport class so site CSS can distinguish phone vs tablet in the app shell. */
 private fun injectJs(isTablet: Boolean): String {
     val mode = if (isTablet) "pulse-native-tablet" else "pulse-native-phone"
+    // Tablet: allow pinch-zoom of page content. Bottom native tabs stay outside WebView.
+    val viewport = if (isTablet) {
+        "width=device-width, initial-scale=1, minimum-scale=1, maximum-scale=3, user-scalable=yes, viewport-fit=cover"
+    } else {
+        "width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover"
+    }
     return """
 (function(){
   try {
@@ -112,6 +118,13 @@ private fun injectJs(isTablet: Boolean): String {
     root.classList.add('pulse-native-app', '$mode');
     root.classList.remove('${if (isTablet) "pulse-native-phone" else "pulse-native-tablet"}');
     root.setAttribute('data-pulse-app', '${if (isTablet) "tablet" else "phone"}');
+    var meta = document.querySelector('meta[name="viewport"]');
+    if (!meta) {
+      meta = document.createElement('meta');
+      meta.setAttribute('name', 'viewport');
+      document.head.appendChild(meta);
+    }
+    meta.setAttribute('content', '$viewport');
   } catch (e) {}
 })();
 """
@@ -149,9 +162,14 @@ fun PulseWebShell(
         }
     }
 
-    // Re-stamp phone/tablet class after rotation without full reload.
+    // Re-stamp phone/tablet class + zoom policy after rotation without full reload.
     LaunchedEffect(isTablet, webView) {
-        webView?.evaluateJavascript(injectJs(isTablet), null)
+        val wv = webView ?: return@LaunchedEffect
+        wv.settings.setSupportZoom(isTablet)
+        wv.settings.builtInZoomControls = isTablet
+        wv.settings.displayZoomControls = false
+        wv.isVerticalScrollBarEnabled = isTablet
+        wv.evaluateJavascript(injectJs(isTablet), null)
     }
 
     BackHandler(enabled = canGoBack) {
@@ -187,16 +205,20 @@ fun PulseWebShell(
                         settings.cacheMode = WebSettings.LOAD_DEFAULT
                         settings.useWideViewPort = true
                         settings.loadWithOverviewMode = true
-                        settings.setSupportZoom(false)
-                        settings.builtInZoomControls = false
+                        // Tablet: pinch-zoom page content. Native bottom tabs are outside
+                        // this WebView so their size never changes with zoom.
+                        // Phone: keep zoom off to avoid layout fights with bottom bar.
+                        settings.setSupportZoom(tabletNow)
+                        settings.builtInZoomControls = tabletNow
                         settings.displayZoomControls = false
+                        settings.textZoom = 100
                         settings.mediaPlaybackRequiresUserGesture = false
                         settings.userAgentString = settings.userAgentString + APP_UA_SUFFIX
                         CookieManager.getInstance().setAcceptCookie(true)
                         CookieManager.getInstance().setAcceptThirdPartyCookies(this, true)
-                        isVerticalScrollBarEnabled = false
+                        isVerticalScrollBarEnabled = tabletNow
                         isHorizontalScrollBarEnabled = false
-                        overScrollMode = android.view.View.OVER_SCROLL_NEVER
+                        overScrollMode = android.view.View.OVER_SCROLL_IF_CONTENT_SCROLLS
 
                         webChromeClient = object : WebChromeClient() {
                             override fun onProgressChanged(view: WebView?, newProgress: Int) {

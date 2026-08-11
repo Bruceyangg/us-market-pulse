@@ -8130,16 +8130,22 @@ html.pulse-native-app .header-meta {
   flex-wrap: nowrap;
 }
 
-/* Tablet already has a left rail brand — keep only theme/account chrome */
-html.pulse-native-tablet .site-header .brand {
-  display: none;
+/* Tablet uses bottom native tabs (not left rail) — keep compact brand + theme chrome */
+html.pulse-native-tablet .site-header {
+  justify-content: space-between;
+  padding-block: 0.4rem;
+  min-height: 2.6rem;
+  background: color-mix(in srgb, var(--header-bg) 90%, transparent);
 }
 
-html.pulse-native-tablet .site-header {
-  justify-content: flex-end;
-  padding-block: 0.35rem;
-  min-height: 2.45rem;
-  background: color-mix(in srgb, var(--header-bg) 88%, transparent);
+html.pulse-native-tablet .site-header .brand {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+}
+
+html.pulse-native-tablet .site-header .brand-text {
+  font-size: 0.95rem;
 }
 
 /* Phone: keep brand; tighten intro so desk reaches faster */
@@ -8597,33 +8603,36 @@ html.pulse-native-phone .chains-panel .sector-hold-btn {
   font-size: 1.2rem;
 }
 
-/* Tablet app: use width for side-by-side desk + readable map */
+/* Tablet app: full-width content (bottom tabs are native, outside zoom) */
 html.pulse-native-tablet .page-main {
-  padding-left: 0.65rem;
-  padding-right: 0.65rem;
+  padding-left: 0.85rem;
+  padding-right: 0.85rem;
+  padding-bottom: 1rem;
+  min-height: calc(100dvh - 4.5rem);
+  -webkit-text-size-adjust: 100%;
+  text-size-adjust: 100%;
 }
 
 html.pulse-native-tablet .page-intro h1 {
   font-size: 1.55rem;
 }
 
-/* Portrait tablet content after rail is ~700dp: 2-col desk; stack intel below */
+/* Full tablet width: keep 2-col desk when possible; stack intel below */
 html.pulse-native-tablet .sectors-board {
-  --desk-cols: minmax(15rem, 0.92fr) minmax(0, 1.45fr);
+  --desk-cols: minmax(16rem, 0.95fr) minmax(0, 1.5fr);
   --sectors-desk-cols: var(--desk-cols);
 }
 
 html.pulse-native-tablet .page-desk .portfolio-body {
-  --desk-cols: minmax(15rem, 0.92fr) minmax(0, 1.45fr);
+  --desk-cols: minmax(16rem, 0.95fr) minmax(0, 1.5fr);
 }
 
 html.pulse-native-tablet .sectors-desk,
 html.pulse-native-tablet .portfolio-desk {
-  grid-template-columns: var(--desk-cols, minmax(15rem, 0.92fr) minmax(0, 1.45fr));
+  grid-template-columns: var(--desk-cols, minmax(16rem, 0.95fr) minmax(0, 1.5fr));
 }
 
-/* Only very narrow tablet content (after rail) stacks desk to 1 column */
-@media (max-width: 680px) {
+@media (max-width: 720px) {
   html.pulse-native-tablet .sectors-desk,
   html.pulse-native-tablet .portfolio-desk {
     grid-template-columns: 1fr;
@@ -8634,6 +8643,17 @@ html.pulse-native-tablet .portfolio-desk {
     --desk-cols: 1fr;
     --sectors-desk-cols: 1fr;
   }
+}
+
+/* Bottom map column: fixed footprint; internal pinch/buttons zoom only content */
+html.pulse-native-tablet .sectors-board > #sector-map {
+  order: 40;
+  margin-top: 0.5rem;
+}
+
+html.pulse-native-tablet .sector-map-viewport {
+  height: min(42vh, 26rem);
+  touch-action: none;
 }
 
 html.pulse-native-tablet .sectors-intel-pane {

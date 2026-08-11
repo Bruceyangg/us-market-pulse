@@ -13,8 +13,8 @@ android {
         applicationId = "com.bruceyangg.pulsedesk"
         minSdk = 26
         targetSdk = 35
-        versionCode = 15
-        versionName = "1.2.5"
+        versionCode = 17
+        versionName = "1.2.7"
         buildConfigField(
             "String",
             "API_BASE_URL",
@@ -22,17 +22,27 @@ android {
         )
     }
 
+    // Force JAR(v1)+APK(v2/v3) signing — some tablet OEM installers reject v2-only APKs.
+    signingConfigs {
+        getByName("debug") {
+            enableV1Signing = true
+            enableV2Signing = true
+            enableV3Signing = true
+        }
+    }
+
     buildTypes {
         release {
-            isMinifyEnabled = true
+            isMinifyEnabled = false
+            signingConfig = signingConfigs.getByName("debug")
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro",
             )
         }
         debug {
-            applicationIdSuffix = ".debug"
-            versionNameSuffix = "-debug"
+            // No .debug suffix — same package id for clean tablet reinstall/update.
+            signingConfig = signingConfigs.getByName("debug")
         }
     }
 
