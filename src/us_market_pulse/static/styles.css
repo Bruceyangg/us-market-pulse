@@ -3725,6 +3725,27 @@ html[data-theme="dark"] .us-futures-card {
   background: color-mix(in srgb, var(--ink-soft) 55%, transparent);
 }
 
+.sector-pulse-stock-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 2rem;
+  align-items: stretch;
+  min-width: 0;
+  border: 1px solid color-mix(in srgb, var(--line) 80%, transparent);
+  border-radius: 10px;
+  overflow: hidden;
+  background: color-mix(in srgb, var(--panel) 72%, transparent);
+  transition: border-color 0.15s ease, background 0.15s ease;
+}
+
+.sector-pulse-stock-row:hover {
+  border-color: color-mix(in srgb, #6aa8d4 45%, var(--line));
+  background: color-mix(in srgb, #6aa8d4 8%, var(--panel));
+}
+
+.sector-pulse-stock-row.in-holding {
+  border-color: color-mix(in srgb, #1f9d6a 35%, var(--line));
+}
+
 .sector-pulse-stock {
   display: grid;
   gap: 0.28rem;
@@ -3732,34 +3753,77 @@ html[data-theme="dark"] .us-futures-card {
   min-width: 0;
   margin: 0;
   padding: 0.62rem 0.68rem 0.7rem;
-  border: 1px solid color-mix(in srgb, var(--line) 80%, transparent);
-  border-radius: 10px;
-  background: color-mix(in srgb, var(--panel) 72%, transparent);
+  border: 0;
+  border-radius: 0;
+  background: transparent;
   color: inherit;
   font: inherit;
   text-align: left;
   cursor: pointer;
-  transition: border-color 0.15s ease, background 0.15s ease;
   min-height: 7.6rem;
   overflow: hidden;
   box-sizing: border-box;
   align-content: start;
 }
 
-.sector-pulse-stock:hover {
-  border-color: color-mix(in srgb, #6aa8d4 45%, var(--line));
-  background: color-mix(in srgb, #6aa8d4 8%, var(--panel));
+.sector-pulse-stock-row .sector-hold-btn {
+  appearance: none;
+  margin: 0;
+  border: 0;
+  border-left: 1px solid var(--line);
+  background: color-mix(in srgb, var(--panel-2, #243041) 55%, transparent);
+  color: var(--ink);
+  font: inherit;
+  font-size: 1.05rem;
+  font-weight: 700;
+  line-height: 1;
+  cursor: pointer;
+  padding: 0;
+  min-width: 2rem;
+  display: grid;
+  place-items: center;
+  transition: background 0.15s ease, color 0.15s ease;
 }
 
-.sector-pulse-stock.is-strong {
+.sector-pulse-stock-row .sector-hold-btn:hover {
+  background: color-mix(in srgb, #1f9d6a 35%, var(--elevated-soft));
+  color: #0b3d2e;
+}
+
+.sector-pulse-stock-row .sector-hold-btn.is-held {
+  color: #8a2f2f;
+}
+
+.sector-pulse-stock-row .sector-hold-btn.is-held:hover {
+  background: color-mix(in srgb, #c44 28%, var(--elevated-soft));
+  color: #6b1d1d;
+}
+
+.sector-pulse-stock .hold-tag {
+  display: inline-block;
+  margin-left: 0.25rem;
+  padding: 0.04rem 0.28rem;
+  border-radius: 999px;
+  font-size: 0.58rem;
+  font-weight: 750;
+  color: #0b3d2e;
+  background: color-mix(in srgb, #1f9d6a 28%, #dff7ec);
+  vertical-align: 0.08em;
+}
+
+.sector-pulse-stock:hover {
+  background: transparent;
+}
+
+.sector-pulse-stock-row:has(.sector-pulse-stock.is-strong) {
   border-color: color-mix(in srgb, var(--tape-up, #d92b2b) 28%, var(--line));
 }
 
-.sector-pulse-stock.is-bearish {
+.sector-pulse-stock-row:has(.sector-pulse-stock.is-bearish) {
   border-color: color-mix(in srgb, #c47a2c 34%, var(--line));
 }
 
-.sector-pulse-stock.is-weak {
+.sector-pulse-stock-row:has(.sector-pulse-stock.is-weak) {
   border-color: color-mix(in srgb, var(--tape-down, #0f8a6a) 28%, var(--line));
 }
 

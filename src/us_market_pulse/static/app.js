@@ -2700,11 +2700,12 @@ function paintHoldingToggle(sym, held) {
     });
   document
     .querySelectorAll(
-      `.sector-pick-row[data-symbol="${symbol}"], .holding-row[data-holding="${symbol}"], .chains-co-row[data-symbol="${symbol}"]`
+      `.sector-pick-row[data-symbol="${symbol}"], .holding-row[data-holding="${symbol}"], .chains-co-row[data-symbol="${symbol}"], .sector-pulse-stock-row[data-symbol="${symbol}"]`
     )
     .forEach((row) => {
       row.classList.toggle("in-holding", held);
-      const nm = row.querySelector(".meta .nm");
+      const nm =
+        row.querySelector(".meta .nm") || row.querySelector(".stock-id");
       if (!nm) return;
       const tag = nm.querySelector(".hold-tag");
       if (held && !tag) {
@@ -5092,37 +5093,53 @@ function renderSectorPulse(data, { soft = false } = {}) {
     };
     const reason = clipText(row.reason || "", 56);
     const action = clipText(row.action || "", 48);
+    const sym = String(row.symbol || "").toUpperCase();
+    const held = isInHoldings(sym);
     return `
-      <button type="button" class="sector-pulse-stock ${tone}" data-pulse-symbol="${escapeHtml(
-        row.symbol || "",
-      )}" title="查看 ${escapeHtml(row.symbol || "")}">
-        <span class="stock-top">
-          <span class="stock-id">
-            <span class="sym">${escapeHtml(row.symbol || "")}</span>
-            <span class="name">${escapeHtml(row.name || "")}</span>
+      <div class="sector-pulse-stock-row ${held ? "in-holding" : ""}" data-symbol="${escapeHtml(
+        sym,
+      )}">
+        <button type="button" class="sector-pulse-stock ${tone}" data-pulse-symbol="${escapeHtml(
+          sym,
+        )}" title="查看 ${escapeHtml(sym)}">
+          <span class="stock-top">
+            <span class="stock-id">
+              <span class="sym">${escapeHtml(sym)}</span>
+              <span class="name">${escapeHtml(row.name || "")}</span>
+              ${held ? '<span class="hold-tag">持仓</span>' : ""}
+            </span>
+            <span class="stance">${escapeHtml(row.stance_zh || "")}</span>
           </span>
-          <span class="stance">${escapeHtml(row.stance_zh || "")}</span>
-        </span>
-        ${industryHtml}
-        <span class="stock-metrics">
-          <span class="${monthCls}">近月 ${
-            month == null
-              ? "—"
-              : `<span class="pulse-pct ${monthCls}">${escapeHtml(
-                  pctText(month),
-                )}</span>`
-          }</span>
-          <span class="${dayCls}">今日 ${
-            day == null
-              ? "—"
-              : `<span class="pulse-pct ${dayCls}">${escapeHtml(
-                  pctText(day),
-                )}</span>`
-          }</span>
-        </span>
-        <span class="stock-reason">${colorizePctHtml(reason)}</span>
-        <span class="stock-action">${colorizePctHtml(action)}</span>
-      </button>
+          ${industryHtml}
+          <span class="stock-metrics">
+            <span class="${monthCls}">近月 ${
+              month == null
+                ? "—"
+                : `<span class="pulse-pct ${monthCls}">${escapeHtml(
+                    pctText(month),
+                  )}</span>`
+            }</span>
+            <span class="${dayCls}">今日 ${
+              day == null
+                ? "—"
+                : `<span class="pulse-pct ${dayCls}">${escapeHtml(
+                    pctText(day),
+                  )}</span>`
+            }</span>
+          </span>
+          <span class="stock-reason">${colorizePctHtml(reason)}</span>
+          <span class="stock-action">${colorizePctHtml(action)}</span>
+        </button>
+        <button
+          type="button"
+          class="sector-hold-btn ${held ? "is-held" : ""}"
+          data-hold-symbol="${escapeHtml(sym)}"
+          data-hold-name="${escapeHtml(row.name || "")}"
+          data-hold-action="${held ? "remove" : "add"}"
+          title="${held ? `从持仓移除 ${sym}` : `加入持仓 ${sym}`}"
+          aria-label="${held ? `从持仓移除 ${sym}` : `加入持仓 ${sym}`}"
+        >${held ? "−" : "+"}</button>
+      </div>
     `;
   };
 
@@ -5311,6 +5328,19 @@ function renderSectorPulse(data, { soft = false } = {}) {
         if (sym) selectSectorSymbol(sym);
       });
     });
+  els.sectorPulseBody.querySelectorAll(".sector-hold-btn").forEach((btn) => {
+    btn.addEventListener("click", (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      const sym = btn.getAttribute("data-hold-symbol") || "";
+      const name = btn.getAttribute("data-hold-name") || "";
+      const action = btn.getAttribute("data-hold-action") || "add";
+      if (action === "remove") {
+        if (!confirm(`确定从持仓移除 ${sym}？`)) return;
+      }
+      toggleSectorHolding(sym, name);
+    });
+  });
   // Keep list wheel scroll inside the column (more picks than viewport).
   const lists = els.sectorPulseBody.querySelectorAll(
     ".sector-pulse-stock-list",
