@@ -2861,74 +2861,60 @@ def _build_pulse_stock_desk(
         )
 
     scored.sort(key=lambda r: float(r.get("score") or -999), reverse=True)
-    # Show more names in 偏多 / 偏空; UI columns scroll when tall.
-    strong_n, bearish_n, watch_n, weak_n = 8, 8, 5, 4
-    strong = [r for r in scored if r.get("stance") == "accumulate"][:strong_n]
-    if len(strong) < strong_n:
-        # Backfill with next-best non-bear names into 偏多跟踪.
-        have = {x.get("symbol") for x in strong}
-        for r in scored:
-            if len(strong) >= strong_n:
-                break
-            if r.get("symbol") in have:
-                continue
-            if r.get("stance") in {"avoid", "reduce"}:
-                continue
-            row = r
-            if row.get("stance") != "accumulate":
-                row = {
-                    **row,
-                    "stance": "accumulate",
-                    "stance_zh": "偏多跟踪",
-                    "action": "回撤确认后跟踪，优先看相对强度未破",
-                }
-            strong.append(row)
-            have.add(row.get("symbol"))
-    bearish = [r for r in scored if r.get("stance") == "reduce"][:bearish_n]
-    if len(bearish) < bearish_n:
-        # Soft-bear fill from weakest remaining (exclude strong names).
-        have = {x.get("symbol") for x in strong} | {
-            x.get("symbol") for x in bearish
+    # Rank-split so 偏多 / 偏空 both get a fuller list; columns scroll in UI.
+    n = len(scored)
+    strong_n = min(10, max(4, (n * 2 + 2) // 5))  # ~40%
+    bearish_n = min(10, max(3, (n * 2 + 2) // 5))  # ~40%
+    if strong_n + bearish_n > n:
+        bearish_n = max(2, n - strong_n) if n >= 4 else max(1, n - strong_n)
+    watch_n, weak_n = 6, 4
+
+    def _as_strong(row: dict[str, Any]) -> dict[str, Any]:
+        if row.get("stance") == "accumulate":
+            return row
+        return {
+            **row,
+            "stance": "accumulate",
+            "stance_zh": "偏多跟踪",
+            "action": "回撤确认后跟踪，优先看相对强度未破",
         }
-        for r in reversed(scored):
-            if len(bearish) >= bearish_n:
-                break
-            if r.get("symbol") in have:
-                continue
-            if r.get("stance") == "accumulate":
-                continue
-            if r.get("stance") == "avoid":
-                continue
-            soft = r
-            if soft.get("stance") != "reduce":
-                soft = {
-                    **soft,
-                    "stance": "reduce",
-                    "stance_zh": "偏空跟踪",
-                    "action": "偏弱跟踪：控制仓位，等止稳或跌出性价比",
-                }
-            bearish.append(soft)
-            have.add(soft.get("symbol"))
-    weak = [r for r in reversed(scored) if r.get("stance") == "avoid"][:weak_n]
-    if not weak and not bearish and len(scored) >= 2:
-        # Keep a soft-bear sample when nothing clearly weak.
-        soft = scored[-1]
-        if soft.get("stance") == "watch":
-            soft = {
-                **soft,
-                "stance": "reduce",
-                "stance_zh": "偏空跟踪",
-                "action": "偏弱跟踪：控制仓位，等止稳或跌出性价比",
-            }
-            bearish = [soft]
-        else:
-            weak = [soft]
-    used = (
-        {x.get("symbol") for x in strong}
-        | {x.get("symbol") for x in bearish}
-        | {x.get("symbol") for x in weak}
-    )
+
+    def _as_bearish(row: dict[str, Any]) -> dict[str, Any]:
+        if row.get("stance") == "reduce":
+            return row
+        return {
+            **row,
+            "stance": "reduce",
+            "stance_zh": "偏空跟踪",
+            "action": "偏弱跟踪：控制仓位，等止稳或跌出性价比",
+        }
+
+    strong = [_as_strong(r) for r in scored[:strong_n]]
+    strong_syms = {x.get("symbol") for x in strong}
+    bearish: list[dict[str, Any]] = []
+    weak: list[dict[str, Any]] = []
+    for r in reversed(scored):
+        sym = r.get("symbol")
+        if sym in strong_syms:
+            continue
+        if r.get("stance") == "avoid" and len(weak) < weak_n:
+            weak.append(r)
+            strong_syms.add(sym)  # mark used
+            continue
+        if len(bearish) < bearish_n:
+            bearish.append(_as_bearish(r))
+            strong_syms.add(sym)
+    used = strong_syms
     watch = [r for r in scored if r.get("symbol") not in used][:watch_n]
+    if not bearish and n >= 2:
+        # Extremely one-sided tape — still surface a soft-bear sample.
+        soft = next(
+            (r for r in reversed(scored) if r.get("symbol") not in {x.get("symbol") for x in strong}),
+            scored[-1],
+        )
+        if soft.get("symbol") not in {x.get("symbol") for x in strong}:
+            bearish = [_as_bearish(soft)]
+            watch = [r for r in watch if r.get("symbol") != soft.get("symbol")]
 
     if not scored:
         summary = f"「{label}」成分股报价不足，暂无法给出个股强弱与推荐。"

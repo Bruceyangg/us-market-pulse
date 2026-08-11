@@ -3684,13 +3684,24 @@ html[data-theme="dark"] .us-futures-card {
 .sector-pulse-stock-list {
   display: grid;
   gap: 0.3rem;
-  max-height: 22rem;
+  max-height: min(26rem, 52vh);
   overflow-x: hidden;
   overflow-y: auto;
   overscroll-behavior: contain;
-  padding-right: 0.15rem;
+  padding: 0.1rem 0.2rem 0.25rem 0;
   scrollbar-gutter: stable;
   -webkit-overflow-scrolling: touch;
+  mask-image: linear-gradient(
+    to bottom,
+    #000 0%,
+    #000 calc(100% - 1.1rem),
+    transparent 100%
+  );
+}
+
+.sector-pulse-stock-list:hover,
+.sector-pulse-stock-list:focus-within {
+  mask-image: none;
 }
 
 .sector-pulse-stock-list::-webkit-scrollbar {

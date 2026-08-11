@@ -5000,9 +5000,9 @@ function renderSectorPulse(data) {
   const playbook = String(view.playbook || pulse.playbook || "").trim();
   const detail = String(view.detail || pulse.detail || "").trim();
   const stockDesk = pulse.stock_desk || {};
-  const stockStrong = (stockDesk.strong || []).slice(0, 8);
-  const stockBearish = (stockDesk.bearish || []).slice(0, 8);
-  const stockWatch = (stockDesk.watch || []).slice(0, 5);
+  const stockStrong = (stockDesk.strong || []).slice(0, 10);
+  const stockBearish = (stockDesk.bearish || []).slice(0, 10);
+  const stockWatch = (stockDesk.watch || []).slice(0, 6);
   const stockWeak = (stockDesk.weak || []).slice(0, 4);
   const pulseHzButtons = [
     ["1w", "一周"],
@@ -5131,7 +5131,7 @@ function renderSectorPulse(data) {
               ${
                 [...stockWatch, ...stockWeak].length
                   ? [...stockWatch, ...stockWeak]
-                      .slice(0, 8)
+                      .slice(0, 10)
                       .map((r) =>
                         stockCard(
                           r,
