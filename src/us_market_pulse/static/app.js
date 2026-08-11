@@ -819,6 +819,28 @@ function formatBeijingCrosshairTime(ts) {
   return `${get("month")}/${get("day")} ${hour}:${get("minute")} (北京)`;
 }
 
+/** Day/month/quarter candle tip time in Beijing. */
+function formatBeijingCandleTime(ts, tf = "day") {
+  const d = new Date(Number(ts) * 1000);
+  if (Number.isNaN(d.getTime())) return "—";
+  const parts = new Intl.DateTimeFormat("en-CA", {
+    timeZone: "Asia/Shanghai",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).formatToParts(d);
+  const get = (type) => parts.find((p) => p.type === type)?.value || "";
+  const y = get("year");
+  const m = get("month");
+  const day = get("day");
+  if (tf === "quarter") {
+    const q = Math.floor((Number(m) - 1) / 3) + 1;
+    return `${y} Q${q} (北京)`;
+  }
+  if (tf === "month") return `${y}/${m} (北京)`;
+  return `${y}/${m}/${day} (北京)`;
+}
+
 /**
  * Build hit-test model for 分时 (same filter/axis as the SVG renderer).
  * Shared by holdings + sectors charts.
@@ -1252,15 +1274,22 @@ function renderCandleSvg(
   const plotW = width - padL - padR;
   const plotH = height - padTop - padBottom;
   const muted = themeMutedFill();
+  const emptyHit = { width, height, padL, padR, slot: 0, samples: [] };
   const bars = sanitizeCandleBars(points);
   if (bars.length < 2) {
-    return `<svg viewBox="0 0 ${width} ${height}" role="img" aria-label="暂无K线"><text x="16" y="78" fill="${muted}" font-size="11">暂无K线数据</text></svg>`;
+    return {
+      html: `<svg class="candle-ohlc-svg" viewBox="0 0 ${width} ${height}" role="img" aria-label="暂无K线"><text x="16" y="78" fill="${muted}" font-size="11">暂无K线数据</text></svg>`,
+      hit: emptyHit,
+    };
   }
   const end = viewEnd == null ? bars.length : Math.min(bars.length, viewEnd);
   const start = clamp(viewStart, 0, Math.max(0, end));
   const viewBars = bars.slice(start, end);
   if (viewBars.length < 2) {
-    return `<svg viewBox="0 0 ${width} ${height}" role="img" aria-label="暂无K线"><text x="16" y="78" fill="${muted}" font-size="11">暂无K线数据</text></svg>`;
+    return {
+      html: `<svg class="candle-ohlc-svg" viewBox="0 0 ${width} ${height}" role="img" aria-label="暂无K线"><text x="16" y="78" fill="${muted}" font-size="11">暂无K线数据</text></svg>`,
+      hit: emptyHit,
+    };
   }
 
   const closes = bars.map((b) => Number(b.c));
@@ -1292,6 +1321,7 @@ function renderCandleSvg(
   const bodyW = Math.max(1.8, Math.min(8, slot * 0.68));
   const wickW = Math.max(1.2, Math.min(2.2, bodyW * 0.45));
   const yOf = (price) => padTop + (1 - (price - min) / span) * plotH;
+  const samples = [];
 
   const shapes = viewBars
     .map((b, i) => {
@@ -1308,6 +1338,21 @@ function renderCandleSvg(
       const yClose = yOf(c);
       const top = Math.min(yOpen, yClose);
       const bodyH = Math.max(1.4, Math.abs(yClose - yOpen));
+      const prevIdx = start + i - 1;
+      const prevClose =
+        prevIdx >= 0 && Number.isFinite(Number(bars[prevIdx]?.c))
+          ? Number(bars[prevIdx].c)
+          : null;
+      samples.push({
+        x,
+        y: yClose,
+        t: Number(b.t) || 0,
+        o,
+        h,
+        l,
+        c,
+        prevClose,
+      });
       return `
         <line x1="${x.toFixed(2)}" y1="${yHigh.toFixed(2)}" x2="${x.toFixed(
           2
@@ -1354,30 +1399,44 @@ function renderCandleSvg(
     )}</text>`;
   }).join("");
 
-  return `
+  const hair = themeMutedFill();
+  const html = `
     <svg class="candle-ohlc-svg" viewBox="0 0 ${width} ${height}" preserveAspectRatio="none" role="img" aria-label="K线柱状图 红涨绿跌${
       showMa ? " 含均线" : ""
     }">
       ${shapes}
       ${maPaths}
       ${priceTicks}
+      <g class="candle-crosshair" visibility="hidden">
+        <line class="ch-v" x1="0" y1="${padTop}" x2="0" y2="${(
+          height - padBottom
+        ).toFixed(1)}" stroke="${hair}" stroke-width="1" stroke-dasharray="3 3" opacity="0.85"></line>
+        <line class="ch-h" x1="${padL}" y1="0" x2="${(
+          width - padR
+        ).toFixed(1)}" y2="0" stroke="${hair}" stroke-width="1" stroke-dasharray="3 3" opacity="0.85"></line>
+        <circle class="ch-dot" cx="0" cy="0" r="2.6" fill="${hair}" opacity="0.95"></circle>
+      </g>
     </svg>
   `;
+  return {
+    html,
+    hit: { width, height, padL, padR, slot, samples },
+  };
 }
 
 function candleChartHtml(points, tf, zoom = null) {
   const showMa = MA_CHART_TFS.has(tf);
-  const svg = renderCandleSvg(points, {
+  const drawn = renderCandleSvg(points, {
     showMa,
     viewStart: zoom?.start ?? 0,
     viewEnd: zoom ? zoom.start + zoom.count : null,
   });
-  if (!showMa) return svg;
+  if (!showMa) return drawn.html;
   const closes = (points || [])
     .map((p) => Number(p?.c))
     .filter((v) => !Number.isNaN(v));
   const active = MA_PERIODS.filter((m) => closes.length >= m.n);
-  return `${svg}${maLegendHtml(active.length ? active : MA_PERIODS)}`;
+  return `${drawn.html}${maLegendHtml(active.length ? active : MA_PERIODS)}`;
 }
 
 function paintZoomableChart(key) {
@@ -1423,16 +1482,20 @@ function paintZoomableChart(key) {
         });
     stage.innerHTML = drawn.html;
     meta.intradayHit = drawn.hit;
-    hideIntradayCrosshair(key);
+    meta.candleHit = null;
+    hideChartCrosshair(key);
   } else if (kind === "candle") {
     meta.intradayHit = null;
-    hideIntradayCrosshair(key);
     // Keep SVG inside the zoom stage; park MA legend as a sibling so it cannot
     // overflow/paint over 个股财报 below when the chart card is height-clipped.
-    stage.innerHTML = candleChartHtml(points, tf, z).replace(
-      /<div class="ma-legend"[\s\S]*?<\/div>\s*$/,
-      ""
-    );
+    const drawn = renderCandleSvg(points, {
+      showMa: MA_CHART_TFS.has(tf),
+      viewStart: z.start,
+      viewEnd: z.start + z.count,
+    });
+    stage.innerHTML = drawn.html;
+    meta.candleHit = drawn.hit;
+    hideChartCrosshair(key);
     const active = MA_PERIODS.filter((m) => (points || []).length >= m.n);
     if (zoomRoot) {
       zoomRoot.insertAdjacentHTML(
@@ -1442,7 +1505,8 @@ function paintZoomableChart(key) {
     }
   } else {
     meta.intradayHit = null;
-    hideIntradayCrosshair(key);
+    meta.candleHit = null;
+    hideChartCrosshair(key);
     stage.innerHTML = renderChartSvg(points, {
       up,
       viewStart: z.start,
@@ -1466,17 +1530,23 @@ function nearestIntradaySample(hit, svgX) {
   return best;
 }
 
-function hideIntradayCrosshair(key) {
+function hideChartCrosshair(key) {
   const meta = chartZoomData.get(key);
   const root = meta?.root;
   if (!root) return;
-  const g = root.querySelector(".intraday-crosshair");
-  if (g) g.setAttribute("visibility", "hidden");
+  root.querySelectorAll(".intraday-crosshair, .candle-crosshair").forEach((g) => {
+    g.setAttribute("visibility", "hidden");
+  });
   const tip = root.querySelector(".chart-crosshair-tip");
   if (tip) {
     tip.classList.add("is-hidden");
     tip.innerHTML = "";
   }
+}
+
+/** @deprecated use hideChartCrosshair */
+function hideIntradayCrosshair(key) {
+  hideChartCrosshair(key);
 }
 
 function ensureIntradayCrosshairTip(zoomRoot) {
@@ -1491,14 +1561,126 @@ function ensureIntradayCrosshairTip(zoomRoot) {
   return tip;
 }
 
-function showIntradayCrosshair(key, clientX, clientY) {
+function placeChartCrosshairTip(tip, zoomRoot, clientX, clientY) {
+  const zr = zoomRoot.getBoundingClientRect();
+  const localX = clientX - zr.left;
+  const localY = clientY - zr.top;
+  const tipW = tip.offsetWidth || 168;
+  const tipH = tip.offsetHeight || 72;
+  let left = localX - tipW / 2;
+  let top = localY - tipH - 14;
+  left = clamp(left, 6, Math.max(6, zr.width - tipW - 6));
+  if (top < 6) top = Math.min(localY + 18, Math.max(6, zr.height - tipH - 6));
+  tip.style.left = `${left}px`;
+  tip.style.top = `${top}px`;
+}
+
+function nearestCandleSample(hit, svgX) {
+  const samples = hit?.samples || [];
+  if (!samples.length) return null;
+  let best = samples[0];
+  let bestDist = Math.abs(samples[0].x - svgX);
+  for (let i = 1; i < samples.length; i += 1) {
+    const d = Math.abs(samples[i].x - svgX);
+    if (d < bestDist) {
+      best = samples[i];
+      bestDist = d;
+    }
+  }
+  return best;
+}
+
+function showCandleCrosshair(key, clientX, clientY) {
   const meta = chartZoomData.get(key);
-  if (!meta || meta.tf !== "intraday" || !meta.intradayHit) {
-    hideIntradayCrosshair(key);
+  if (
+    !meta ||
+    !["day", "month", "quarter", "week", "year"].includes(meta.tf) ||
+    !meta.candleHit
+  ) {
+    hideChartCrosshair(key);
     return;
   }
   const root = meta.root;
-  const svg = root?.querySelector("svg.session-intraday-svg");
+  const svg = root?.querySelector("svg.candle-ohlc-svg");
+  const zoomRoot = root?.querySelector(".chart-zoom");
+  const hit = meta.candleHit;
+  if (!svg || !zoomRoot) return;
+
+  const rect = svg.getBoundingClientRect();
+  if (!(rect.width > 0) || !(rect.height > 0)) return;
+  const svgX = ((clientX - rect.left) / rect.width) * hit.width;
+  const sample = nearestCandleSample(hit, svgX);
+  if (!sample) {
+    hideChartCrosshair(key);
+    return;
+  }
+
+  const g = svg.querySelector(".candle-crosshair");
+  const v = g?.querySelector(".ch-v");
+  const h = g?.querySelector(".ch-h");
+  const dot = g?.querySelector(".ch-dot");
+  if (g && v && h && dot) {
+    g.setAttribute("visibility", "visible");
+    v.setAttribute("x1", sample.x.toFixed(2));
+    v.setAttribute("x2", sample.x.toFixed(2));
+    h.setAttribute("y1", sample.y.toFixed(2));
+    h.setAttribute("y2", sample.y.toFixed(2));
+    dot.setAttribute("cx", sample.x.toFixed(2));
+    dot.setAttribute("cy", sample.y.toFixed(2));
+  }
+
+  const tip = ensureIntradayCrosshairTip(zoomRoot);
+  if (!tip) return;
+  const prev = sample.prevClose;
+  const change =
+    prev != null && Number.isFinite(prev) ? sample.c - prev : sample.c - sample.o;
+  const changeBase =
+    prev != null && Number.isFinite(prev) && prev !== 0 ? prev : sample.o;
+  const changePct =
+    changeBase && Number.isFinite(changeBase)
+      ? (change / changeBase) * 100
+      : null;
+  const delta = formatDelta(change);
+  const tipCls = pctClass(changePct);
+  tip.innerHTML = `
+    <div class="cht-time">${escapeHtml(
+      formatBeijingCandleTime(sample.t, meta.tf)
+    )}</div>
+    <div class="cht-grid cht-grid-candle">
+      <div><span>开盘</span><strong>${escapeHtml(
+        formatNumber(sample.o, "")
+      )}</strong></div>
+      <div><span>收盘</span><strong class="${tipCls}">${escapeHtml(
+        formatNumber(sample.c, "")
+      )}</strong></div>
+      <div><span>涨跌幅</span><strong class="${tipCls}">${escapeHtml(
+        pctText(changePct)
+      )}</strong></div>
+      <div><span>最高</span><strong>${escapeHtml(
+        formatNumber(sample.h, "")
+      )}</strong></div>
+      <div><span>最低</span><strong>${escapeHtml(
+        formatNumber(sample.l, "")
+      )}</strong></div>
+      <div><span>涨跌额</span><strong class="${delta.cls}">${escapeHtml(
+        delta.text
+      )}</strong></div>
+    </div>
+  `;
+  tip.classList.remove("is-hidden");
+  placeChartCrosshairTip(tip, zoomRoot, clientX, clientY);
+}
+
+function showIntradayCrosshair(key, clientX, clientY) {
+  const meta = chartZoomData.get(key);
+  if (!meta || meta.tf !== "intraday" || !meta.intradayHit) {
+    hideChartCrosshair(key);
+    return;
+  }
+  const root = meta.root;
+  const svg = root?.querySelector(
+    "svg.session-intraday-svg, svg.futures-intraday-svg"
+  );
   const zoomRoot = root?.querySelector(".chart-zoom");
   const hit = meta.intradayHit;
   if (!svg || !zoomRoot) return;
@@ -1508,7 +1690,7 @@ function showIntradayCrosshair(key, clientX, clientY) {
   const svgX = ((clientX - rect.left) / rect.width) * hit.width;
   const sample = nearestIntradaySample(hit, svgX);
   if (!sample) {
-    hideIntradayCrosshair(key);
+    hideChartCrosshair(key);
     return;
   }
 
@@ -1550,19 +1732,27 @@ function showIntradayCrosshair(key, clientX, clientY) {
     </div>
   `;
   tip.classList.remove("is-hidden");
+  placeChartCrosshairTip(tip, zoomRoot, clientX, clientY);
+}
 
-  // Keep tip inside the chart: prefer above the finger/cursor, flip if needed.
-  const zr = zoomRoot.getBoundingClientRect();
-  const localX = clientX - zr.left;
-  const localY = clientY - zr.top;
-  const tipW = tip.offsetWidth || 168;
-  const tipH = tip.offsetHeight || 72;
-  let left = localX - tipW / 2;
-  let top = localY - tipH - 14;
-  left = clamp(left, 6, Math.max(6, zr.width - tipW - 6));
-  if (top < 6) top = Math.min(localY + 18, Math.max(6, zr.height - tipH - 6));
-  tip.style.left = `${left}px`;
-  tip.style.top = `${top}px`;
+function showChartCrosshair(key, clientX, clientY) {
+  const meta = chartZoomData.get(key);
+  if (!meta) {
+    hideChartCrosshair(key);
+    return;
+  }
+  if (meta.tf === "intraday") {
+    showIntradayCrosshair(key, clientX, clientY);
+    return;
+  }
+  if (
+    meta.kind === "candle" ||
+    ["day", "month", "quarter", "week", "year"].includes(meta.tf)
+  ) {
+    showCandleCrosshair(key, clientX, clientY);
+    return;
+  }
+  hideChartCrosshair(key);
 }
 
 function bindIntradayCrosshair(zoomRoot, key) {
@@ -1576,15 +1766,10 @@ function bindIntradayCrosshair(zoomRoot, key) {
     if (activePointer != null && event.pointerId !== activePointer) return;
     // Ignore multi-touch pinch gestures.
     if (event.pointerType === "touch" && zoomRoot._pulsePointers > 1) {
-      hideIntradayCrosshair(key);
+      hideChartCrosshair(key);
       return;
     }
-    const meta = chartZoomData.get(key);
-    if (!meta || meta.tf !== "intraday") {
-      hideIntradayCrosshair(key);
-      return;
-    }
-    showIntradayCrosshair(key, event.clientX, event.clientY);
+    showChartCrosshair(key, event.clientX, event.clientY);
   };
 
   zoomRoot.addEventListener("pointerdown", (event) => {
@@ -1597,7 +1782,7 @@ function bindIntradayCrosshair(zoomRoot, key) {
       } catch {
         /* ignore */
       }
-      showIntradayCrosshair(key, event.clientX, event.clientY);
+      showChartCrosshair(key, event.clientX, event.clientY);
     }
   });
   zoomRoot.addEventListener("pointermove", onMove);
@@ -1605,16 +1790,16 @@ function bindIntradayCrosshair(zoomRoot, key) {
     zoomRoot._pulsePointers = Math.max(0, (zoomRoot._pulsePointers || 1) - 1);
     if (event.pointerId === activePointer) {
       activePointer = null;
-      hideIntradayCrosshair(key);
+      hideChartCrosshair(key);
     }
   });
   zoomRoot.addEventListener("pointercancel", (event) => {
     zoomRoot._pulsePointers = Math.max(0, (zoomRoot._pulsePointers || 1) - 1);
     if (event.pointerId === activePointer) activePointer = null;
-    hideIntradayCrosshair(key);
+    hideChartCrosshair(key);
   });
   zoomRoot.addEventListener("pointerleave", () => {
-    if (activePointer == null) hideIntradayCrosshair(key);
+    if (activePointer == null) hideChartCrosshair(key);
   });
 }
 

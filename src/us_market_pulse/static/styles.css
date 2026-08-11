@@ -5476,6 +5476,11 @@ html[data-theme="dark"] .yahoo-intraday-svg .band-post {
   gap: 0.28rem 0.55rem;
 }
 
+.chart-zoom .chart-crosshair-tip .cht-grid-candle {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  row-gap: 0.35rem;
+}
+
 .chart-zoom .chart-crosshair-tip .cht-grid span {
   display: block;
   color: var(--ink-soft);
