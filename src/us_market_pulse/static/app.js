@@ -86,8 +86,8 @@ const CHART_ZOOM_STEP = 1.22;
 const CHART_DEFAULT_VISIBLE = {
   day: 90,
   week: 80,
-  month: 72,
-  quarter: 64,
+  month: 60,
+  quarter: 36,
   year: 60,
 };
 const chartZoomData = new Map();
@@ -402,10 +402,15 @@ function clamp(n, lo, hi) {
 
 function defaultChartZoom(len, tf, kind) {
   const n = Math.max(2, len || 0);
-  if (kind !== "candle" || n <= 96) {
+  if (kind !== "candle") {
     return { start: 0, count: n };
   }
+  // Always prefer a recent window — even when total bars < 96 (e.g. 季图 ~60).
+  // Showing the entire decade+ history compresses recent action into a spike.
   const prefer = CHART_DEFAULT_VISIBLE[tf] || 90;
+  if (n <= prefer) {
+    return { start: 0, count: n };
+  }
   const count = Math.min(n, Math.max(CHART_ZOOM_MIN_BARS, prefer));
   return { start: Math.max(0, n - count), count };
 }
@@ -1267,9 +1272,20 @@ function renderCandleSvg(
 
   const highs = viewBars.map((b) => Number(b.h));
   const lows = viewBars.map((b) => Number(b.l));
-  const maVals = maLines.flatMap((m) => m.values.filter((v) => v != null));
-  const min = Math.min(...lows, ...(maVals.length ? maVals : [Infinity]));
-  const max = Math.max(...highs, ...(maVals.length ? maVals : [-Infinity]));
+  // Scale primarily from visible candles. Including a far MA250 in the y-range
+  // flattens recent bars into a top-edge "spike" on strong multi-year trends.
+  let min = Math.min(...lows);
+  let max = Math.max(...highs);
+  const candleSpan = max - min || Math.abs(max) * 0.02 || 1;
+  const maBandLo = min - candleSpan * 0.35;
+  const maBandHi = max + candleSpan * 0.35;
+  const maVals = maLines
+    .flatMap((m) => m.values.filter((v) => v != null))
+    .filter((v) => v >= maBandLo && v <= maBandHi);
+  if (maVals.length) {
+    min = Math.min(min, ...maVals);
+    max = Math.max(max, ...maVals);
+  }
   const span = max - min || 1;
   const slot = plotW / viewBars.length;
   const bodyW = Math.max(1.8, Math.min(8, slot * 0.68));
@@ -8642,7 +8658,12 @@ function usStripTfPoints(row, tf) {
   const want = tf || state.usStripTf || "day";
   const series = (row?.series || {})[want] || {};
   const pts = (series.points || row?.points || [])
-    .map((p) => Number(p?.v ?? p?.c))
+    .map((p) => {
+      // Candle bars use v=volume; prefer close for price sparks.
+      const isCandle =
+        p?.o != null || p?.h != null || p?.l != null || p?.c != null;
+      return Number(isCandle ? p?.c ?? p?.v : p?.v ?? p?.c);
+    })
     .filter((n) => Number.isFinite(n));
   return pts;
 }
@@ -8739,10 +8760,14 @@ function renderUsFuturesCharts() {
       const series = resolved.series;
       const points = resolved.points;
       const kind = resolved.kind;
+      // Always show session quote % (same as top strip) — never full-history
+      // window return from series.change_pct / window_change_pct.
       const pct =
-        series?.change_pct != null
-          ? series.change_pct
-          : fut.change_pct;
+        fut.change_pct != null
+          ? fut.change_pct
+          : series?.change_pct != null
+            ? series.change_pct
+            : null;
       const up = !(typeof pct === "number" && pct < 0);
       return `
         <article class="us-futures-card" data-fut-id="${escapeHtml(id)}">
@@ -8789,7 +8814,11 @@ function renderUsFuturesCharts() {
     const series = resolved.series;
     const kind = resolved.kind;
     const pct =
-      series?.change_pct != null ? series.change_pct : fut.change_pct;
+      fut.change_pct != null
+        ? fut.change_pct
+        : series?.change_pct != null
+          ? series.change_pct
+          : null;
     const up = !(typeof pct === "number" && pct < 0);
     bindZoomableChart(host, {
       key: `us-fut-${id}`,

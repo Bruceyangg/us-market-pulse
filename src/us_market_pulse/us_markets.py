@@ -493,7 +493,7 @@ async def _build_futures_bundle(
                 for b in _bj_session_slice(bars)
             ]
             points = even_sample_points(line, 420) if len(line) > 420 else line
-            change, change_pct = _series_change(points, "line")
+            window_change, window_pct = _series_change(points, "line")
             series[tf_id] = {
                 "tf": tf_id,
                 "label": tf["label"],
@@ -504,8 +504,11 @@ async def _build_futures_bundle(
                 ),
                 "chart": "line",
                 "points": points,
-                "change": change,
-                "change_pct": change_pct,
+                # Prefer session quote % below; keep window stats for tooling.
+                "change": window_change,
+                "change_pct": window_pct,
+                "window_change": window_change,
+                "window_change_pct": window_pct,
                 "source": source,
             }
         else:
@@ -521,19 +524,34 @@ async def _build_futures_bundle(
                 for b in bars
             ]
             points = even_sample_points(candle, 560)
-            change, change_pct = _series_change(points, "candle")
+            window_change, window_pct = _series_change(points, "candle")
             series[tf_id] = {
                 "tf": tf_id,
                 "label": tf["label"],
                 "blurb": f"{'CNBC' if source == 'cnbc' else 'Yahoo'} {tf['label']} · 指数期货主连（红涨绿跌）",
                 "chart": "candle",
                 "points": points,
-                "change": change,
-                "change_pct": change_pct,
+                "change": window_change,
+                "change_pct": window_pct,
+                "window_change": window_change,
+                "window_change_pct": window_pct,
                 "source": source,
             }
 
     q = quote or {}
+    # Card/tape % must match session quote (prev close → last), not full-history
+    # first→last window return (was showing multi-year +40~60% on 日/月/季).
+    q_change = q.get("change")
+    q_pct = q.get("change_pct")
+    if q_pct is not None or q_change is not None:
+        for row in series.values():
+            if not isinstance(row, dict):
+                continue
+            row["change"] = q_change
+            row["change_pct"] = q_pct
+            if q.get("previous_close") is not None:
+                row["previous_close"] = q.get("previous_close")
+
     intra = series.get("intraday") or {}
     pts = list(intra.get("points") or [])
     return (
@@ -545,6 +563,7 @@ async def _build_futures_bundle(
             "price": q.get("price"),
             "change": q.get("change"),
             "change_pct": q.get("change_pct"),
+            "previous_close": q.get("previous_close"),
             "points": [
                 {"t": p.get("t"), "v": p.get("v") if p.get("v") is not None else p.get("c")}
                 for p in pts[-48:]
@@ -804,16 +823,23 @@ async def _build_us_markets_inner(
             raw_pts = list(src.get("points") or [])
             if len(raw_pts) < 2:
                 continue
-            # Futures series may be candles; normalize to spark {t,v}.
-            spark_pts = [
-                {
-                    "t": p.get("t"),
-                    "v": p.get("v") if p.get("v") is not None else p.get("c"),
-                }
-                for p in raw_pts
-                if (p.get("v") is not None or p.get("c") is not None)
-                and p.get("t") is not None
-            ]
+            # Futures series may be candles; spark "v" must be price (close),
+            # never candle volume (which is also keyed as "v").
+            spark_pts = []
+            for p in raw_pts:
+                if p.get("t") is None:
+                    continue
+                is_candle = (
+                    p.get("o") is not None
+                    or p.get("h") is not None
+                    or p.get("l") is not None
+                )
+                price = p.get("c") if is_candle else p.get("v")
+                if price is None:
+                    price = p.get("c") if p.get("c") is not None else p.get("v")
+                if price is None:
+                    continue
+                spark_pts.append({"t": p.get("t"), "v": price})
             if len(spark_pts) < 2:
                 continue
             series[tf_id] = {
