@@ -3240,9 +3240,9 @@ html[data-theme="dark"] .us-futures-card {
 
 .sector-pulse-grid {
   display: grid;
-  /* Left analysis wider; right ranking stays a compact rail. */
-  grid-template-columns: minmax(0, 2.2fr) minmax(11.25rem, 13.75rem);
-  gap: 0.75rem 0.85rem;
+  /* Left stays primary; right ranking rail a bit wider for readability. */
+  grid-template-columns: minmax(0, 1.85fr) minmax(15rem, 17.75rem);
+  gap: 0.75rem 0.9rem;
   align-items: stretch;
 }
 
@@ -3388,10 +3388,10 @@ html[data-theme="dark"] .us-futures-card {
 
 .sector-pulse-rank {
   display: grid;
-  gap: 0.16rem;
+  gap: 0.18rem;
   width: 100%;
   margin: 0;
-  padding: 0.38rem 0.42rem 0.34rem;
+  padding: 0.42rem 0.5rem 0.38rem;
   border: 1px solid color-mix(in srgb, var(--line) 80%, transparent);
   border-radius: 8px;
   background: color-mix(in srgb, var(--panel) 70%, transparent);
@@ -3434,7 +3434,7 @@ html[data-theme="dark"] .us-futures-card {
 }
 
 .sector-pulse-rank .name {
-  font-size: 0.78rem;
+  font-size: 0.82rem;
   font-weight: 700;
   min-width: 0;
   overflow: hidden;
@@ -3463,7 +3463,7 @@ html[data-theme="dark"] .us-futures-card {
 }
 
 .sector-pulse-rank .pct {
-  font-size: 0.82rem;
+  font-size: 0.86rem;
   font-weight: 780;
   font-variant-numeric: tabular-nums;
   line-height: 1.1;
@@ -3513,9 +3513,9 @@ html[data-theme="dark"] .us-futures-card {
 
 .sector-pulse-spark {
   width: 100%;
-  height: 0.85rem;
+  height: 0.95rem;
   display: block;
-  opacity: 0.88;
+  opacity: 0.9;
 }
 
 .sector-pulse-spark.up {
@@ -3700,7 +3700,7 @@ html[data-theme="dark"] .us-futures-card {
 
 @media (max-width: 980px) {
   .sector-pulse-grid {
-    grid-template-columns: minmax(0, 1.7fr) minmax(10.75rem, 12.5rem);
+    grid-template-columns: minmax(0, 1.55fr) minmax(13.5rem, 15.5rem);
   }
 }
 
