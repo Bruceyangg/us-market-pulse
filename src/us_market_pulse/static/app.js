@@ -5000,10 +5000,10 @@ function renderSectorPulse(data) {
   const playbook = String(view.playbook || pulse.playbook || "").trim();
   const detail = String(view.detail || pulse.detail || "").trim();
   const stockDesk = pulse.stock_desk || {};
-  const stockStrong = (stockDesk.strong || []).slice(0, 4);
-  const stockBearish = (stockDesk.bearish || []).slice(0, 3);
-  const stockWatch = (stockDesk.watch || []).slice(0, 3);
-  const stockWeak = (stockDesk.weak || []).slice(0, 3);
+  const stockStrong = (stockDesk.strong || []).slice(0, 8);
+  const stockBearish = (stockDesk.bearish || []).slice(0, 8);
+  const stockWatch = (stockDesk.watch || []).slice(0, 5);
+  const stockWeak = (stockDesk.weak || []).slice(0, 4);
   const pulseHzButtons = [
     ["1w", "一周"],
     ["2w", "两周"],
@@ -5131,7 +5131,7 @@ function renderSectorPulse(data) {
               ${
                 [...stockWatch, ...stockWeak].length
                   ? [...stockWatch, ...stockWeak]
-                      .slice(0, 4)
+                      .slice(0, 8)
                       .map((r) =>
                         stockCard(
                           r,
@@ -5247,6 +5247,24 @@ function renderSectorPulse(data) {
         const sym = btn.getAttribute("data-pulse-symbol");
         if (sym) selectSectorSymbol(sym);
       });
+    });
+  // Keep list wheel scroll inside the column (more picks than viewport).
+  els.sectorPulseBody
+    .querySelectorAll(".sector-pulse-stock-list")
+    .forEach((list) => {
+      list.addEventListener(
+        "wheel",
+        (event) => {
+          if (list.scrollHeight <= list.clientHeight + 1) return;
+          const dy = event.deltaY;
+          const top = list.scrollTop;
+          const max = list.scrollHeight - list.clientHeight;
+          const atTop = top <= 0 && dy < 0;
+          const atBottom = top >= max - 1 && dy > 0;
+          if (!atTop && !atBottom) event.stopPropagation();
+        },
+        { passive: true },
+      );
     });
 }
 

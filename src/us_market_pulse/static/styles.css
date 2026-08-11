@@ -3678,11 +3678,32 @@ html[data-theme="dark"] .us-futures-card {
   display: grid;
   gap: 0.3rem;
   min-width: 0;
+  align-content: start;
 }
 
 .sector-pulse-stock-list {
   display: grid;
   gap: 0.3rem;
+  max-height: 22rem;
+  overflow-x: hidden;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding-right: 0.15rem;
+  scrollbar-gutter: stable;
+  -webkit-overflow-scrolling: touch;
+}
+
+.sector-pulse-stock-list::-webkit-scrollbar {
+  width: 6px;
+}
+
+.sector-pulse-stock-list::-webkit-scrollbar-thumb {
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--ink-soft) 35%, transparent);
+}
+
+.sector-pulse-stock-list:hover::-webkit-scrollbar-thumb {
+  background: color-mix(in srgb, var(--ink-soft) 55%, transparent);
 }
 
 .sector-pulse-stock {

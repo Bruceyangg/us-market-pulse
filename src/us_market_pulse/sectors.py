@@ -2861,16 +2861,55 @@ def _build_pulse_stock_desk(
         )
 
     scored.sort(key=lambda r: float(r.get("score") or -999), reverse=True)
-    strong = [r for r in scored if r.get("stance") == "accumulate"][:4]
-    if not strong:
-        # No clear accumulate — show best non-bear names without relabeling.
-        strong = [
-            r
-            for r in scored
-            if r.get("stance") not in {"avoid", "reduce"}
-        ][:2]
-    bearish = [r for r in scored if r.get("stance") == "reduce"][:3]
-    weak = [r for r in reversed(scored) if r.get("stance") == "avoid"][:3]
+    # Show more names in 偏多 / 偏空; UI columns scroll when tall.
+    strong_n, bearish_n, watch_n, weak_n = 8, 8, 5, 4
+    strong = [r for r in scored if r.get("stance") == "accumulate"][:strong_n]
+    if len(strong) < strong_n:
+        # Backfill with next-best non-bear names into 偏多跟踪.
+        have = {x.get("symbol") for x in strong}
+        for r in scored:
+            if len(strong) >= strong_n:
+                break
+            if r.get("symbol") in have:
+                continue
+            if r.get("stance") in {"avoid", "reduce"}:
+                continue
+            row = r
+            if row.get("stance") != "accumulate":
+                row = {
+                    **row,
+                    "stance": "accumulate",
+                    "stance_zh": "偏多跟踪",
+                    "action": "回撤确认后跟踪，优先看相对强度未破",
+                }
+            strong.append(row)
+            have.add(row.get("symbol"))
+    bearish = [r for r in scored if r.get("stance") == "reduce"][:bearish_n]
+    if len(bearish) < bearish_n:
+        # Soft-bear fill from weakest remaining (exclude strong names).
+        have = {x.get("symbol") for x in strong} | {
+            x.get("symbol") for x in bearish
+        }
+        for r in reversed(scored):
+            if len(bearish) >= bearish_n:
+                break
+            if r.get("symbol") in have:
+                continue
+            if r.get("stance") == "accumulate":
+                continue
+            if r.get("stance") == "avoid":
+                continue
+            soft = r
+            if soft.get("stance") != "reduce":
+                soft = {
+                    **soft,
+                    "stance": "reduce",
+                    "stance_zh": "偏空跟踪",
+                    "action": "偏弱跟踪：控制仓位，等止稳或跌出性价比",
+                }
+            bearish.append(soft)
+            have.add(soft.get("symbol"))
+    weak = [r for r in reversed(scored) if r.get("stance") == "avoid"][:weak_n]
     if not weak and not bearish and len(scored) >= 2:
         # Keep a soft-bear sample when nothing clearly weak.
         soft = scored[-1]
@@ -2889,7 +2928,7 @@ def _build_pulse_stock_desk(
         | {x.get("symbol") for x in bearish}
         | {x.get("symbol") for x in weak}
     )
-    watch = [r for r in scored if r.get("symbol") not in used][:3]
+    watch = [r for r in scored if r.get("symbol") not in used][:watch_n]
 
     if not scored:
         summary = f"「{label}」成分股报价不足，暂无法给出个股强弱与推荐。"
