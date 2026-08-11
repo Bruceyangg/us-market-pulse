@@ -2183,12 +2183,166 @@ def _pulse_rank_reason(
     return " · ".join(bits[:3])
 
 
+def _pulse_stock_intel_hit(
+    symbol: str,
+    name: str,
+    intel: list[dict[str, Any]],
+) -> dict[str, Any] | None:
+    sym = str(symbol or "").upper().strip()
+    name_u = str(name or "").strip()
+    if not sym:
+        return None
+    for item in intel or []:
+        if not isinstance(item, dict):
+            continue
+        blob = " ".join(
+            str(item.get(k) or "")
+            for k in ("title", "title_zh", "summary", "brief_zh")
+        )
+        if sym in blob.upper() or (name_u and name_u in blob):
+            return item
+    return None
+
+
+def _build_pulse_stock_desk(
+    picks: list[dict[str, Any]] | None,
+    *,
+    intel: list[dict[str, Any]] | None = None,
+    sector_label: str | None = None,
+    etf_day_pct: float | None = None,
+) -> dict[str, Any]:
+    """Active-sector stock strength + recommendation, cross-checked with intel."""
+    label = str(sector_label or "当前板块").strip() or "当前板块"
+    rows_in = [p for p in (picks or []) if isinstance(p, dict) and p.get("symbol")]
+    scored: list[dict[str, Any]] = []
+    for p in rows_in:
+        sym = str(p.get("symbol") or "").upper()
+        name = str(p.get("name") or sym)
+        day = _pct(p.get("change_pct"))
+        month = _pct(p.get("month_change_pct"))
+        vs = _pct(p.get("vs_sector_pct"))
+        if vs is None and day is not None and etf_day_pct is not None:
+            vs = round(day - etf_day_pct, 2)
+        move = p.get("move_analysis") if isinstance(p.get("move_analysis"), dict) else {}
+        hit = _pulse_stock_intel_hit(sym, name, list(intel or []))
+        score = 0.0
+        if month is not None:
+            score += month * 0.55
+        if day is not None:
+            score += day * 0.30
+        if vs is not None:
+            score += vs * 0.45
+        if p.get("is_wave"):
+            score += 2.0
+        if hit:
+            sent = str(hit.get("sentiment") or "neutral")
+            if sent == "bullish":
+                score += 1.2
+            elif sent == "bearish":
+                score -= 1.4
+        if score >= 2.2:
+            stance, stance_zh = "accumulate", "偏多跟踪"
+        elif score <= -1.5:
+            stance, stance_zh = "avoid", "谨慎回避"
+        else:
+            stance, stance_zh = "watch", "观察等待"
+
+        reasons: list[str] = []
+        if month is not None:
+            reasons.append(f"近月 {month:+.1f}%")
+        if day is not None:
+            reasons.append(f"今日 {day:+.1f}%")
+        if vs is not None:
+            reasons.append(
+                f"{'强于' if vs >= 0 else '弱于'}板块 {vs:+.1f}%"
+            )
+        if p.get("is_wave"):
+            reasons.append("一轮涨势样本")
+        if hit:
+            title = str(hit.get("title_zh") or hit.get("title") or "").strip()
+            sent_zh = {
+                "bullish": "偏多",
+                "bearish": "偏空",
+                "neutral": "中性",
+            }.get(str(hit.get("sentiment") or "neutral"), "中性")
+            if title:
+                reasons.append(f"情报{sent_zh}：{title[:28]}{'…' if len(title) > 28 else ''}")
+            else:
+                reasons.append(f"情报{sent_zh}")
+        elif move.get("summary"):
+            reasons.append(str(move.get("summary"))[:36])
+
+        if stance == "accumulate":
+            action = "回撤确认后跟踪，优先看相对强度未破"
+        elif stance == "avoid":
+            action = "暂不追高，等止跌与情报转暖再议"
+        else:
+            action = "先观察量价与板块联动，不急于加仓"
+
+        scored.append(
+            {
+                "symbol": sym,
+                "name": name,
+                "change_pct": day,
+                "month_change_pct": month,
+                "vs_sector_pct": vs,
+                "is_wave": bool(p.get("is_wave")),
+                "score": round(score, 2),
+                "stance": stance,
+                "stance_zh": stance_zh,
+                "reason": " · ".join(reasons[:3]) or "数据不足",
+                "action": action,
+                "intel_sentiment": (
+                    str(hit.get("sentiment") or "") if hit else ""
+                ),
+            }
+        )
+
+    scored.sort(key=lambda r: float(r.get("score") or -999), reverse=True)
+    strong = [r for r in scored if r.get("stance") == "accumulate"][:4]
+    if len(strong) < 2:
+        strong = scored[:3]
+    weak = [r for r in reversed(scored) if r.get("stance") == "avoid"][:3]
+    if len(weak) < 1:
+        weak = list(reversed(scored[-2:])) if len(scored) >= 2 else []
+    watch = [
+        r
+        for r in scored
+        if r.get("stance") == "watch"
+        and r.get("symbol") not in {x.get("symbol") for x in strong}
+    ][:3]
+
+    if not scored:
+        summary = f"「{label}」成分股报价不足，暂无法给出个股强弱与推荐。"
+    else:
+        top = "、".join(
+            f"{x['symbol']}" for x in strong[:2] if x.get("symbol")
+        ) or "龙头样本"
+        summary = (
+            f"结合「{label}」成分涨跌与情报交叉："
+            f"优先关注 {top} 的相对强度；"
+            f"{'舆情偏空个股先降权重，' if any(r.get('intel_sentiment') == 'bearish' for r in scored[:6]) else ''}"
+            "推荐以回撤确认代替追高。"
+        )
+
+    return {
+        "sector_label": label,
+        "summary": summary,
+        "strong": strong,
+        "watch": watch,
+        "weak": weak,
+        "count": len(scored),
+    }
+
+
 def _build_sector_pulse(
     sectors: list[dict[str, Any]],
     *,
     sector_news: list[dict[str, Any]] | None = None,
     active_id: str | None = None,
     active_label: str | None = None,
+    picks: list[dict[str, Any]] | None = None,
+    etf_day_pct: float | None = None,
 ) -> dict[str, Any]:
     """Cross-sector ~2-week pulse: ranking, bias, intel, next-step playbook."""
     rows: list[dict[str, Any]] = []
@@ -2503,11 +2657,27 @@ def _build_sector_pulse(
             "结合情报主题验证催化是否兑现，再决定加仓或换仓。"
         )
 
+    stock_desk = _build_pulse_stock_desk(
+        picks,
+        intel=intel_rows,
+        sector_label=active_label or (rows[0]["label"] if rows else "当前板块"),
+        etf_day_pct=etf_day_pct
+        if etf_day_pct is not None
+        else next(
+            (
+                float(r["day_pct"])
+                for r in rows
+                if r.get("active") and r.get("day_pct") is not None
+            ),
+            None,
+        ),
+    )
+
     return {
         "horizon": "10d" if horizon_ready else "day",
         "horizon_zh": horizon_zh,
         "title": "板块动向研判",
-        "blurb": "涨跌结构 · 热点评判 · 情报交叉 · 下一步布局",
+        "blurb": "涨跌结构 · 热点评判 · 个股强弱 · 情报交叉 · 下一步布局",
         "bias": bias,
         "bias_zh": bias_zh,
         "summary": summary,
@@ -2515,6 +2685,7 @@ def _build_sector_pulse(
         "factors": factors[:6],
         "leaders": leaders,
         "laggards": laggards,
+        "stock_desk": stock_desk,
         "breadth": {
             "up": up,
             "down": down,
@@ -3787,6 +3958,8 @@ async def build_sector_desk(
         sector_news=sector_news_slim,
         active_id=sector_id,
         active_label=str((active or {}).get("label") or sector_id or ""),
+        picks=pick_rows,
+        etf_day_pct=_pct((active or {}).get("change_pct")),
     )
 
     return {

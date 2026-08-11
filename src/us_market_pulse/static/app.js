@@ -4881,6 +4881,101 @@ function renderSectorPulse(data) {
   const factors = (pulse.factors || []).slice(0, 6);
   const intel = (pulse.intel || []).slice(0, 4);
   const playbook = String(pulse.playbook || "").trim();
+  const stockDesk = pulse.stock_desk || {};
+  const stockStrong = (stockDesk.strong || []).slice(0, 4);
+  const stockWatch = (stockDesk.watch || []).slice(0, 3);
+  const stockWeak = (stockDesk.weak || []).slice(0, 3);
+
+  const stockCard = (row, tone) => {
+    const day = row?.change_pct;
+    const month = row?.month_change_pct;
+    const dayCls =
+      typeof day === "number" ? (day < 0 ? "down" : day > 0 ? "up" : "") : "";
+    const monthCls =
+      typeof month === "number"
+        ? month < 0
+          ? "down"
+          : month > 0
+            ? "up"
+            : ""
+        : "";
+    return `
+      <button type="button" class="sector-pulse-stock ${tone}" data-pulse-symbol="${escapeHtml(
+        row.symbol || "",
+      )}" title="查看 ${escapeHtml(row.symbol || "")}">
+        <span class="stock-top">
+          <span class="stock-id">
+            <span class="sym">${escapeHtml(row.symbol || "")}</span>
+            <span class="name">${escapeHtml(row.name || "")}</span>
+          </span>
+          <span class="stance">${escapeHtml(row.stance_zh || "")}</span>
+        </span>
+        <span class="stock-metrics">
+          <span class="${monthCls}">近月 ${escapeHtml(
+            month == null ? "—" : pctText(month),
+          )}</span>
+          <span class="${dayCls}">今日 ${escapeHtml(
+            day == null ? "—" : pctText(day),
+          )}</span>
+        </span>
+        <span class="stock-reason">${escapeHtml(row.reason || "")}</span>
+        <span class="stock-action">${escapeHtml(row.action || "")}</span>
+      </button>
+    `;
+  };
+
+  const stockBlock = () => {
+    if (!stockStrong.length && !stockWatch.length && !stockWeak.length) {
+      return `<div class="sector-pulse-stocks">
+        <p class="sector-pulse-rank-label">个股强弱与推荐</p>
+        <p class="empty">${escapeHtml(
+          stockDesk.summary || "选择板块后显示成分股强弱与推荐",
+        )}</p>
+      </div>`;
+    }
+    return `
+      <div class="sector-pulse-stocks">
+        <div class="sector-pulse-stocks-head">
+          <p class="sector-pulse-rank-label">个股强弱与推荐 · ${escapeHtml(
+            stockDesk.sector_label || "当前板块",
+          )}</p>
+          <p class="sector-pulse-stocks-summary">${escapeHtml(
+            stockDesk.summary || "",
+          )}</p>
+        </div>
+        <div class="sector-pulse-stock-cols">
+          <div class="sector-pulse-stock-col">
+            <p class="sector-pulse-rank-label">偏多跟踪</p>
+            <div class="sector-pulse-stock-list">
+              ${
+                stockStrong.length
+                  ? stockStrong.map((r) => stockCard(r, "is-strong")).join("")
+                  : '<p class="empty">暂无</p>'
+              }
+            </div>
+          </div>
+          <div class="sector-pulse-stock-col">
+            <p class="sector-pulse-rank-label">观察 / 谨慎</p>
+            <div class="sector-pulse-stock-list">
+              ${
+                [...stockWatch, ...stockWeak].length
+                  ? [...stockWatch, ...stockWeak]
+                      .slice(0, 4)
+                      .map((r) =>
+                        stockCard(
+                          r,
+                          r.stance === "avoid" ? "is-weak" : "is-watch",
+                        ),
+                      )
+                      .join("")
+                  : '<p class="empty">暂无</p>'
+              }
+            </div>
+          </div>
+        </div>
+      </div>
+    `;
+  };
 
   els.sectorPulseBody.innerHTML = `
     <div class="sector-pulse-grid">
@@ -4902,6 +4997,17 @@ function renderSectorPulse(data) {
                 .join("")}</ul>`
             : ""
         }
+        ${stockBlock()}
+        <div class="sector-pulse-intel">
+          <p class="sector-pulse-rank-label">情报交叉</p>
+          <div class="spotlight-list compact sector-pulse-intel-grid">
+            ${
+              intel.length
+                ? intel.map((item) => spotlightCardHtml(item)).join("")
+                : '<p class="empty">暂无匹配情报，稍后随板块新闻补充。</p>'
+            }
+          </div>
+        </div>
       </div>
       <aside class="sector-pulse-side">
         <div class="sector-pulse-rank-block">
@@ -4924,16 +5030,6 @@ function renderSectorPulse(data) {
             }
           </div>
         </div>
-        <div class="sector-pulse-intel">
-          <p class="sector-pulse-rank-label">情报交叉</p>
-          <div class="spotlight-list compact">
-            ${
-              intel.length
-                ? intel.map((item) => spotlightCardHtml(item)).join("")
-                : '<p class="empty">暂无匹配情报，稍后随板块新闻补充。</p>'
-            }
-          </div>
-        </div>
       </aside>
     </div>
   `;
@@ -4944,6 +5040,14 @@ function renderSectorPulse(data) {
       btn.addEventListener("click", () => {
         const id = btn.getAttribute("data-pulse-sector");
         if (id) openSectorDesk(id);
+      });
+    });
+  els.sectorPulseBody
+    .querySelectorAll("[data-pulse-symbol]")
+    .forEach((btn) => {
+      btn.addEventListener("click", () => {
+        const sym = btn.getAttribute("data-pulse-symbol");
+        if (sym) selectSectorSymbol(sym);
       });
     });
 }
