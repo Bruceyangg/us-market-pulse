@@ -3492,6 +3492,25 @@ html[data-theme="dark"] .us-futures-card {
   background: color-mix(in srgb, #6aa8d4 8%, var(--panel));
 }
 
+.sector-pulse-rank.is-active {
+  border-color: color-mix(in srgb, #6aa8d4 55%, var(--line));
+  background: color-mix(in srgb, #6aa8d4 14%, var(--panel));
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, #6aa8d4 28%, transparent);
+}
+
+.sector-pulse-rank .rank-focus {
+  display: inline-flex;
+  align-items: center;
+  margin-left: 0.2rem;
+  padding: 0.04rem 0.3rem;
+  border-radius: 999px;
+  font-size: 0.58rem;
+  font-weight: 750;
+  color: color-mix(in srgb, #6aa8d4 88%, var(--ink));
+  background: color-mix(in srgb, #6aa8d4 16%, transparent);
+  border: 1px solid color-mix(in srgb, #6aa8d4 35%, transparent);
+}
+
 .sector-pulse-rank-top {
   display: flex;
   align-items: center;

@@ -4990,10 +4990,19 @@ function renderSectorPulse(data, { soft = false } = {}) {
         : "";
     const horizon = row?.horizon_label || windowShort;
     const rankNo = row?.rank != null ? String(row.rank) : "";
+    const activeId = String(
+      state.sectorId || data?.active_sector_id || "",
+    ).toLowerCase();
+    const rowId = String(row?.id || "").toLowerCase();
+    const isActive = Boolean(rowId && (row.active || rowId === activeId));
     return `
-      <button type="button" class="sector-pulse-rank" data-pulse-sector="${escapeHtml(
+      <button type="button" class="sector-pulse-rank${
+        isActive ? " is-active" : ""
+      }" data-pulse-sector="${escapeHtml(
         row.id || "",
-      )}" title="打开 ${escapeHtml(row.label || "")}">
+      )}" aria-pressed="${isActive ? "true" : "false"}" title="联动研判 · ${escapeHtml(
+        row.label || "",
+      )}">
         <span class="sector-pulse-rank-top">
           <span class="name-wrap">
             ${
@@ -5003,6 +5012,7 @@ function renderSectorPulse(data, { soft = false } = {}) {
             }
             <span class="name">${escapeHtml(row.label || row.id || "")}</span>
             <span class="sym">${escapeHtml(row.symbol || "")}</span>
+            ${isActive ? '<span class="rank-focus">聚焦</span>' : ""}
           </span>
           <span class="pct-wrap">
             <span class="pct-label">${escapeHtml(horizon)}</span>
@@ -5244,7 +5254,7 @@ function renderSectorPulse(data, { soft = false } = {}) {
         <div class="sector-pulse-rank-block sector-pulse-rank-block-full">
           <p class="sector-pulse-rank-label">${escapeHtml(
             windowShort,
-          )}排名 · 高→低</p>
+          )}排名 · 高→低 · 点击联动左侧</p>
           <div class="sector-pulse-rank-list sector-pulse-rank-scroll">
             ${
               ranking.length
@@ -5272,6 +5282,7 @@ function renderSectorPulse(data, { soft = false } = {}) {
         if (!["1w", "2w", "3w", "4w", "2m"].includes(hz)) return;
         if (state.sectorPulseHorizon === hz) return;
         state.sectorPulseHorizon = hz;
+        state.sectorPulseSig = "";
         renderSectorPulse(data || state.sectors);
       });
     });
@@ -5280,7 +5291,10 @@ function renderSectorPulse(data, { soft = false } = {}) {
     .forEach((btn) => {
       btn.addEventListener("click", () => {
         const id = btn.getAttribute("data-pulse-sector");
-        if (id) openSectorDesk(id);
+        if (!id) return;
+        // Rank → left pulse + stock desk stay in the研判区 (no jump to bottom desk).
+        openSectorDesk(id, { scroll: false });
+        els.sectorPulse?.scrollIntoView({ behavior: "smooth", block: "nearest" });
       });
     });
   els.sectorPulseBody
@@ -6489,6 +6503,7 @@ function openSectorDesk(id, { scroll = true, symbol = "" } = {}) {
     state.sectorSymbol = wantSym;
     state.chartUpgradeSym = "";
     state.symbolNewsRetrySym = "";
+    state.sectorPulseSig = "";
     // Keep any in-flight request from painting the previous sector.
     state.sectorsLoadPending = {
       force: false,
@@ -8233,7 +8248,12 @@ function renderSectorDesk(data) {
     state.sectorId = data.active_sector_id;
   }
   if (data?.selected_symbol) state.sectorSymbol = data.selected_symbol;
-  renderSectorPulse(data, { soft: Boolean(sameBoard) });
+  const sectorChanged =
+    Boolean(prev?.active_sector_id) &&
+    Boolean(data?.active_sector_id) &&
+    prev.active_sector_id !== data.active_sector_id;
+  if (sectorChanged) state.sectorPulseSig = "";
+  renderSectorPulse(data, { soft: Boolean(sameBoard) && !sectorChanged });
   renderAiDesk(data?.hot_desk || data?.ai_desk);
   renderSectorEtfs(data?.sectors || []);
   if (state.sectorSearchMode) {
