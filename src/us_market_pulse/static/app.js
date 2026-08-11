@@ -60,6 +60,8 @@ const state = {
   sectorMapSymbolDesk: {},
   sectorMapHorizonRetryAt: 0,
   chartUpgradeSym: "",
+  chartLoadingUntil: 0,
+  chartUpgradeAttempts: 0,
   symbolNewsRetrySym: "",
   earnings: null,
   earningsDate: "",
@@ -5779,6 +5781,69 @@ function deskChartReady(pick) {
   return pickHasChart(pick) || pickHasIntraday(pick);
 }
 
+function clearSectorChartLoading(sym) {
+  const want = String(sym || "").toUpperCase();
+  if (!want || state.chartUpgradeSym === want) {
+    state.chartUpgradeSym = "";
+  }
+  state.chartLoadingUntil = 0;
+}
+
+function markSectorChartAttempted(sym) {
+  const want = String(sym || "").toUpperCase();
+  if (!want || !state.sectors) return;
+  const pick = state.sectors.selected_pick;
+  if (pick && String(pick.symbol || "").toUpperCase() === want) {
+    pick.chart_attempted = true;
+    // Stop eternal "正在加载…" even if still lite / empty.
+    if (pick.lite && !deskChartReady(pick)) pick.lite = false;
+  }
+  clearSectorChartLoading(want);
+}
+
+/** Retry soft desk + intraday fetch for search/guest symbols until chart arrives. */
+function scheduleSectorChartCatchup(sym, { reason = "" } = {}) {
+  const sel = String(sym || "").toUpperCase();
+  if (!sel || PAGE !== "sectors") return;
+  // Coalesce overlapping catchups (search + loadSectorDesk both call this).
+  if (
+    state.chartUpgradeSym === sel &&
+    Date.now() < Number(state.chartLoadingUntil || 0) &&
+    (state.chartUpgradeAttempts || 0) > 0
+  ) {
+    return;
+  }
+  state.chartUpgradeSym = sel;
+  state.chartLoadingUntil = Date.now() + 16000;
+  state.chartUpgradeAttempts = 0;
+  const token = (state.chartCatchupToken = (state.chartCatchupToken || 0) + 1);
+
+  const step = () => {
+    if (token !== state.chartCatchupToken) return;
+    if (state.sectorSymbol !== sel) return;
+    const pick = state.sectors?.selected_pick;
+    if (deskChartReady(pick)) {
+      clearSectorChartLoading(sel);
+      renderSectorPickChart();
+      return;
+    }
+    state.chartUpgradeAttempts = (state.chartUpgradeAttempts || 0) + 1;
+    const n = state.chartUpgradeAttempts;
+    if (n > 4) {
+      markSectorChartAttempted(sel);
+      renderSectorPickChart();
+      return;
+    }
+    if (!state.sectorsLoadBusy) {
+      void loadSectorDesk({ force: false });
+    }
+    void refreshActiveIntraday({ force: n >= 2 || reason === "search" });
+    window.setTimeout(step, n === 1 ? 900 : 2200);
+  };
+
+  window.setTimeout(step, reason === "search" ? 350 : 700);
+}
+
 function pickHasTfSeries(pick, tf) {
   const want = tf || "intraday";
   if (want === "intraday") return pickHasIntraday(pick);
@@ -6082,9 +6147,13 @@ async function refreshActiveIntraday({ force = false } = {}) {
         : state.sectorSymbol || state.sectors?.selected_symbol || "";
     if (String(current).toUpperCase() !== String(sym).toUpperCase()) return;
     applyIntradaySnapshot(sym, snap);
+    if (PAGE === "sectors" && pickHasIntraday(state.sectors?.selected_pick)) {
+      clearSectorChartLoading(sym);
+    }
   } catch (err) {
     if (PAGE === "sectors" && !pickHasIntraday(state.sectors?.selected_pick)) {
       // Stop eternal "正在加载分时…" — show retry placeholder.
+      if (force) markSectorChartAttempted(sym);
       renderSectorPickChart();
     }
     if (force) throw err;
@@ -6727,12 +6796,17 @@ function renderSectorPickChart() {
       { intraday: "分时", day: "日图", month: "月图", quarter: "季图" }[tf] ||
       "走势";
     const symKey = String(pick.symbol || "").toUpperCase();
+    const upgradePending =
+      state.chartUpgradeSym === symKey &&
+      Date.now() < Number(state.chartLoadingUntil || 0) &&
+      !pick.chart_attempted;
     const loading =
       state.sectorsLoadBusy ||
-      (state.chartUpgradeSym === symKey && Boolean(pick.lite)) ||
+      (upgradePending && (Boolean(pick.lite) || !deskChartReady(pick))) ||
       (tf === "intraday" &&
         state.intradayPollBusy &&
-        !pickHasIntraday(pick));
+        !pickHasIntraday(pick) &&
+        !pick.chart_attempted);
     const stats = seriesStats(
       toLineSparkPoints(pick.series?.intraday?.points || pick.points || []),
       "line"
@@ -6923,6 +6997,8 @@ function renderSectorPicks(data) {
     els.sectorPicksBlurb.textContent = `${picks.length} 只成分 · ${waveN} 只一轮涨势 · 点选看走势 · +/− 管持仓`;
   }
   if (els.sectorPickList) {
+    // Preserve scroll — soft polls / holdings refresh used to jump back to top.
+    const prevScroll = els.sectorPickList.scrollTop;
     if (!picks.length) {
       els.sectorPickList.innerHTML = '<p class="empty">暂无该板块成分股。</p>';
     } else {
@@ -6995,6 +7071,11 @@ function renderSectorPicks(data) {
           toggleSectorHolding(sym, name);
         });
       });
+      // Restore after layout; rAF covers cases where height sync resets scroll.
+      els.sectorPickList.scrollTop = prevScroll;
+      requestAnimationFrame(() => {
+        if (els.sectorPickList) els.sectorPickList.scrollTop = prevScroll;
+      });
     }
   }
 
@@ -7014,6 +7095,8 @@ function syncSectorsDeskHeights() {
   const left = desk.querySelector(".sectors-list-pane");
   const right = desk.querySelector(".sectors-intel-pane");
   if (!center) return;
+  // Height lock briefly sets left pane to auto — preserve list scroll position.
+  const listScroll = els.sectorPickList?.scrollTop ?? 0;
 
   const clear = () => {
     desk.style.removeProperty("--sectors-center-h");
@@ -7030,6 +7113,7 @@ function syncSectorsDeskHeights() {
   // Below the 3-col breakpoint, panes stack — clear the lock.
   if (window.matchMedia("(max-width: 1180px)").matches) {
     clear();
+    if (els.sectorPickList) els.sectorPickList.scrollTop = listScroll;
     return;
   }
 
@@ -7050,6 +7134,7 @@ function syncSectorsDeskHeights() {
   if (h < 120) {
     if (left && prevLeftH) left.style.height = prevLeftH;
     if (right && prevRightH) right.style.height = prevRightH;
+    if (els.sectorPickList) els.sectorPickList.scrollTop = listScroll;
     return;
   }
 
@@ -7063,6 +7148,7 @@ function syncSectorsDeskHeights() {
     right.style.height = px;
     right.style.maxHeight = px;
   }
+  if (els.sectorPickList) els.sectorPickList.scrollTop = listScroll;
 }
 
 function scheduleSectorsDeskHeightSync() {
@@ -7359,7 +7445,12 @@ function openSectorStockFromSearch(hitOrSymbol) {
       : `已搜索 ${label} · 全市场（挂到${host}）`;
   }
   setStatus(`搜索 ${symbol} · ${sectorLabelById(hostSector) || hostSector}`);
+  // Reset upgrade lock so search guests don't inherit a stuck "正在加载…".
+  clearSectorChartLoading(state.chartUpgradeSym);
+  state.symbolNewsRetrySym = "";
+  state.chartUpgradeAttempts = 0;
   openSectorDesk(hostSector, { scroll: true, symbol });
+  scheduleSectorChartCatchup(symbol, { reason: "search" });
 }
 
 async function submitSectorStockSearch() {
@@ -7463,11 +7554,12 @@ function selectSectorSymbol(sym) {
     state.sectorSymbol = symbol;
     syncSectorQuery();
     loadSectorDesk({ force: false });
+    scheduleSectorChartCatchup(symbol, { reason: "missing" });
     return;
   }
   const prevSelected = data.selected_pick;
   const already =
-    symbol === state.sectorSymbol && pickHasChart(data.selected_pick);
+    symbol === state.sectorSymbol && deskChartReady(data.selected_pick);
   // Always paint locally first — never wait on network / rebuild the whole list.
   state.sectorSymbol = symbol;
   data.selected_symbol = symbol;
@@ -7509,13 +7601,20 @@ function selectSectorSymbol(sym) {
   refreshActiveRowQuote(els.sectorPickList, data.selected_pick || pick, "data-symbol");
   setStatus(`已切换 ${pick.name || symbol} · ${pick.sector_label || ""}`);
   persistPageDataCache();
-  if (already || pickHasChart(data.selected_pick)) {
+  if (already || deskChartReady(data.selected_pick)) {
+    clearSectorChartLoading(symbol);
     if (state.sectorTf === "intraday") refreshActiveIntraday({ force: false });
     return;
   }
   // Soft upgrade — force=true wiped picks cache and also force-refreshed the map.
-  if (state.sectorTf === "intraday") refreshActiveIntraday({ force: false });
+  const needForceIntra = Boolean(pick.is_search) || Boolean(pick.lite);
+  if (state.sectorTf === "intraday") {
+    refreshActiveIntraday({ force: needForceIntra });
+  }
   loadSectorDesk({ force: false });
+  scheduleSectorChartCatchup(symbol, {
+    reason: pick.is_search ? "search" : "upgrade",
+  });
 }
 
 function renderSectorDesk(data) {
@@ -7683,24 +7782,20 @@ async function loadSectorDesk({ force = false, refreshMap = false } = {}) {
     // Don't await map — paint desk immediately; map fills when ready.
     void mapPromise;
     // Soft intraday catch-up only when tape is missing (avoid upgrade storms).
+    const sel = data.selected_symbol || "";
+    const isSearchGuest = Boolean(data.selected_pick?.is_search);
     if (!pickHasIntraday(data.selected_pick)) {
-      void refreshActiveIntraday({ force: Boolean(force) });
+      void refreshActiveIntraday({ force: Boolean(force || isSearchGuest) });
     } else if (state.sectorTf === "intraday" && force) {
       void refreshActiveIntraday({ force: false });
     }
-    // One delayed soft chart upgrade per symbol — never force-loop.
-    const sel = data.selected_symbol || "";
-    if (sel && !pickHasChart(data.selected_pick) && state.chartUpgradeSym !== sel) {
-      state.chartUpgradeSym = sel;
-      window.setTimeout(() => {
-        if (
-          state.sectorSymbol === sel &&
-          !pickHasChart(state.sectors?.selected_pick) &&
-          !state.sectorsLoadBusy
-        ) {
-          ensureMultiTfChartUpgrade({ force: false });
-        }
-      }, 900);
+    if (deskChartReady(data.selected_pick)) {
+      clearSectorChartLoading(sel);
+    } else if (sel) {
+      // Search/guest + lite picks need retries; old one-shot lock froze "正在加载…".
+      scheduleSectorChartCatchup(sel, {
+        reason: isSearchGuest ? "search" : "upgrade",
+      });
     }
     // GN news warms in background — soft re-fetch once if still empty.
     const newsEmpty = !(data.symbol_news || []).length;

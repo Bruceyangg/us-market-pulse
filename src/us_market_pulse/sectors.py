@@ -3777,8 +3777,17 @@ async def build_sector_desk(
         if not (
             _pick_has_chart(selected_pick) or _pick_has_intraday(selected_pick)
         ):
+            # Search/guest symbols often miss the first race — give them longer.
+            extra_wait = (
+                8.0
+                if bool((selected_pick or {}).get("is_search"))
+                or (selected and selected not in universe)
+                else 4.0
+            )
             try:
-                await asyncio.wait_for(asyncio.shield(chart_task), timeout=4.0)
+                await asyncio.wait_for(
+                    asyncio.shield(chart_task), timeout=extra_wait
+                )
             except asyncio.TimeoutError:
                 pass
             selected_pick = next(
