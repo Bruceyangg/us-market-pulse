@@ -5387,24 +5387,23 @@ function renderSectorPulse(data, { soft = false } = {}) {
     const industries = (Array.isArray(row?.industries) ? row.industries : [])
       .map((x) => String(x || "").trim())
       .filter(Boolean)
-      .slice(0, 3);
-    const industryHtml = industries.length
-      ? `<span class="stock-industries" aria-label="细分行业">${industries
-          .map(
-            (tag, i) =>
-              `<span class="ind${i === 0 ? " is-core" : ""}">${escapeHtml(
-                tag,
-              )}</span>`,
-          )
-          .join("")}</span>`
-      : "";
+      .slice(0, 2);
+    // Always render the industries row so card grid rows stay aligned across sectors.
+    const industryHtml = `<span class="stock-industries" aria-label="细分行业">${industries
+      .map(
+        (tag, i) =>
+          `<span class="ind${i === 0 ? " is-core" : ""}">${escapeHtml(
+            tag,
+          )}</span>`,
+      )
+      .join("")}</span>`;
     const clipText = (text, max = 52) => {
       const s = String(text || "").trim();
       if (s.length <= max) return s;
       return `${s.slice(0, max - 1)}…`;
     };
-    const reason = clipText(row.reason || "", 56);
-    const action = clipText(row.action || "", 48);
+    const reason = clipText(row.reason || "", 48);
+    const action = clipText(row.action || "", 40);
     const sym = String(row.symbol || "").toUpperCase();
     const held = isInHoldings(sym);
     return `

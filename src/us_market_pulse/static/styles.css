@@ -3752,19 +3752,24 @@ html[data-theme="dark"] .us-futures-card {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 0.65rem;
+  align-items: stretch;
 }
 
 .sector-pulse-stock-col {
   display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
   gap: 0.3rem;
   min-width: 0;
-  align-content: start;
+  min-height: 0;
 }
 
 .sector-pulse-stock-list {
   display: grid;
   gap: 0.4rem;
-  max-height: min(32rem, 58vh);
+  align-content: start;
+  /* Fixed pane height so sector switches don't jump the layout. */
+  height: min(28rem, 50vh);
+  max-height: min(28rem, 50vh);
   overflow-x: hidden;
   overflow-y: auto;
   overscroll-behavior: contain;
@@ -3788,9 +3793,12 @@ html[data-theme="dark"] .us-futures-card {
 
 .sector-pulse-stock-row {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 2rem;
+  grid-template-columns: minmax(0, 1fr) 2.15rem;
   align-items: stretch;
   min-width: 0;
+  /* Lock every card to the same box — never grow with sector text length. */
+  height: 8.1rem;
+  max-height: 8.1rem;
   border: 1px solid color-mix(in srgb, var(--line) 80%, transparent);
   border-radius: 10px;
   overflow: hidden;
@@ -3809,11 +3817,14 @@ html[data-theme="dark"] .us-futures-card {
 
 .sector-pulse-stock {
   display: grid;
-  gap: 0.28rem;
+  grid-template-rows: auto auto auto minmax(0, 1fr) auto;
+  gap: 0.2rem;
   width: 100%;
   min-width: 0;
+  height: 100%;
+  max-height: 100%;
   margin: 0;
-  padding: 0.62rem 0.68rem 0.7rem;
+  padding: 0.48rem 0.55rem 0.5rem;
   border: 0;
   border-radius: 0;
   background: transparent;
@@ -3821,7 +3832,6 @@ html[data-theme="dark"] .us-futures-card {
   font: inherit;
   text-align: left;
   cursor: pointer;
-  min-height: 7.6rem;
   overflow: hidden;
   box-sizing: border-box;
   align-content: start;
@@ -3835,14 +3845,18 @@ html[data-theme="dark"] .us-futures-card {
   background: color-mix(in srgb, var(--panel-2, #243041) 55%, transparent);
   color: var(--ink);
   font: inherit;
-  font-size: 1.05rem;
+  font-size: 1.15rem;
   font-weight: 700;
   line-height: 1;
   cursor: pointer;
   padding: 0;
-  min-width: 2rem;
+  width: 100%;
+  height: 100%;
+  min-width: 2.15rem;
+  align-self: stretch;
   display: grid;
   place-items: center;
+  place-content: center;
   transition: background 0.15s ease, color 0.15s ease;
 }
 
@@ -3890,21 +3904,25 @@ html[data-theme="dark"] .us-futures-card {
 
 .sector-pulse-stock .stock-industries {
   display: flex;
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
   gap: 0.22rem;
+  min-width: 0;
+  max-height: 1.3rem;
+  overflow: hidden;
 }
 
 .sector-pulse-stock .stock-industries .ind {
   display: inline-flex;
   align-items: center;
-  max-width: 100%;
-  padding: 0.08rem 0.38rem;
+  flex: 0 1 auto;
+  max-width: 42%;
+  padding: 0.06rem 0.32rem;
   border-radius: 999px;
   border: 1px solid color-mix(in srgb, var(--line) 85%, transparent);
   background: color-mix(in srgb, var(--bg, var(--panel)) 55%, transparent);
-  font-size: 0.62rem;
+  font-size: 0.6rem;
   font-weight: 650;
-  line-height: 1.25;
+  line-height: 1.2;
   color: var(--ink-soft);
   overflow: hidden;
   text-overflow: ellipsis;
@@ -3966,9 +3984,11 @@ html[data-theme="dark"] .us-futures-card {
 
 .sector-pulse-stock .stock-metrics {
   display: flex;
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
   gap: 0.55rem;
   min-width: 0;
+  max-height: 1.2rem;
+  overflow: hidden;
   font-size: 0.72rem;
   font-weight: 650;
   font-variant-numeric: tabular-nums;
@@ -3986,16 +4006,24 @@ html[data-theme="dark"] .us-futures-card {
 .sector-pulse-stock .stock-action {
   display: -webkit-box;
   -webkit-box-orient: vertical;
-  -webkit-line-clamp: 2;
-  line-clamp: 2;
+  -webkit-line-clamp: 1;
+  line-clamp: 1;
   overflow: hidden;
   min-width: 0;
   max-width: 100%;
-  font-size: 0.68rem;
-  line-height: 1.45;
+  max-height: 1.35em;
+  font-size: 0.66rem;
+  line-height: 1.35;
   color: var(--ink-soft);
   overflow-wrap: anywhere;
   word-break: break-word;
+}
+
+.sector-pulse-stock .stock-reason {
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
+  max-height: 2.7em;
+  min-height: 0;
 }
 
 .sector-pulse-stock .stock-action {
