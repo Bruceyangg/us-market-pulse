@@ -389,8 +389,11 @@ async def api_chains(
     chain: str | None = Query(default=None),
     node: str | None = Query(default=None),
     q: str | None = Query(default=None),
+    focus: str | None = Query(default=None),
 ) -> dict[str, Any]:
-    return await build_chains_desk(chain_id=chain, node_id=node, q=q)
+    return await build_chains_desk(
+        chain_id=chain, node_id=node, q=q, focus=focus
+    )
 
 
 @app.get("/api/intel")

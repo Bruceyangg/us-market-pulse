@@ -1317,20 +1317,27 @@ def _etf_by_id(sector_id: str) -> dict[str, Any] | None:
 
 
 def _value_chain_for(symbol: str) -> dict[str, Any]:
+    from us_market_pulse.chains import finalize_chain_nav, suggest_chain_nav
+
     sym = (symbol or "").upper()
     base = VALUE_CHAIN.get(sym)
     if base:
-        return {"symbol": sym, **base}
-    return {
-        "symbol": sym,
-        "name": sym,
-        "business": "暂无内置业务档案；可结合财报与主营构成自行补充。",
-        "industry": "待补充行业归类。",
-        "chain_position": "暂未标注在产业链中的明确位置。",
-        "upstream": [],
-        "downstream": [],
-        "bear_risks": ["信息不足，避免仅凭短线涨幅下结论"],
-    }
+        row = {"symbol": sym, **base}
+    else:
+        row = {
+            "symbol": sym,
+            "name": sym,
+            "business": "暂无内置业务档案；可结合财报与主营构成自行补充。",
+            "industry": "待补充行业归类。",
+            "chain_position": "暂未标注在产业链中的明确位置。",
+            "upstream": [],
+            "downstream": [],
+            "bear_risks": ["信息不足，避免仅凭短线涨幅下结论"],
+        }
+    row["chain_nav"] = finalize_chain_nav(
+        suggest_chain_nav(sym, industry=str(row.get("industry") or ""))
+    )
+    return row
 
 
 def _slim_news_item(item: dict[str, Any]) -> dict[str, Any]:

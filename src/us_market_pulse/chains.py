@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import re
 from typing import Any
+from urllib.parse import quote
 
 
 # Mega / chain-defining names — shown first with「核心」badge.
@@ -623,6 +625,207 @@ def list_chain_catalog() -> list[dict[str, str]]:
     ]
 
 
+_DESK_CHAIN_Q: dict[str, str] = {
+    "semis": "半导体",
+    "tech": "云计算",
+    "cloud": "云计算",
+    "ai": "人工智能",
+    "ev": "新能源车",
+    "energy": "能源",
+    "health": "医疗",
+    "healthcare": "医疗",
+    "finance": "金融",
+    "financials": "金融",
+    "defense": "军工",
+    "aerospace": "航空",
+    "industrials": "工业",
+}
+
+
+def _chain_has_symbol(chain: dict[str, Any] | None, symbol: str) -> bool:
+    sym = (symbol or "").upper().strip()
+    if not sym or not chain:
+        return False
+    for panel in chain.get("panels") or []:
+        for co in panel.get("companies") or []:
+            if str(co.get("symbol") or "").upper() == sym:
+                return True
+    return False
+
+
+def _desk_chain_query(symbol: str) -> str:
+    """Map a ticker's market-map desk to a chain search keyword."""
+    try:
+        from us_market_pulse.market_map import MARKET_MAP
+    except Exception:
+        return ""
+    sym = (symbol or "").upper().strip()
+    if not sym:
+        return ""
+    for sector in MARKET_MAP:
+        desk = str(sector.get("desk_id") or sector.get("id") or "").lower()
+        for group in sector.get("groups") or []:
+            for st in group.get("stocks") or []:
+                if str(st.get("symbol") or "").upper() == sym:
+                    return _DESK_CHAIN_Q.get(desk) or str(sector.get("label") or "").strip()
+    return ""
+
+
+def chain_nav_href(nav: dict[str, Any] | None) -> str:
+    nav = nav or {}
+    params: list[str] = []
+    q = str(nav.get("q") or "").strip()
+    chain = str(nav.get("chain") or "").strip()
+    focus = str(nav.get("focus") or "").strip().upper()
+    if q:
+        params.append(f"q={quote(q)}")
+    if chain:
+        params.append(f"chain={quote(chain)}")
+    if focus:
+        params.append(f"focus={quote(focus)}")
+    return "/chains" + (f"?{'&'.join(params)}" if params else "")
+
+
+def suggest_chain_nav(
+    symbol: str,
+    *,
+    industry: str = "",
+) -> dict[str, Any]:
+    """Best q / chain / focus for jumping from a stock blurb to /chains."""
+    sym = (symbol or "").upper().strip()
+    if not sym:
+        return {}
+
+    desk_q = _desk_chain_query(sym)
+    catalog_hits: list[tuple[int, dict[str, Any]]] = []
+    for chain in CHAINS:
+        for panel in chain.get("panels") or []:
+            for co in panel.get("companies") or []:
+                if str(co.get("symbol") or "").upper() != sym:
+                    continue
+                label = str(chain.get("label") or "产业链")
+                score = 40
+                if co.get("core"):
+                    score += 20
+                # Prefer the pack that matches the stock's market-map desk.
+                blob = " ".join(
+                    [
+                        label,
+                        *[str(k) for k in (chain.get("keywords") or [])],
+                    ]
+                )
+                if desk_q and desk_q in blob:
+                    score += 50
+                # Mega-tech / cloud names are usually better on AI compute than semis PC.
+                if chain.get("id") == "ai_compute" and desk_q in {
+                    "云计算",
+                    "人工智能",
+                }:
+                    score += 30
+                if chain.get("id") == "semiconductor" and desk_q in {
+                    "云计算",
+                    "人工智能",
+                }:
+                    score -= 15
+                nav = {
+                    "q": label,
+                    "chain": str(chain.get("id") or ""),
+                    "focus": sym,
+                    "panel_id": str(panel.get("id") or ""),
+                    "label": f"全景查看 · {label}",
+                    "source": "catalog",
+                    "href": "",
+                }
+                nav["href"] = chain_nav_href(nav)
+                catalog_hits.append((score, nav))
+    if catalog_hits:
+        catalog_hits.sort(key=lambda x: x[0], reverse=True)
+        return catalog_hits[0][1]
+
+    try:
+        from us_market_pulse.chain_generate import THEME_PACKS
+    except Exception:
+        THEME_PACKS = []
+    theme_hits: list[tuple[int, dict[str, Any]]] = []
+    for theme in THEME_PACKS:
+        for panel in theme.get("panels") or []:
+            for co in panel.get("companies") or []:
+                if str(co.get("symbol") or "").upper() != sym:
+                    continue
+                label = str(theme.get("label") or "").strip() or str(
+                    (theme.get("keywords") or [sym])[0]
+                )
+                score = 30 + (10 if co.get("core") else 0)
+                blob = " ".join(
+                    [label, *[str(k) for k in (theme.get("keywords") or [])]]
+                )
+                if desk_q and desk_q in blob:
+                    score += 40
+                nav = {
+                    "q": label,
+                    "chain": "",
+                    "focus": sym,
+                    "panel_id": str(panel.get("id") or ""),
+                    "label": f"全景查看 · {label}",
+                    "source": "theme",
+                    "href": "",
+                }
+                nav["href"] = chain_nav_href(nav)
+                theme_hits.append((score, nav))
+    if theme_hits:
+        theme_hits.sort(key=lambda x: x[0], reverse=True)
+        return theme_hits[0][1]
+
+    # desk_q already computed above
+    if desk_q:
+        nav = {
+            "q": desk_q,
+            "chain": "",
+            "focus": sym,
+            "panel_id": "",
+            "label": f"全景查看 · {desk_q}",
+            "source": "map",
+            "href": "",
+        }
+        nav["href"] = chain_nav_href(nav)
+        return nav
+
+    ind = str(industry or "").strip()
+    if ind and not ind.startswith("待补充"):
+        q = re.split(r"[与及/、，,；;]", ind)[0].strip(" 。．·")
+        if len(q) >= 2:
+            nav = {
+                "q": q[:24],
+                "chain": "",
+                "focus": sym,
+                "panel_id": "",
+                "label": f"全景查看 · {q[:16]}",
+                "source": "industry",
+                "href": "",
+            }
+            nav["href"] = chain_nav_href(nav)
+            return nav
+
+    nav = {
+        "q": sym,
+        "chain": "",
+        "focus": sym,
+        "panel_id": "",
+        "label": "打开全景产业链",
+        "source": "symbol",
+        "href": "",
+    }
+    nav["href"] = chain_nav_href(nav)
+    return nav
+
+
+def finalize_chain_nav(nav: dict[str, Any] | None) -> dict[str, Any]:
+    out = dict(nav or {})
+    if out and not out.get("href"):
+        out["href"] = chain_nav_href(out)
+    return out
+
+
 def _norm(text: str) -> str:
     return (text or "").strip().lower()
 
@@ -691,27 +894,55 @@ async def build_chains_desk(
     chain_id: str | None = None,
     q: str | None = None,
     node_id: str | None = None,  # kept for URL compat; unused in panorama mode
+    focus: str | None = None,
 ) -> dict[str, Any]:
     del node_id  # panorama mode does not focus a single node
     from us_market_pulse.chain_generate import generate_chain, match_themes
 
     query = (q or "").strip()
+    focus_sym = (focus or "").upper().strip()
+    # Bare ticker in q (e.g. /chains?q=MDB) → resolve via stock→chain nav.
+    if not focus_sym and query and re.fullmatch(r"[A-Za-z]{1,5}", query):
+        focus_sym = query.upper()
+    nav: dict[str, Any] = {}
+    if focus_sym:
+        nav = finalize_chain_nav(suggest_chain_nav(focus_sym))
+        # Theme / map hits should not force a curated pack that omits the ticker.
+        if not chain_id and nav.get("source") == "catalog" and nav.get("chain"):
+            chain_id = str(nav.get("chain") or "")
+        if nav.get("q") and (
+            not query
+            or query.upper() == focus_sym
+            or nav.get("source") in {"theme", "catalog"}
+        ):
+            query = str(nav.get("q") or query)
+
     catalog = list_chain_catalog()
     chain: dict[str, Any] | None = None
     generated = False
 
-    # Explicit catalog id still wins (chip click).
+    # Explicit catalog id still wins (chip click), unless focus ticker is absent.
     if chain_id:
         chain = resolve_chain(query, chain_id)
-    elif query:
+        if focus_sym and chain and not _chain_has_symbol(chain, focus_sym):
+            # Fall through to theme/generate so focus can land on a real row.
+            chain = None
+            chain_id = None
+    if not chain and query:
+        # Prefer generated theme graph when jumping from a stock blurb.
+        if focus_sym and nav.get("source") == "theme":
+            chain = await generate_chain(query)
+            generated = bool(chain)
         themes = match_themes(query)
         # Compound keywords like「太空AI」should compose themes, not collapse
         # into a single curated pack that only matched a substring.
-        if len(themes) >= 2:
+        if not chain and len(themes) >= 2:
             chain = await generate_chain(query)
             generated = bool(chain)
         if not chain:
             chain = resolve_chain(query, None)
+            if focus_sym and chain and not _chain_has_symbol(chain, focus_sym):
+                chain = None
         if not chain:
             chain = await generate_chain(query)
             generated = bool(chain)
@@ -722,6 +953,8 @@ async def build_chains_desk(
             "matched": False,
             "generated": False,
             "q": query,
+            "focus": focus_sym or "",
+            "focus_panel_id": "",
             "catalog": catalog,
             "chain": None,
             "message": (
@@ -734,9 +967,22 @@ async def build_chains_desk(
     if generated or chain.get("generated"):
         public["generated"] = True
         public["themes"] = chain.get("themes") or []
+    focus_panel = ""
+    if focus_sym:
+        for panel in public.get("panels") or []:
+            if any(
+                str(co.get("symbol") or "").upper() == focus_sym
+                for co in (panel.get("companies") or [])
+            ):
+                focus_panel = str(panel.get("id") or "")
+                break
+        if not focus_panel:
+            focus_panel = str(nav.get("panel_id") or "")
     return {
         "ok": True,
         "matched": True,
+        "focus": focus_sym or "",
+        "focus_panel_id": focus_panel,
         "generated": bool(public.get("generated")),
         "q": query or chain["label"],
         "catalog": catalog,

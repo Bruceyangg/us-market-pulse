@@ -75,6 +75,7 @@ const state = {
   chains: null,
   chainId: "",
   chainQ: "",
+  chainFocus: "",
   chainsBound: false,
 };
 
@@ -185,6 +186,7 @@ const els = {
   symbolNewsLink: document.getElementById("symbol-news-link"),
   valueChainBlurb: document.getElementById("value-chain-blurb"),
   valueChainBody: document.getElementById("value-chain-body"),
+  valueChainLink: document.getElementById("value-chain-link"),
   earningsList: document.getElementById("earnings-list"),
   earningsBlurb: document.getElementById("earnings-blurb"),
   monthChart: document.getElementById("month-chart"),
@@ -7113,47 +7115,120 @@ function renderSectorPickChart() {
   renderMoveAnalysis(pick);
 }
 
+function parseVcChipText(raw) {
+  const text = String(raw || "").trim();
+  if (!text) return null;
+  const paren = text.match(/\(([A-Za-z]{1,5})\)\s*$/);
+  const bare = !paren ? text.match(/\b([A-Z]{2,5})\b/) : null;
+  const symbol = String((paren || bare)?.[1] || "").toUpperCase();
+  return { text, symbol: symbol || "" };
+}
+
+function vcChipHtml(raw, { linkable = true } = {}) {
+  const row = parseVcChipText(raw);
+  if (!row) return "";
+  if (linkable && row.symbol) {
+    const href = `/chains?q=${encodeURIComponent(row.symbol)}&focus=${encodeURIComponent(
+      row.symbol,
+    )}`;
+    return `<a class="vc-chip is-link" href="${href}" title="在产业链中查看 ${escapeHtml(
+      row.symbol,
+    )}">${escapeHtml(row.text)}</a>`;
+  }
+  return `<span class="vc-chip">${escapeHtml(row.text)}</span>`;
+}
+
+function syncValueChainLink(nav) {
+  if (!els.valueChainLink) return;
+  const href = String(nav?.href || "").trim();
+  const label = String(nav?.label || "全景图").trim() || "全景图";
+  if (!href) {
+    els.valueChainLink.classList.add("is-hidden");
+    els.valueChainLink.setAttribute("href", "/chains");
+    els.valueChainLink.textContent = "全景图";
+    return;
+  }
+  els.valueChainLink.classList.remove("is-hidden");
+  els.valueChainLink.setAttribute("href", href);
+  els.valueChainLink.textContent = label.length > 14 ? "全景图" : label;
+  els.valueChainLink.title = label;
+}
+
 function renderValueChain(vc) {
   if (!els.valueChainBody) return;
   const data = vc || {};
   if (!data.symbol) {
     els.valueChainBody.innerHTML =
       '<p class="empty">选择个股后显示业务背景与产业链位置</p>';
+    syncValueChainLink(null);
     return;
   }
   if (els.valueChainBlurb) {
     els.valueChainBlurb.textContent = `${data.name || data.symbol} · 主营 / 产业 / 上下游`;
   }
-  const chips = (items) =>
+  const nav = data.chain_nav || {};
+  const href =
+    String(nav.href || "").trim() ||
+    `/chains?q=${encodeURIComponent(data.symbol)}&focus=${encodeURIComponent(
+      data.symbol,
+    )}`;
+  const navLabel = String(nav.label || "打开全景产业链").trim();
+  syncValueChainLink({ ...nav, href, label: navLabel });
+
+  const chips = (items, opts) =>
     (items || []).length
       ? `<div class="vc-chips">${items
-          .map((x) => `<span class="vc-chip">${escapeHtml(x)}</span>`)
+          .map((x) => vcChipHtml(x, opts))
           .join("")}</div>`
       : "<p class='empty'>暂无</p>";
+  const industryQ = String(data.industry || "")
+    .split(/[与及/、，,；;]/)[0]
+    .trim()
+    .replace(/[。．·]+$/g, "");
+  const industryHref =
+    industryQ && !industryQ.startsWith("待补充")
+      ? `/chains?q=${encodeURIComponent(industryQ)}&focus=${encodeURIComponent(
+          data.symbol,
+        )}`
+      : href;
   els.valueChainBody.innerHTML = `
     <div class="vc-block">
       <p class="vc-kicker">${escapeHtml(data.symbol)} · ${escapeHtml(
         data.name || ""
       )}</p>
       <p>${escapeHtml(data.business || "")}</p>
+      <a class="vc-chain-cta" href="${escapeHtml(href)}">
+        <span class="vc-chain-cta-label">${escapeHtml(navLabel)}</span>
+        <span class="vc-chain-cta-hint">跳转栏目 · 定位 ${escapeHtml(
+          data.symbol,
+        )}</span>
+      </a>
     </div>
     <div class="vc-block">
       <h3>位置</h3>
-      <p>${escapeHtml(
-        [data.industry, data.chain_position].filter(Boolean).join(" · ")
-      )}</p>
+      <p>${
+        industryQ && !industryQ.startsWith("待补充")
+          ? `<a class="vc-industry-link" href="${escapeHtml(
+              industryHref,
+            )}" title="按行业打开产业链">${escapeHtml(
+              [data.industry, data.chain_position].filter(Boolean).join(" · "),
+            )}</a>`
+          : escapeHtml(
+              [data.industry, data.chain_position].filter(Boolean).join(" · "),
+            )
+      }</p>
     </div>
     <div class="vc-block">
       <h3>上游</h3>
-      ${chips(data.upstream)}
+      ${chips(data.upstream, { linkable: true })}
     </div>
     <div class="vc-block">
       <h3>下游</h3>
-      ${chips(data.downstream)}
+      ${chips(data.downstream, { linkable: true })}
     </div>
     <div class="vc-block">
       <h3>风险</h3>
-      ${chips(data.bear_risks)}
+      ${chips(data.bear_risks, { linkable: false })}
     </div>
   `;
 }
@@ -9248,11 +9323,42 @@ function syncChainsQuery() {
   else params.delete("q");
   if (state.chainId) params.set("chain", state.chainId);
   else params.delete("chain");
+  if (state.chainFocus) params.set("focus", state.chainFocus);
+  else params.delete("focus");
   const qs = params.toString();
   const next = `${location.pathname}${qs ? `?${qs}` : ""}${location.hash || ""}`;
   if (next !== `${location.pathname}${location.search}${location.hash || ""}`) {
     history.replaceState(null, "", next);
   }
+}
+
+function focusChainSymbol(sym, panelId = "") {
+  const focus = String(sym || "").toUpperCase().trim();
+  if (!focus || !els.chainsPanels) return false;
+  let row = els.chainsPanels.querySelector(
+    `.chains-co-row[data-symbol="${focus}"]`,
+  );
+  let panel = row?.closest(".chains-panel") || null;
+  if (!panel && panelId) {
+    panel = document.getElementById(`chain-panel-${panelId}`);
+  }
+  if (panel) {
+    panel.scrollIntoView({ behavior: "smooth", block: "center" });
+    panel.classList.add("is-flash");
+    window.setTimeout(() => panel.classList.remove("is-flash"), 1800);
+  }
+  if (!row && panel) {
+    row = panel.querySelector(`.chains-co-row[data-symbol="${focus}"]`);
+  }
+  if (row) {
+    els.chainsPanels
+      .querySelectorAll(".chains-co-row.is-focus")
+      .forEach((el) => el.classList.remove("is-focus"));
+    row.classList.add("is-focus");
+    row.scrollIntoView({ behavior: "smooth", block: "nearest" });
+    return true;
+  }
+  return Boolean(panel);
 }
 
 function renderChainsSuggest(catalog) {
@@ -9275,10 +9381,13 @@ function chainsCompanyRowHtml(c) {
   const held = isInHoldings(sym);
   const sector = c.sector || "technology";
   const core = Boolean(c.core);
+  const focused = Boolean(
+    state.chainFocus && String(state.chainFocus).toUpperCase() === sym,
+  );
   return `
     <div class="chains-co-row ${held ? "in-holding" : ""} ${
       core ? "is-core" : ""
-    }" data-symbol="${escapeHtml(sym)}">
+    }${focused ? " is-focus" : ""}" data-symbol="${escapeHtml(sym)}">
       <a class="chains-co-main" href="/sectors?sector=${encodeURIComponent(
         sector
       )}&symbol=${encodeURIComponent(sym)}">
@@ -9288,6 +9397,11 @@ function chainsCompanyRowHtml(c) {
           ${
             core
               ? '<span class="chains-co-core-tag" title="核心标的">核心</span>'
+              : ""
+          }
+          ${
+            focused
+              ? '<span class="chains-co-focus-tag" title="来自业务档案">定位</span>'
               : ""
           }
         </span>
@@ -9604,6 +9718,7 @@ function renderChainsDesk(data) {
   state.chains = data;
   state.chainQ = data.q || state.chainQ || "";
   state.chainId = data.matched ? data.chain?.id || "" : "";
+  if (data.focus) state.chainFocus = String(data.focus || "").toUpperCase();
   if (els.chainsQ && state.chainQ && els.chainsQ.value !== state.chainQ) {
     els.chainsQ.value = state.chainQ;
   }
@@ -9639,10 +9754,21 @@ function renderChainsDesk(data) {
         "输入行业关键词，生成上下游逻辑图，并标注美股代码；可一键加入持仓。";
     }
     renderChainsPanorama(chain);
+    if (state.chainFocus) {
+      window.requestAnimationFrame(() => {
+        window.setTimeout(() => {
+          focusChainSymbol(state.chainFocus, data.focus_panel_id || "");
+        }, 80);
+      });
+    }
     setStatus(
       data.generated
-        ? `${chain.label} · 已按关键词自动生成`
-        : `${chain.label} · 全景逻辑图已生成`
+        ? `${chain.label} · 已按关键词自动生成${
+            state.chainFocus ? ` · 定位 ${state.chainFocus}` : ""
+          }`
+        : `${chain.label} · 全景逻辑图已生成${
+            state.chainFocus ? ` · 定位 ${state.chainFocus}` : ""
+          }`
     );
   } else {
     setStatus(data.message || "输入行业关键词生成产业链");
@@ -9650,10 +9776,12 @@ function renderChainsDesk(data) {
   syncChainsQuery();
 }
 
-async function loadChainsDesk({ q, chain } = {}) {
+async function loadChainsDesk({ q, chain, focus } = {}) {
   if (PAGE !== "chains") return null;
   const query = q ?? state.chainQ;
   const chainId = chain ?? state.chainId;
+  if (focus != null) state.chainFocus = String(focus || "").toUpperCase();
+  const focusSym = state.chainFocus || "";
   if (query) {
     setStatus(`正在根据「${query}」生成全产业链逻辑图…`);
     if (els.chainsEmpty) {
@@ -9672,6 +9800,7 @@ async function loadChainsDesk({ q, chain } = {}) {
     const params = new URLSearchParams();
     if (query) params.set("q", query);
     if (chainId) params.set("chain", chainId);
+    if (focusSym) params.set("focus", focusSym);
     const res = await fetch(`/api/chains?${params.toString()}`);
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     const data = await res.json();
@@ -9697,7 +9826,8 @@ function bindChainsDesk() {
     event.preventDefault();
     state.chainQ = (els.chainsQ?.value || "").trim();
     state.chainId = "";
-    void loadChainsDesk({ q: state.chainQ, chain: "" });
+    state.chainFocus = "";
+    void loadChainsDesk({ q: state.chainQ, chain: "", focus: "" });
   });
   els.chainsSuggest?.addEventListener("click", (event) => {
     const chip = event.target.closest("[data-chain-id]");
@@ -9706,8 +9836,9 @@ function bindChainsDesk() {
     const label = chip.getAttribute("data-chain-q") || "";
     state.chainId = id;
     state.chainQ = label;
+    state.chainFocus = "";
     if (els.chainsQ) els.chainsQ.value = label;
-    void loadChainsDesk({ q: label, chain: id });
+    void loadChainsDesk({ q: label, chain: id, focus: "" });
   });
 }
 
@@ -9849,14 +9980,24 @@ function bootPage() {
     const params = new URLSearchParams(location.search);
     const qText = (params.get("q") || "").trim();
     const qChain = (params.get("chain") || "").trim();
+    const qFocus = (params.get("focus") || "").trim().toUpperCase();
     if (qText) state.chainQ = qText;
     if (qChain) state.chainId = qChain;
+    if (qFocus) state.chainFocus = qFocus;
     if (els.chainsQ && qText) els.chainsQ.value = qText;
     bindChainsDesk();
     const painted = paintFromPageDataCache("chains");
     if (painted) {
       restoreScrollPosition();
       setStatus("已恢复产业链缓存 · 后台刷新中…");
+      if (state.chainFocus) {
+        window.setTimeout(() => {
+          focusChainSymbol(
+            state.chainFocus,
+            state.chains?.focus_panel_id || "",
+          );
+        }, 120);
+      }
     }
     void refreshHoldingSymbols().then(() => loadChainsDesk());
   } else if (PAGE === "settings") {
