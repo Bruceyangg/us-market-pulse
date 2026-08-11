@@ -500,12 +500,9 @@ async function refreshChartLive(key) {
   try {
     if (String(key || "").startsWith("us-fut-")) {
       await loadUsMarketsDesk({ force: true, mode: "tape" });
-      // Drain coalesced follow-up so we don't report success on a no-op return.
+      // Let a coalesced follow-up paint before we declare success.
       const t0 = Date.now();
-      while (
-        (state.usMarketsPollBusy || state.usMarketsPollPending) &&
-        Date.now() - t0 < 28000
-      ) {
+      while (state.usMarketsPollBusy && Date.now() - t0 < 16000) {
         await new Promise((r) => setTimeout(r, 40));
       }
       const n = (state.usMarkets?.futures || []).length;
@@ -6964,17 +6961,31 @@ async function loadUsMarketsDesk({ force = false, mode = "full" } = {}) {
           ? "full"
           : "tape",
     };
-    // Callers (esp. 分时刷新) must wait for the coalesced force cycle —
-    // returning cached data here made the blue refresh button look broken.
-    if (!state.usMarketsLoadWaiters) state.usMarketsLoadWaiters = [];
-    return await new Promise((resolve) => {
-      state.usMarketsLoadWaiters.push(resolve);
-    });
+    if (!force) return state.usMarkets;
+    // Manual 分时刷新: wait for the in-flight cycle + coalesced force.
+    const t0 = Date.now();
+    while (
+      (state.usMarketsPollBusy || state.usMarketsPollPending) &&
+      Date.now() - t0 < 28000
+    ) {
+      await new Promise((r) => setTimeout(r, 50));
+    }
+    // Owner may have cleared pending and kicked a void follow-up — wait one
+    // more busy window so we don't report success before that paint.
+    await new Promise((r) => setTimeout(r, 30));
+    while (state.usMarketsPollBusy && Date.now() - t0 < 28000) {
+      await new Promise((r) => setTimeout(r, 50));
+    }
+    if (!state.usMarketsPollBusy && state.usMarketsPollPending?.force) {
+      const pending = state.usMarketsPollPending;
+      state.usMarketsPollPending = null;
+      return loadUsMarketsDesk(pending);
+    }
+    return state.usMarkets;
   }
   state.usMarketsPollBusy = true;
   state.usMarketsPollPending = null;
   const want = mode === "tape" ? "tape" : "full";
-  let result = state.usMarkets;
   try {
     const params = new URLSearchParams();
     params.set("mode", want);
@@ -6988,7 +6999,7 @@ async function loadUsMarketsDesk({ force = false, mode = "full" } = {}) {
     data = mergeUsMarketsPayload(state.usMarkets, data);
     renderUsMarketsDesk(data);
     persistPageDataCache();
-    result = data;
+    return data;
   } catch (err) {
     const msg = String(err?.message || err || "");
     // Keep last good paint — never blank the whole US markets block on a blip.
@@ -7003,46 +7014,36 @@ async function loadUsMarketsDesk({ force = false, mode = "full" } = {}) {
           }
         }, 2000);
       }
-      result = state.usMarkets;
-    } else {
-      if (els.usMarketsBlurb) {
-        els.usMarketsBlurb.textContent = `美国市场加载失败：${msg}`;
-      }
-      if (els.usMarketsStrip) {
-        els.usMarketsStrip.innerHTML = `<p class="empty">加载失败：${escapeHtml(
-          msg
-        )} · <button type="button" class="btn ghost btn-compact" data-retry-usm="1">重试</button></p>`;
-        els.usMarketsStrip
-          .querySelector("[data-retry-usm]")
-          ?.addEventListener("click", () =>
-            loadUsMarketsDesk({ force: true, mode: "tape" })
-          );
-      }
-      window.setTimeout(() => {
-        if (PAGE === "sectors" && !(state.usMarkets?.strip || []).length) {
-          void loadUsMarketsDesk({ force: true, mode: "tape" });
-        }
-      }, 2500);
-      result = null;
+      return state.usMarkets;
     }
+    if (els.usMarketsBlurb) {
+      els.usMarketsBlurb.textContent = `美国市场加载失败：${msg}`;
+    }
+    if (els.usMarketsStrip) {
+      els.usMarketsStrip.innerHTML = `<p class="empty">加载失败：${escapeHtml(
+        msg
+      )} · <button type="button" class="btn ghost btn-compact" data-retry-usm="1">重试</button></p>`;
+      els.usMarketsStrip
+        .querySelector("[data-retry-usm]")
+        ?.addEventListener("click", () =>
+          loadUsMarketsDesk({ force: true, mode: "tape" })
+        );
+    }
+    window.setTimeout(() => {
+      if (PAGE === "sectors" && !(state.usMarkets?.strip || []).length) {
+        void loadUsMarketsDesk({ force: true, mode: "tape" });
+      }
+    }, 2500);
+    return null;
   } finally {
-    state.usMarketsPollBusy = false;
     const pending = state.usMarketsPollPending;
     state.usMarketsPollPending = null;
+    state.usMarketsPollBusy = false;
     if (pending && PAGE === "sectors") {
-      result = await loadUsMarketsDesk(pending);
-    }
-    const waiters = state.usMarketsLoadWaiters || [];
-    state.usMarketsLoadWaiters = [];
-    for (const resolve of waiters) {
-      try {
-        resolve(state.usMarkets);
-      } catch {
-        /* ignore */
-      }
+      // Fire-and-follow: don't await inside finally (avoids waiter deadlocks).
+      void loadUsMarketsDesk(pending);
     }
   }
-  return result;
 }
 
 function bindUsMarketsDesk() {
