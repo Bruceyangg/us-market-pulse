@@ -499,12 +499,9 @@ async function refreshChartLive(key) {
   setStatus("正在刷新分时…");
   try {
     if (String(key || "").startsWith("us-fut-")) {
-      await loadUsMarketsDesk({ force: true, mode: "tape" });
-      // Let a coalesced follow-up paint before we declare success.
-      const t0 = Date.now();
-      while (state.usMarketsPollBusy && Date.now() - t0 < 16000) {
-        await new Promise((r) => setTimeout(r, 40));
-      }
+      // Bypass the poll busy-lock — otherwise the blue button waits forever
+      // behind the 2s tape poll and looks broken.
+      await refreshUsFuturesTapeLive();
       const n = (state.usMarkets?.futures || []).length;
       const when = new Date().toLocaleTimeString("zh-CN", {
         hour: "2-digit",
@@ -6950,8 +6947,42 @@ function futuresTfReady(tf) {
   );
 }
 
+/** Manual futures 分时 refresh — never blocks on the background tape poll lock. */
+async function refreshUsFuturesTapeLive() {
+  if (PAGE !== "sectors") return null;
+  if (state.usFuturesLiveBusy && state.usFuturesLiveInflight) {
+    return state.usFuturesLiveInflight;
+  }
+  state.usFuturesLiveBusy = true;
+  const req = (async () => {
+    const params = new URLSearchParams();
+    params.set("mode", "tape");
+    params.set("refresh", "true");
+    const res = await fetch(`/api/us-markets?${params.toString()}`, {
+      signal: AbortSignal.timeout(16000),
+    });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    let data = await res.json();
+    data = mergeUsMarketsPayload(state.usMarkets, data);
+    renderUsMarketsDesk(data);
+    persistPageDataCache();
+    return data;
+  })();
+  state.usFuturesLiveInflight = req;
+  try {
+    return await req;
+  } finally {
+    state.usFuturesLiveBusy = false;
+    state.usFuturesLiveInflight = null;
+  }
+}
+
 async function loadUsMarketsDesk({ force = false, mode = "full" } = {}) {
   if (PAGE !== "sectors") return null;
+  // Button path has its own fetcher; keep poll coalescing simple.
+  if (force && mode === "tape") {
+    return refreshUsFuturesTapeLive();
+  }
   if (state.usMarketsPollBusy) {
     // Never stack parallel tape/full polls; keep the latest intent.
     state.usMarketsPollPending = {
@@ -6961,26 +6992,6 @@ async function loadUsMarketsDesk({ force = false, mode = "full" } = {}) {
           ? "full"
           : "tape",
     };
-    if (!force) return state.usMarkets;
-    // Manual 分时刷新: wait for the in-flight cycle + coalesced force.
-    const t0 = Date.now();
-    while (
-      (state.usMarketsPollBusy || state.usMarketsPollPending) &&
-      Date.now() - t0 < 28000
-    ) {
-      await new Promise((r) => setTimeout(r, 50));
-    }
-    // Owner may have cleared pending and kicked a void follow-up — wait one
-    // more busy window so we don't report success before that paint.
-    await new Promise((r) => setTimeout(r, 30));
-    while (state.usMarketsPollBusy && Date.now() - t0 < 28000) {
-      await new Promise((r) => setTimeout(r, 50));
-    }
-    if (!state.usMarketsPollBusy && state.usMarketsPollPending?.force) {
-      const pending = state.usMarketsPollPending;
-      state.usMarketsPollPending = null;
-      return loadUsMarketsDesk(pending);
-    }
     return state.usMarkets;
   }
   state.usMarketsPollBusy = true;
@@ -7036,11 +7047,10 @@ async function loadUsMarketsDesk({ force = false, mode = "full" } = {}) {
     }, 2500);
     return null;
   } finally {
+    state.usMarketsPollBusy = false;
     const pending = state.usMarketsPollPending;
     state.usMarketsPollPending = null;
-    state.usMarketsPollBusy = false;
     if (pending && PAGE === "sectors") {
-      // Fire-and-follow: don't await inside finally (avoids waiter deadlocks).
       void loadUsMarketsDesk(pending);
     }
   }
