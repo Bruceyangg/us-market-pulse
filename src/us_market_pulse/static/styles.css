@@ -2932,7 +2932,8 @@ html[data-theme="dark"] .desk-chg-row {
   white-space: nowrap;
 }
 
-.sector-map-pane.is-map-collapsed .sector-map-canvas {
+.sector-map-pane.is-map-collapsed .sector-map-canvas,
+.sector-map-pane.is-map-collapsed .sector-map-viewport {
   display: none;
 }
 
@@ -3243,7 +3244,66 @@ html[data-theme="dark"] .us-futures-card {
   min-height: 16rem;
 }
 
-/* Cross-sector 1–2 week pulse — sits under 全板块涨跌图 */
+/* Fixed footprint viewport: content scales inside; column size stays put. */
+.sector-map-viewport {
+  position: relative;
+  width: 100%;
+  height: min(42vh, 28rem);
+  min-height: 16rem;
+  overflow: hidden;
+  border-radius: 12px;
+  border: 1px solid color-mix(in srgb, var(--line) 70%, transparent);
+  background: color-mix(in srgb, #121820 88%, var(--panel));
+  touch-action: none;
+  overscroll-behavior: contain;
+}
+
+.sector-map-viewport .sector-map-canvas {
+  width: 100%;
+  height: 100%;
+  min-height: 0;
+  transform-origin: 0 0;
+  will-change: transform;
+}
+
+.sector-map-viewport .sector-map-stage,
+.sector-map-viewport .sector-map-stage.is-narrow {
+  width: 100%;
+  height: 100%;
+  min-height: 0;
+  max-height: none;
+  aspect-ratio: auto;
+  border: 0;
+  border-radius: 0;
+}
+
+.sector-map-zoom-controls {
+  display: inline-flex;
+  align-items: stretch;
+  border: 1px solid color-mix(in srgb, var(--line) 80%, transparent);
+  border-radius: 999px;
+  overflow: hidden;
+  background: color-mix(in srgb, var(--panel) 88%, transparent);
+}
+
+.sector-map-zoom-controls .chart-zoom-btn {
+  min-width: 2.1rem;
+  min-height: 2.1rem;
+  border: 0;
+  border-right: 1px solid color-mix(in srgb, var(--line) 70%, transparent);
+  border-radius: 0;
+  background: transparent;
+}
+
+.sector-map-zoom-controls .chart-zoom-btn:last-child {
+  border-right: 0;
+}
+
+.sector-map-pane.is-map-zoomed .sector-map-zoom-controls .chart-zoom-reset {
+  display: grid;
+}
+
+/* Cross-sector 1–2 week pulse — sits under 美国市场 / above desk */
 .sector-pulse-pane {
   border: 1px solid var(--line);
   border-radius: 18px;
@@ -3691,24 +3751,19 @@ html[data-theme="dark"] .us-futures-card {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 0.65rem;
-  align-items: stretch;
 }
 
 .sector-pulse-stock-col {
   display: grid;
-  grid-template-rows: auto minmax(0, 1fr);
   gap: 0.3rem;
   min-width: 0;
-  min-height: 0;
+  align-content: start;
 }
 
 .sector-pulse-stock-list {
   display: grid;
   gap: 0.4rem;
-  align-content: start;
-  /* Fixed pane height so sector switches don't jump the layout. */
-  height: min(28rem, 50vh);
-  max-height: min(28rem, 50vh);
+  max-height: min(32rem, 58vh);
   overflow-x: hidden;
   overflow-y: auto;
   overscroll-behavior: contain;
@@ -3732,11 +3787,9 @@ html[data-theme="dark"] .us-futures-card {
 
 .sector-pulse-stock-row {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 2.15rem;
+  grid-template-columns: minmax(0, 1fr) 2rem;
   align-items: stretch;
   min-width: 0;
-  height: 8.1rem;
-  max-height: 8.1rem;
   border: 1px solid color-mix(in srgb, var(--line) 80%, transparent);
   border-radius: 10px;
   overflow: hidden;
@@ -3755,14 +3808,11 @@ html[data-theme="dark"] .us-futures-card {
 
 .sector-pulse-stock {
   display: grid;
-  grid-template-rows: auto auto auto minmax(0, 1fr) auto;
-  gap: 0.2rem;
+  gap: 0.28rem;
   width: 100%;
   min-width: 0;
-  height: 100%;
-  max-height: 100%;
   margin: 0;
-  padding: 0.48rem 0.55rem 0.5rem;
+  padding: 0.62rem 0.68rem 0.7rem;
   border: 0;
   border-radius: 0;
   background: transparent;
@@ -3770,6 +3820,7 @@ html[data-theme="dark"] .us-futures-card {
   font: inherit;
   text-align: left;
   cursor: pointer;
+  min-height: 7.6rem;
   overflow: hidden;
   box-sizing: border-box;
   align-content: start;
@@ -3788,13 +3839,9 @@ html[data-theme="dark"] .us-futures-card {
   line-height: 1;
   cursor: pointer;
   padding: 0;
-  width: 100%;
-  height: 100%;
-  min-width: 2.15rem;
-  align-self: stretch;
+  min-width: 2rem;
   display: grid;
   place-items: center;
-  place-content: center;
   transition: background 0.15s ease, color 0.15s ease;
 }
 
@@ -3844,8 +3891,6 @@ html[data-theme="dark"] .us-futures-card {
   display: flex;
   flex-wrap: wrap;
   gap: 0.22rem;
-  max-height: 1.35rem;
-  overflow: hidden;
 }
 
 .sector-pulse-stock .stock-industries .ind {
@@ -3884,18 +3929,14 @@ html[data-theme="dark"] .us-futures-card {
   align-items: baseline;
   gap: 0.35rem;
   min-width: 0;
-  overflow: hidden;
 }
 
 .sector-pulse-stock .sym {
-  flex: 0 0 auto;
   font-size: 0.84rem;
   font-weight: 750;
 }
 
 .sector-pulse-stock .name {
-  flex: 1 1 auto;
-  min-width: 0;
   font-size: 0.72rem;
   color: var(--ink-soft);
   overflow: hidden;
@@ -3905,13 +3946,9 @@ html[data-theme="dark"] .us-futures-card {
 
 .sector-pulse-stock .stance {
   flex: 0 0 auto;
-  max-width: 4.8rem;
   font-size: 0.68rem;
   font-weight: 750;
   color: var(--ink-soft);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
 }
 
 .sector-pulse-stock.is-strong .stance {
@@ -3948,21 +3985,19 @@ html[data-theme="dark"] .us-futures-card {
 .sector-pulse-stock .stock-action {
   display: -webkit-box;
   -webkit-box-orient: vertical;
-  -webkit-line-clamp: 1;
-  line-clamp: 1;
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
   overflow: hidden;
   min-width: 0;
   max-width: 100%;
-  font-size: 0.66rem;
-  line-height: 1.35;
+  font-size: 0.68rem;
+  line-height: 1.45;
   color: var(--ink-soft);
   overflow-wrap: anywhere;
   word-break: break-word;
 }
 
 .sector-pulse-stock .stock-action {
-  -webkit-line-clamp: 1;
-  line-clamp: 1;
   color: color-mix(in srgb, #6aa8d4 70%, var(--ink-soft));
 }
 
@@ -3998,11 +4033,6 @@ html[data-theme="dark"] .us-futures-card {
   .sector-pulse-stock-cols,
   .sector-pulse-intel-grid {
     grid-template-columns: 1fr;
-  }
-
-  .sector-pulse-stock-list {
-    height: min(24rem, 48vh);
-    max-height: min(24rem, 48vh);
   }
 
   .sector-pulse-stocks-title .title-main {
@@ -4068,6 +4098,19 @@ html[data-theme="dark"] .sector-pulse-hz.is-active {
   overflow: hidden;
   background: color-mix(in srgb, #121820 88%, var(--panel));
   border: 1px solid color-mix(in srgb, var(--line) 70%, transparent);
+}
+
+/* Bottom-of-page map on wide desktop / tablet */
+@media (min-width: 861px) {
+  .page-sectors .sectors-board {
+    display: flex;
+    flex-direction: column;
+  }
+
+  .page-sectors .sectors-board > #sector-map {
+    order: 40;
+    margin-top: 0.35rem;
+  }
 }
 
 .map-sector {
@@ -8602,6 +8645,23 @@ html.pulse-native-tablet .sector-map-stage.is-narrow {
   width: 100%;
   max-width: none;
   aspect-ratio: 1000 / 560;
+}
+
+html.pulse-native-tablet .sector-map-viewport {
+  height: min(46vh, 30rem);
+}
+
+html.pulse-native-tablet .sector-map-viewport .sector-map-stage,
+html.pulse-native-tablet .sector-map-viewport .sector-map-stage.is-narrow {
+  aspect-ratio: auto;
+  height: 100%;
+  min-width: 0;
+  width: 100%;
+}
+
+/* Tablet: page bottom map stays readable without forced horizontal scroll */
+html.pulse-native-tablet .sector-map-canvas {
+  overflow: visible;
 }
 
 html.pulse-native-tablet .map-stock .nm {

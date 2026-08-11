@@ -153,6 +153,7 @@ const els = {
   hotSectorsBlurb: document.getElementById("hot-sectors-blurb"),
   sectorMapBlurb: document.getElementById("sector-map-blurb"),
   sectorMapCanvas: document.getElementById("sector-map-canvas"),
+  sectorMapViewport: document.getElementById("sector-map-viewport"),
   sectorMapTfFilters: document.getElementById("sector-map-tf-filters"),
   sectorPulse: document.getElementById("sector-pulse"),
   sectorPulseTitle: document.getElementById("sector-pulse-title"),
@@ -5858,12 +5859,194 @@ function renderSectorMap(map) {
       });
     });
   });
+  paintSectorMapZoom();
 }
 
 function isSectorMapCollapsed() {
   return Boolean(
     document.getElementById("sector-map")?.classList.contains("is-map-collapsed"),
   );
+}
+
+const SECTOR_MAP_ZOOM_MIN = 1;
+const SECTOR_MAP_ZOOM_MAX = 2.8;
+const SECTOR_MAP_ZOOM_STEP = 1.18;
+const sectorMapZoom = { scale: 1, x: 0, y: 0 };
+let sectorMapZoomBound = false;
+
+function clampSectorMapPan() {
+  const viewport = els.sectorMapViewport;
+  const canvas = els.sectorMapCanvas;
+  if (!viewport || !canvas) return;
+  const vw = viewport.clientWidth || 1;
+  const vh = viewport.clientHeight || 1;
+  const s = sectorMapZoom.scale;
+  const maxX = 0;
+  const minX = Math.min(0, vw - vw * s);
+  const maxY = 0;
+  const minY = Math.min(0, vh - vh * s);
+  sectorMapZoom.x = clamp(sectorMapZoom.x, minX, maxX);
+  sectorMapZoom.y = clamp(sectorMapZoom.y, minY, maxY);
+}
+
+function paintSectorMapZoom() {
+  const canvas = els.sectorMapCanvas;
+  const pane = document.getElementById("sector-map");
+  if (!canvas) return;
+  clampSectorMapPan();
+  const { scale, x, y } = sectorMapZoom;
+  canvas.style.transform = `translate(${x.toFixed(1)}px, ${y.toFixed(1)}px) scale(${scale})`;
+  pane?.classList.toggle("is-map-zoomed", scale > 1.01);
+  pane
+    ?.querySelectorAll('[data-map-zoom="reset"]')
+    .forEach((btn) => btn.classList.toggle("is-hidden", scale <= 1.01));
+}
+
+function setSectorMapZoom(nextScale, pivotX = 0.5, pivotY = 0.5) {
+  const viewport = els.sectorMapViewport;
+  if (!viewport) return;
+  const prev = sectorMapZoom.scale;
+  const scale = clamp(nextScale, SECTOR_MAP_ZOOM_MIN, SECTOR_MAP_ZOOM_MAX);
+  if (Math.abs(scale - prev) < 0.001 && scale === prev) {
+    paintSectorMapZoom();
+    return;
+  }
+  const rect = viewport.getBoundingClientRect();
+  const cx = pivotX * rect.width;
+  const cy = pivotY * rect.height;
+  // Keep the point under the pivot stable while scaling.
+  const worldX = (cx - sectorMapZoom.x) / prev;
+  const worldY = (cy - sectorMapZoom.y) / prev;
+  sectorMapZoom.scale = scale;
+  sectorMapZoom.x = cx - worldX * scale;
+  sectorMapZoom.y = cy - worldY * scale;
+  paintSectorMapZoom();
+}
+
+function resetSectorMapZoom() {
+  sectorMapZoom.scale = 1;
+  sectorMapZoom.x = 0;
+  sectorMapZoom.y = 0;
+  paintSectorMapZoom();
+}
+
+function bindSectorMapZoom() {
+  const viewport = els.sectorMapViewport;
+  const pane = document.getElementById("sector-map");
+  if (!viewport || !pane || sectorMapZoomBound) return;
+  sectorMapZoomBound = true;
+
+  pane.querySelectorAll("[data-map-zoom]").forEach((btn) => {
+    btn.addEventListener("click", (event) => {
+      event.preventDefault();
+      const act = btn.getAttribute("data-map-zoom");
+      if (act === "in") setSectorMapZoom(sectorMapZoom.scale * SECTOR_MAP_ZOOM_STEP);
+      else if (act === "out") setSectorMapZoom(sectorMapZoom.scale / SECTOR_MAP_ZOOM_STEP);
+      else if (act === "reset") resetSectorMapZoom();
+    });
+  });
+
+  viewport.addEventListener(
+    "wheel",
+    (event) => {
+      if (!(event.ctrlKey || event.metaKey)) return;
+      event.preventDefault();
+      const rect = viewport.getBoundingClientRect();
+      const px = (event.clientX - rect.left) / Math.max(1, rect.width);
+      const py = (event.clientY - rect.top) / Math.max(1, rect.height);
+      const factor = Math.exp(-event.deltaY * 0.0022);
+      setSectorMapZoom(sectorMapZoom.scale * factor, px, py);
+    },
+    { passive: false },
+  );
+
+  // Safari trackpad pinch
+  let gestureScale0 = 1;
+  viewport.addEventListener("gesturestart", (event) => {
+    event.preventDefault();
+    gestureScale0 = sectorMapZoom.scale;
+  });
+  viewport.addEventListener("gesturechange", (event) => {
+    event.preventDefault();
+    const rect = viewport.getBoundingClientRect();
+    const px = (event.clientX - rect.left) / Math.max(1, rect.width);
+    const py = (event.clientY - rect.top) / Math.max(1, rect.height);
+    const scale = gestureScale0 * (event.scale || 1);
+    setSectorMapZoom(scale, Number.isFinite(px) ? px : 0.5, Number.isFinite(py) ? py : 0.5);
+  });
+  viewport.addEventListener("gestureend", (event) => event.preventDefault());
+
+  // Touch: pinch + one-finger pan when zoomed
+  let pinch0 = null;
+  let pan0 = null;
+  viewport.addEventListener(
+    "touchstart",
+    (event) => {
+      if (event.touches.length === 2) {
+        pan0 = null;
+        const a = event.touches[0];
+        const b = event.touches[1];
+        const dist = Math.hypot(a.clientX - b.clientX, a.clientY - b.clientY);
+        pinch0 = {
+          dist: Math.max(1, dist),
+          scale: sectorMapZoom.scale,
+          midX: (a.clientX + b.clientX) / 2,
+          midY: (a.clientY + b.clientY) / 2,
+        };
+      } else if (event.touches.length === 1 && sectorMapZoom.scale > 1.01) {
+        pinch0 = null;
+        pan0 = {
+          x: event.touches[0].clientX,
+          y: event.touches[0].clientY,
+          ox: sectorMapZoom.x,
+          oy: sectorMapZoom.y,
+        };
+      }
+    },
+    { passive: true },
+  );
+  viewport.addEventListener(
+    "touchmove",
+    (event) => {
+      if (event.touches.length === 2 && pinch0) {
+        event.preventDefault();
+        const a = event.touches[0];
+        const b = event.touches[1];
+        const dist = Math.hypot(a.clientX - b.clientX, a.clientY - b.clientY);
+        const rect = viewport.getBoundingClientRect();
+        const midX = (a.clientX + b.clientX) / 2;
+        const midY = (a.clientY + b.clientY) / 2;
+        const px = (midX - rect.left) / Math.max(1, rect.width);
+        const py = (midY - rect.top) / Math.max(1, rect.height);
+        setSectorMapZoom(pinch0.scale * (dist / pinch0.dist), px, py);
+      } else if (event.touches.length === 1 && pan0) {
+        event.preventDefault();
+        const t = event.touches[0];
+        sectorMapZoom.x = pan0.ox + (t.clientX - pan0.x);
+        sectorMapZoom.y = pan0.oy + (t.clientY - pan0.y);
+        paintSectorMapZoom();
+      }
+    },
+    { passive: false },
+  );
+  viewport.addEventListener(
+    "touchend",
+    (event) => {
+      if (event.touches.length < 2) pinch0 = null;
+      if (event.touches.length < 1) pan0 = null;
+    },
+    { passive: true },
+  );
+  viewport.addEventListener(
+    "touchcancel",
+    () => {
+      pinch0 = null;
+      pan0 = null;
+    },
+    { passive: true },
+  );
+
+  paintSectorMapZoom();
 }
 
 async function loadSectorMap({ force = false } = {}) {
@@ -10721,6 +10904,7 @@ function bindSectorsDepthToggles() {
       if (open && loadIfOpening && wasCollapsed) {
         void loadSectorMap({ force: false });
       }
+      if (open) paintSectorMapZoom();
     };
     // Phone native: collapse map by default to reach desk faster.
     const phoneApp = document.documentElement.classList.contains("pulse-native-phone");
@@ -10731,6 +10915,8 @@ function bindSectorsDepthToggles() {
       }),
     );
   }
+
+  bindSectorMapZoom();
 
   els.sectorMapTfFilters?.querySelectorAll("[data-map-tf]").forEach((btn) => {
     btn.addEventListener("click", () => {

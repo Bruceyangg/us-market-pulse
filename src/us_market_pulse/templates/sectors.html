@@ -59,48 +59,6 @@
           </div>
         </section>
 
-        <section class="sector-map-pane" id="sector-map" aria-label="全板块涨跌图">
-          <div class="sector-map-head">
-            <div>
-              <h2>全板块涨跌图</h2>
-              <p id="sector-map-blurb">美股主要板块与龙头个股涨跌全景 · 当日/实时/周涨跌 · 红涨绿跌</p>
-            </div>
-            <div class="sector-map-head-actions">
-              <div
-                class="sector-map-tf-bar"
-                id="sector-map-tf-filters"
-                role="tablist"
-                aria-label="涨跌图周期"
-              >
-                <button type="button" class="sector-map-tf is-active" data-map-tf="day" role="tab" aria-selected="true">当日</button>
-                <button type="button" class="sector-map-tf" data-map-tf="rt" role="tab" aria-selected="false">实时</button>
-                <button type="button" class="sector-map-tf" data-map-tf="1w" role="tab" aria-selected="false">一周</button>
-                <button type="button" class="sector-map-tf" data-map-tf="2w" role="tab" aria-selected="false">两周</button>
-                <button type="button" class="sector-map-tf" data-map-tf="3w" role="tab" aria-selected="false">三周</button>
-                <button type="button" class="sector-map-tf" data-map-tf="4w" role="tab" aria-selected="false">四周</button>
-              </div>
-              <div class="sector-map-legend" aria-hidden="true">
-                <span class="map-lg down">跌</span>
-                <span class="map-lg-bar"></span>
-                <span class="map-lg up">涨</span>
-              </div>
-              <button
-                type="button"
-                class="btn ghost btn-compact us-depth-toggle"
-                id="btn-sector-map-toggle"
-                aria-expanded="true"
-                aria-controls="sector-map-canvas"
-                title="展开或收起全板块涨跌图"
-              >
-                收起
-              </button>
-            </div>
-          </div>
-          <div class="sector-map-canvas" id="sector-map-canvas">
-            <p class="empty">加载全板块涨跌图…</p>
-          </div>
-        </section>
-
         <section class="sector-pulse-pane" id="sector-pulse" aria-label="板块动向研判">
           <div class="sector-pulse-head">
             <div>
@@ -268,6 +226,55 @@
               </section>
             </div>
           </aside>
+        </section>
+
+        <section class="sector-map-pane" id="sector-map" aria-label="全板块涨跌图">
+          <div class="sector-map-head">
+            <div>
+              <h2>全板块涨跌图</h2>
+              <p id="sector-map-blurb">美股主要板块与龙头个股涨跌全景 · 当日/实时/周涨跌 · 红涨绿跌 · 固定窗内可缩放</p>
+            </div>
+            <div class="sector-map-head-actions">
+              <div
+                class="sector-map-tf-bar"
+                id="sector-map-tf-filters"
+                role="tablist"
+                aria-label="涨跌图周期"
+              >
+                <button type="button" class="sector-map-tf is-active" data-map-tf="day" role="tab" aria-selected="true">当日</button>
+                <button type="button" class="sector-map-tf" data-map-tf="rt" role="tab" aria-selected="false">实时</button>
+                <button type="button" class="sector-map-tf" data-map-tf="1w" role="tab" aria-selected="false">一周</button>
+                <button type="button" class="sector-map-tf" data-map-tf="2w" role="tab" aria-selected="false">两周</button>
+                <button type="button" class="sector-map-tf" data-map-tf="3w" role="tab" aria-selected="false">三周</button>
+                <button type="button" class="sector-map-tf" data-map-tf="4w" role="tab" aria-selected="false">四周</button>
+              </div>
+              <div class="sector-map-legend" aria-hidden="true">
+                <span class="map-lg down">跌</span>
+                <span class="map-lg-bar"></span>
+                <span class="map-lg up">涨</span>
+              </div>
+              <div class="sector-map-zoom-controls" aria-label="涨跌图缩放">
+                <button type="button" class="chart-zoom-btn" data-map-zoom="out" title="缩小" aria-label="缩小">−</button>
+                <button type="button" class="chart-zoom-btn" data-map-zoom="in" title="放大" aria-label="放大">+</button>
+                <button type="button" class="chart-zoom-btn chart-zoom-reset is-hidden" data-map-zoom="reset" title="复位" aria-label="复位">1×</button>
+              </div>
+              <button
+                type="button"
+                class="btn ghost btn-compact us-depth-toggle"
+                id="btn-sector-map-toggle"
+                aria-expanded="true"
+                aria-controls="sector-map-viewport"
+                title="展开或收起全板块涨跌图"
+              >
+                收起
+              </button>
+            </div>
+          </div>
+          <div class="sector-map-viewport" id="sector-map-viewport">
+            <div class="sector-map-canvas" id="sector-map-canvas">
+              <p class="empty">加载全板块涨跌图…</p>
+            </div>
+          </div>
         </section>
       </div>
 {% endblock %}
