@@ -487,7 +487,11 @@ function chartZoomControlsHtml(zoomed, { showLiveRefresh = false } = {}) {
 async function refreshChartLive(key) {
   const meta = chartZoomData.get(key);
   if (!meta || meta.tf !== "intraday") return;
-  const btn = meta.root?.querySelector('[data-zoom-act="live-refresh"]');
+  // Re-query after await — chart shell may have been rebuilt mid-refresh.
+  const liveBtn = () =>
+    chartZoomData.get(key)?.root?.querySelector('[data-zoom-act="live-refresh"]') ||
+    meta.root?.querySelector('[data-zoom-act="live-refresh"]');
+  const btn = liveBtn();
   if (btn) {
     btn.classList.add("is-busy");
     btn.disabled = true;
@@ -496,6 +500,23 @@ async function refreshChartLive(key) {
   try {
     if (String(key || "").startsWith("us-fut-")) {
       await loadUsMarketsDesk({ force: true, mode: "tape" });
+      // Drain coalesced follow-up so we don't report success on a no-op return.
+      const t0 = Date.now();
+      while (
+        (state.usMarketsPollBusy || state.usMarketsPollPending) &&
+        Date.now() - t0 < 28000
+      ) {
+        await new Promise((r) => setTimeout(r, 40));
+      }
+      const n = (state.usMarkets?.futures || []).length;
+      const when = new Date().toLocaleTimeString("zh-CN", {
+        hour: "2-digit",
+        minute: "2-digit",
+        second: "2-digit",
+      });
+      setStatus(
+        n ? `期货分时已刷新 · ${n} 条主连 · ${when}` : `期货分时已刷新 · ${when}`,
+      );
     } else {
       await refreshActiveIntraday({ force: true });
       const pick =
@@ -503,28 +524,34 @@ async function refreshChartLive(key) {
           ? state.portfolio?.selected_board
           : state.sectors?.selected_pick;
       const clock = sessionFromClock();
+      const when = new Date().toLocaleTimeString("zh-CN", {
+        hour: "2-digit",
+        minute: "2-digit",
+        second: "2-digit",
+      });
       if (
         clock.id === "night" &&
         pick &&
         (pick.rt_price == null || pick.rt_change_pct == null)
       ) {
-        setStatus("夜盘报价暂未同步 · 已强制刷新，请稍后再试");
+        setStatus(`夜盘报价暂未同步 · 已强制刷新 · ${when}`);
       } else {
         setStatus(
           pick?.symbol
             ? `分时已刷新 · ${pick.symbol}${
                 pick.session_label ? ` · ${pick.session_label}` : ""
-              }`
-            : "分时已刷新",
+              } · ${when}`
+            : `分时已刷新 · ${when}`,
         );
       }
     }
   } catch (err) {
     setStatus(`分时刷新失败：${err?.message || err || "请重试"}`);
   } finally {
-    if (btn) {
-      btn.classList.remove("is-busy");
-      btn.disabled = false;
+    const done = liveBtn();
+    if (done) {
+      done.classList.remove("is-busy");
+      done.disabled = false;
     }
   }
 }
@@ -6124,10 +6151,33 @@ function renderSectorPickChart() {
         const btn = event.currentTarget;
         btn?.classList.add("is-busy");
         if (btn) btn.disabled = true;
-        void refreshActiveIntraday({ force: true }).finally(() => {
-          btn?.classList.remove("is-busy");
-          if (btn) btn.disabled = false;
-        });
+        setStatus("正在刷新分时…");
+        void refreshActiveIntraday({ force: true })
+          .then(() => {
+            const p = state.sectors?.selected_pick;
+            const when = new Date().toLocaleTimeString("zh-CN", {
+              hour: "2-digit",
+              minute: "2-digit",
+              second: "2-digit",
+            });
+            setStatus(
+              p?.symbol
+                ? `分时已刷新 · ${p.symbol}${
+                    p.session_label ? ` · ${p.session_label}` : ""
+                  } · ${when}`
+                : `分时已刷新 · ${when}`,
+            );
+          })
+          .catch((err) => {
+            setStatus(`分时刷新失败：${err?.message || err || "请重试"}`);
+          })
+          .finally(() => {
+            // Chart may have been rebuilt; only touch the clicked node if still mounted.
+            if (btn?.isConnected) {
+              btn.classList.remove("is-busy");
+              btn.disabled = false;
+            }
+          });
       });
     renderMonthPanel(pick);
     renderStockEarnings(data.selected_earnings || pick.earnings, pick);
@@ -6909,13 +6959,22 @@ async function loadUsMarketsDesk({ force = false, mode = "full" } = {}) {
     // Never stack parallel tape/full polls; keep the latest intent.
     state.usMarketsPollPending = {
       force: Boolean(force || state.usMarketsPollPending?.force),
-      mode: mode === "full" || state.usMarketsPollPending?.mode === "full" ? "full" : "tape",
+      mode:
+        mode === "full" || state.usMarketsPollPending?.mode === "full"
+          ? "full"
+          : "tape",
     };
-    return state.usMarkets;
+    // Callers (esp. 分时刷新) must wait for the coalesced force cycle —
+    // returning cached data here made the blue refresh button look broken.
+    if (!state.usMarketsLoadWaiters) state.usMarketsLoadWaiters = [];
+    return await new Promise((resolve) => {
+      state.usMarketsLoadWaiters.push(resolve);
+    });
   }
   state.usMarketsPollBusy = true;
   state.usMarketsPollPending = null;
   const want = mode === "tape" ? "tape" : "full";
+  let result = state.usMarkets;
   try {
     const params = new URLSearchParams();
     params.set("mode", want);
@@ -6929,7 +6988,7 @@ async function loadUsMarketsDesk({ force = false, mode = "full" } = {}) {
     data = mergeUsMarketsPayload(state.usMarkets, data);
     renderUsMarketsDesk(data);
     persistPageDataCache();
-    return data;
+    result = data;
   } catch (err) {
     const msg = String(err?.message || err || "");
     // Keep last good paint — never blank the whole US markets block on a blip.
@@ -6944,35 +7003,46 @@ async function loadUsMarketsDesk({ force = false, mode = "full" } = {}) {
           }
         }, 2000);
       }
-      return state.usMarkets;
-    }
-    if (els.usMarketsBlurb) {
-      els.usMarketsBlurb.textContent = `美国市场加载失败：${msg}`;
-    }
-    if (els.usMarketsStrip) {
-      els.usMarketsStrip.innerHTML = `<p class="empty">加载失败：${escapeHtml(
-        msg
-      )} · <button type="button" class="btn ghost btn-compact" data-retry-usm="1">重试</button></p>`;
-      els.usMarketsStrip
-        .querySelector("[data-retry-usm]")
-        ?.addEventListener("click", () =>
-          loadUsMarketsDesk({ force: true, mode: "tape" })
-        );
-    }
-    window.setTimeout(() => {
-      if (PAGE === "sectors" && !(state.usMarkets?.strip || []).length) {
-        void loadUsMarketsDesk({ force: true, mode: "tape" });
+      result = state.usMarkets;
+    } else {
+      if (els.usMarketsBlurb) {
+        els.usMarketsBlurb.textContent = `美国市场加载失败：${msg}`;
       }
-    }, 2500);
-    return null;
+      if (els.usMarketsStrip) {
+        els.usMarketsStrip.innerHTML = `<p class="empty">加载失败：${escapeHtml(
+          msg
+        )} · <button type="button" class="btn ghost btn-compact" data-retry-usm="1">重试</button></p>`;
+        els.usMarketsStrip
+          .querySelector("[data-retry-usm]")
+          ?.addEventListener("click", () =>
+            loadUsMarketsDesk({ force: true, mode: "tape" })
+          );
+      }
+      window.setTimeout(() => {
+        if (PAGE === "sectors" && !(state.usMarkets?.strip || []).length) {
+          void loadUsMarketsDesk({ force: true, mode: "tape" });
+        }
+      }, 2500);
+      result = null;
+    }
   } finally {
     state.usMarketsPollBusy = false;
     const pending = state.usMarketsPollPending;
     state.usMarketsPollPending = null;
     if (pending && PAGE === "sectors") {
-      void loadUsMarketsDesk(pending);
+      result = await loadUsMarketsDesk(pending);
+    }
+    const waiters = state.usMarketsLoadWaiters || [];
+    state.usMarketsLoadWaiters = [];
+    for (const resolve of waiters) {
+      try {
+        resolve(state.usMarkets);
+      } catch {
+        /* ignore */
+      }
     }
   }
+  return result;
 }
 
 function bindUsMarketsDesk() {

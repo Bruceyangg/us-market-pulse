@@ -826,7 +826,8 @@ async def fetch_intraday_snapshot(
         try:
             from us_market_pulse.quotes import fetch_day_quotes
 
-            day_map = await fetch_day_quotes([sym])
+            # Manual 分时刷新 must not reuse a stale ~75s CNBC/Yahoo day cache.
+            day_map = await fetch_day_quotes([sym], bypass_cache=bool(force))
             day_q = day_map.get(sym) if isinstance(day_map, dict) else None
         except Exception:  # noqa: BLE001
             day_q = None
