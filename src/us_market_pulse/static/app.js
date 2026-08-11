@@ -4600,6 +4600,28 @@ function pctText(pct) {
   return `${n >= 0 ? "+" : ""}${n.toFixed(2)}%`;
 }
 
+/** Escape plain text and wrap signed % tokens in red-up / green-down spans. */
+function colorizePctHtml(text) {
+  const raw = String(text ?? "");
+  if (!raw) return "";
+  const re = /([+-]?\d+(?:\.\d+)?%)/g;
+  let out = "";
+  let last = 0;
+  let match;
+  while ((match = re.exec(raw)) !== null) {
+    out += escapeHtml(raw.slice(last, match.index));
+    const token = match[1];
+    const n = Number.parseFloat(token);
+    const cls = Number.isFinite(n) ? pctClass(n) : "";
+    out += cls
+      ? `<span class="pulse-pct ${cls}">${escapeHtml(token)}</span>`
+      : escapeHtml(token);
+    last = match.index + token.length;
+  }
+  out += escapeHtml(raw.slice(last));
+  return out;
+}
+
 /** Shared desk stats: 现价/开高低/月涨幅 + 收盘% + 时段实时% (holdings + sectors). */
 function deskStatsBlockHtml(pick, stats) {
   const closePct = pick?.change_pct;
@@ -4844,7 +4866,7 @@ function renderSectorPulse(data) {
         }`,
       );
     }
-    els.sectorPulseBlurb.textContent = bits.join(" · ");
+    els.sectorPulseBlurb.innerHTML = colorizePctHtml(bits.join(" · "));
   }
   if (els.sectorPulseBias) {
     const bias = String(view.bias || pulse.bias || "neutral");
@@ -4923,7 +4945,7 @@ function renderSectorPulse(data) {
           <span class="day ${dayCls}">今日 ${escapeHtml(
             dayPct == null ? "—" : pctText(dayPct),
           )}</span>
-          <span class="note">${escapeHtml(row.note || kind)}</span>
+          <span class="note">${colorizePctHtml(row.note || kind)}</span>
         </span>
         ${pulseSparkHtml(row.spark)}
       </button>
@@ -4974,15 +4996,23 @@ function renderSectorPulse(data) {
           <span class="stance">${escapeHtml(row.stance_zh || "")}</span>
         </span>
         <span class="stock-metrics">
-          <span class="${monthCls}">近月 ${escapeHtml(
-            month == null ? "—" : pctText(month),
-          )}</span>
-          <span class="${dayCls}">今日 ${escapeHtml(
-            day == null ? "—" : pctText(day),
-          )}</span>
+          <span class="${monthCls}">近月 ${
+            month == null
+              ? "—"
+              : `<span class="pulse-pct ${monthCls}">${escapeHtml(
+                  pctText(month),
+                )}</span>`
+          }</span>
+          <span class="${dayCls}">今日 ${
+            day == null
+              ? "—"
+              : `<span class="pulse-pct ${dayCls}">${escapeHtml(
+                  pctText(day),
+                )}</span>`
+          }</span>
         </span>
-        <span class="stock-reason">${escapeHtml(row.reason || "")}</span>
-        <span class="stock-action">${escapeHtml(row.action || "")}</span>
+        <span class="stock-reason">${colorizePctHtml(row.reason || "")}</span>
+        <span class="stock-action">${colorizePctHtml(row.action || "")}</span>
       </button>
     `;
   };
@@ -4991,7 +5021,7 @@ function renderSectorPulse(data) {
     if (!stockStrong.length && !stockWatch.length && !stockWeak.length) {
       return `<div class="sector-pulse-stocks">
         <p class="sector-pulse-rank-label">个股强弱与推荐</p>
-        <p class="empty">${escapeHtml(
+        <p class="empty">${colorizePctHtml(
           stockDesk.summary || "选择板块后显示成分股强弱与推荐",
         )}</p>
       </div>`;
@@ -5002,7 +5032,7 @@ function renderSectorPulse(data) {
           <p class="sector-pulse-rank-label">个股强弱与推荐 · ${escapeHtml(
             stockDesk.sector_label || "当前板块",
           )}</p>
-          <p class="sector-pulse-stocks-summary">${escapeHtml(
+          <p class="sector-pulse-stocks-summary">${colorizePctHtml(
             stockDesk.summary || "",
           )}</p>
         </div>
@@ -5052,17 +5082,17 @@ function renderSectorPulse(data) {
           }" data-pulse-horizon="2w">两周分析</button>
         </div>
         <div class="sector-pulse-analysis">
-          <p class="sector-pulse-summary">${escapeHtml(
+          <p class="sector-pulse-summary">${colorizePctHtml(
             view.summary || pulse.summary || "暂无总判",
           )}</p>
           ${
             detail
-              ? `<p class="sector-pulse-detail">${escapeHtml(detail)}</p>`
+              ? `<p class="sector-pulse-detail">${colorizePctHtml(detail)}</p>`
               : ""
           }
           ${
             playbook
-              ? `<p class="sector-pulse-playbook"><strong>下一步</strong> · ${escapeHtml(
+              ? `<p class="sector-pulse-playbook"><strong>下一步</strong> · ${colorizePctHtml(
                   playbook.replace(/^下一步[：:]?\s*/, ""),
                 )}</p>`
               : ""
@@ -5070,7 +5100,7 @@ function renderSectorPulse(data) {
           ${
             factors.length
               ? `<ul class="sector-pulse-factors">${factors
-                  .map((f) => `<li>${escapeHtml(f)}</li>`)
+                  .map((f) => `<li>${colorizePctHtml(f)}</li>`)
                   .join("")}</ul>`
               : ""
           }

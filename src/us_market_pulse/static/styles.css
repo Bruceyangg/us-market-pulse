@@ -3294,6 +3294,18 @@ html[data-theme="dark"] .us-futures-card {
   min-width: 0;
 }
 
+.sector-pulse-pane .pulse-pct.up {
+  color: var(--tape-up, #d92b2b);
+  font-weight: 750;
+  font-variant-numeric: tabular-nums;
+}
+
+.sector-pulse-pane .pulse-pct.down {
+  color: var(--tape-down, #0f8a6a);
+  font-weight: 750;
+  font-variant-numeric: tabular-nums;
+}
+
 .sector-pulse-summary,
 .sector-pulse-detail {
   margin: 0;
