@@ -2267,8 +2267,33 @@ def _build_pulse_horizon_view(
             }
         )
 
-    leaders = [x for x in ranking if (x.get("change_pct") or 0) > 0][:4]
-    laggards = [x for x in reversed(ranking) if (x.get("change_pct") or 0) < 0][:4]
+    leaders = [x for x in ranking if (x.get("change_pct") or 0) > 0][:5]
+    laggards = [x for x in reversed(ranking) if (x.get("change_pct") or 0) < 0][:5]
+    top_row = ranking[0] if ranking else None
+    bottom_row = ranking[-1] if ranking else None
+    spread = None
+    if (
+        top_row
+        and bottom_row
+        and top_row.get("change_pct") is not None
+        and bottom_row.get("change_pct") is not None
+    ):
+        spread = round(
+            float(top_row["change_pct"]) - float(bottom_row["change_pct"]),
+            2,
+        )
+
+    # Day confirmation vs horizon: how many leaders are still green today.
+    leader_day_ok = sum(
+        1
+        for x in leaders
+        if x.get("day_pct") is not None and float(x["day_pct"]) >= 0
+    )
+    leader_day_soft = sum(
+        1
+        for x in leaders
+        if x.get("day_pct") is not None and float(x["day_pct"]) < 0
+    )
 
     factors: list[str] = []
     if pool:
@@ -2276,22 +2301,43 @@ def _build_pulse_horizon_view(
             f"样本 {len(pool)} 个板块：上涨 {up} / 下跌 {down} / 平盘 {flat}，"
             f"{window_short}均值 {avg:+.2f}%"
         )
+    if spread is not None and top_row and bottom_row:
+        factors.append(
+            f"强弱极差约 {spread:+.1f}%："
+            f"{top_row['label']} {float(top_row['change_pct']):+.1f}% ↔ "
+            f"{bottom_row['label']} {float(bottom_row['change_pct']):+.1f}%"
+        )
     if leaders:
         top = "、".join(
             f"{x['label']} {float(x['change_pct']):+.1f}%"
-            for x in leaders[:3]
+            for x in leaders[:4]
             if x.get("change_pct") is not None
         )
         if top:
-            factors.append(f"{window_short}领涨：{top}")
+            factors.append(f"{window_short}领涨梯队：{top}")
     if laggards:
         weak = "、".join(
             f"{x['label']} {float(x['change_pct']):+.1f}%"
-            for x in laggards[:3]
+            for x in laggards[:4]
             if x.get("change_pct") is not None
         )
         if weak:
-            factors.append(f"{window_short}承压：{weak}")
+            factors.append(f"{window_short}承压梯队：{weak}")
+    if leaders and (leader_day_ok or leader_day_soft):
+        if leader_day_ok >= leader_day_soft + 1:
+            factors.append(
+                f"领涨组今日仍有 {leader_day_ok}/{len(leaders)} 家翻红，"
+                f"{window_short}强势与短线动能较一致"
+            )
+        elif leader_day_soft >= leader_day_ok + 1:
+            factors.append(
+                f"领涨组今日有 {leader_day_soft}/{len(leaders)} 家回撤，"
+                f"更宜等分时止跌再追，避免高位接力"
+            )
+        else:
+            factors.append(
+                "领涨组今日红绿参半，短线确认度一般，仓位宜分批而非一把加满"
+            )
 
     growth_ids = {"semis", "tech", "cloud", "ai", "nasdaq"}
     defense_ids = {"health", "energy", "finance"}
@@ -2305,64 +2351,158 @@ def _build_pulse_horizon_view(
         for r in pool
         if r["id"] in defense_ids
     ]
+    style_bit = ""
     if growth_avg and defense_avg:
         g = sum(growth_avg) / len(growth_avg)
         d = sum(defense_avg) / len(defense_avg)
         if g - d >= 1.2:
-            factors.append(
-                f"成长/科技链相对医疗·金融·能源更强（约 {g - d:+.1f}%），风险偏好偏积极"
+            style_bit = (
+                f"成长/科技链相对医疗·金融·能源更强（约 {g - d:+.1f}%），"
+                "风险偏好偏积极"
             )
+            factors.append(style_bit)
         elif d - g >= 1.2:
+            style_bit = (
+                f"医疗·金融·能源相对成长更强（约 {d - g:+.1f}%），"
+                "资金更偏轮动避险"
+            )
+            factors.append(style_bit)
+        else:
+            style_bit = "成长与非成长差距有限，更像板块内轮动而非单边风格"
+            factors.append(style_bit)
+
+    # Mid-pack read: ranks 3–6 often tell if the move is broad or top-heavy.
+    mid = [
+        x
+        for x in ranking[2:6]
+        if x.get("change_pct") is not None
+    ]
+    if mid:
+        mid_avg = sum(float(x["change_pct"]) for x in mid) / len(mid)
+        if mid_avg >= 1.0:
             factors.append(
-                f"医疗·金融·能源相对成长更强（约 {d - g:+.1f}%），资金更偏轮动避险"
+                f"排名中段（约第 3–6）均值仍有 {mid_avg:+.1f}%，"
+                f"{window_short}涨势并不只靠前两名独撑"
+            )
+        elif mid_avg <= -0.5:
+            factors.append(
+                f"排名中段均值 {mid_avg:+.1f}%，涨势偏「尖」——"
+                "主攻前排龙头，中后排只做观察"
             )
         else:
-            factors.append("成长与非成长差距有限，更像板块内轮动而非单边风格")
+            factors.append(
+                f"排名中段均值 {mid_avg:+.1f}%，分化中性，"
+                "更宜按相对强度排序而不是一把梭哈同一主题"
+            )
 
     active_bit = ""
+    active_rank_bit = ""
+    active_row = None
     if active_label:
         active_row = next((r for r in pool if r.get("active")), None)
         if active_row and _pct(active_row.get(pct_key_eff)) is not None:
             day_bit = ""
             if active_row.get("day_pct") is not None:
                 day_bit = f"（今日 {float(active_row['day_pct']):+.1f}%）"
+            active_pct = float(_pct(active_row.get(pct_key_eff)))
             active_bit = (
                 f"当前聚焦「{active_label}」{window_short} "
-                f"{float(_pct(active_row.get(pct_key_eff))):+.1f}%{day_bit}，"
+                f"{active_pct:+.1f}%{day_bit}，"
             )
+            a_rank = next(
+                (i + 1 for i, x in enumerate(ranking) if x.get("active")),
+                None,
+            )
+            vs_avg = active_pct - avg
+            if a_rank is not None:
+                active_rank_bit = (
+                    f"在样本中排第 {a_rank}/{len(ranking)}，"
+                    f"相对板块均值 {vs_avg:+.1f}%。"
+                )
+                factors.append(
+                    f"聚焦「{active_label}」：{window_short}排名第 {a_rank}，"
+                    f"相对均值 {vs_avg:+.1f}%"
+                    + (
+                        f"，今日 {float(active_row['day_pct']):+.1f}%"
+                        if active_row.get("day_pct") is not None
+                        else ""
+                    )
+                )
         else:
             active_bit = f"当前聚焦「{active_label}」，"
+
+    leader_names = "、".join(x["label"] for x in leaders[:3]) or "少数热点"
+    laggard_names = "、".join(x["label"] for x in laggards[:3]) or "多数板块"
+    spread_zh = (
+        f"首位与末位极差约 {spread:+.1f}%，"
+        if spread is not None
+        else ""
+    )
 
     if bias == "bullish":
         summary = (
             f"{active_bit}{window_short}视角下板块整体偏强（均值 {avg:+.2f}%），"
-            f"领涨集中在"
-            f"{'、'.join(x['label'] for x in leaders[:2]) or '少数热点'}。"
-            "宜沿强势板块找相对强度确认，避免在落后板块盲目抄底。"
+            f"上涨 {up} / 下跌 {down}，{spread_zh}"
+            f"领涨集中在 {leader_names}。"
+            f"{active_rank_bit}"
+            "宜沿强势板块找相对强度确认，避免在落后板块盲目抄底；"
+            "若领涨组今日同步回撤，优先等分时结构稳住再加仓。"
+        )
+        detail = (
+            f"结构上看，{style_bit or '风格分化尚不极端'}。"
+            f"前排 {leader_names} 决定进攻节奏，"
+            f"后排 {laggard_names} 更适合做风险对照而非抄底主线。"
+            f"操作上把仓位拆成「核心跟踪（领涨确认）+ 卫星观察（轮动候选）」："
+            f"核心仓只在回撤未破近端低点时加，卫星仓等催化或相对强度翻红再议。"
         )
         playbook = (
-            "下一步：优先跟踪领涨板块的回撤买点与龙头相对强度；"
-            "用分时/日线确认未破近端结构后再加仓，落后板块仅作观察。"
+            "下一步：① 优先跟踪领涨板块回撤买点与龙头相对强度；"
+            "② 用分时/日线确认未破近端结构后再加仓；"
+            "③ 落后板块仅观察放量止跌，不抢第一波反弹；"
+            "④ 若极差继续扩大而中段跟不上，减「跟风满仓」、保「龙头确认」。"
         )
     elif bias == "bearish":
         summary = (
             f"{active_bit}{window_short}视角下板块整体偏弱（均值 {avg:+.2f}%），"
-            f"压力主要来自"
-            f"{'、'.join(x['label'] for x in laggards[:2]) or '多数板块'}。"
-            "宜降低追高意愿，先看避险与高股息是否继续吸金。"
+            f"上涨 {up} / 下跌 {down}，{spread_zh}"
+            f"压力主要来自 {laggard_names}。"
+            f"{active_rank_bit}"
+            "宜降低追高意愿，先看防御/高股息与相对抗跌板块是否继续吸金；"
+            "反弹优先减风险，而不是立刻翻多。"
+        )
+        detail = (
+            f"结构上看，{style_bit or '空头扩散仍需用广度验证'}。"
+            f"承压侧 {laggard_names} 反映资金在撤离或观望，"
+            f"即便偶有反弹，也先用成交与能否站上近端均线过滤假突破。"
+            f"仓位上偏向「防守优先」：保留相对强势观察仓，"
+            f"对弱板块只做轻仓试错或观望，等待跌势出现放量止跌信号。"
         )
         playbook = (
-            "下一步：控制成长股仓位弹性，关注防御/能源等相对强势是否延续；"
-            "反弹先减风险，等跌势板块出现放量止跌再议布局。"
+            "下一步：① 控制成长股仓位弹性，优先观察防御/能源等相对强势是否延续；"
+            "② 反弹先减风险，不把反抽当趋势反转；"
+            "③ 等跌势板块放量止跌、且相对强度改善后再议布局；"
+            "④ 情报若持续偏空，仓位上限再降一档。"
         )
     else:
         summary = (
-            f"{active_bit}{window_short}更像板块轮动而非单边趋势（均值 {avg:+.2f}%）。"
+            f"{active_bit}{window_short}更像板块轮动而非单边趋势（均值 {avg:+.2f}%），"
+            f"上涨 {up} / 下跌 {down}，{spread_zh}"
+            f"强者在 {leader_names}，弱者在 {laggard_names}。"
+            f"{active_rank_bit}"
             "强弱切换快，胜负手在相对强度与情报催化，而不是指数方向本身。"
         )
+        detail = (
+            f"结构上看，{style_bit or '风格尚未一边倒'}。"
+            f"这种环境下「选错板块」的成本高于「踏空半拍」——"
+            f"围绕领涨梯队做确认式跟踪，对承压梯队只做反弹观察。"
+            f"建议用右侧榜单做排序锚：排名上升且今日同步转强的优先；"
+            f"排名靠后但今日大涨的，先当反抽，等连续两日相对强度改善再升格。"
+        )
         playbook = (
-            "下一步：围绕领涨板块做「强者恒强」跟踪，承压板块只做反弹观察；"
-            "结合情报主题验证催化是否兑现，再决定加仓或换仓。"
+            "下一步：① 围绕领涨板块做「强者恒强」跟踪，承压板块只做反弹观察；"
+            "② 结合情报主题验证催化是否兑现，再决定加仓或换仓；"
+            "③ 仓位拆开：主仓跟相对强度，试错仓控制在总仓一小部分；"
+            "④ 若领涨组今日集体回撤而中段跟不上，先降杠杆观望。"
         )
 
     return {
@@ -2372,8 +2512,9 @@ def _build_pulse_horizon_view(
         "bias": bias,
         "bias_zh": bias_zh,
         "summary": summary,
+        "detail": detail,
         "playbook": playbook,
-        "factors": factors[:6],
+        "factors": factors[:10],
         "leaders": leaders,
         "laggards": laggards,
         "ranking": ranking,
@@ -2383,6 +2524,7 @@ def _build_pulse_horizon_view(
             "flat": flat,
             "total": len(pool),
             "avg_pct": avg,
+            "spread_pct": spread,
         },
     }
 
@@ -2677,7 +2819,7 @@ def _build_sector_pulse(
                 fac.append("舆情偏空但盘面未必同步——留意预期差与假突破")
             elif bull_n > bear_n + 1 and view.get("bias") != "bullish":
                 fac.append("舆情偏暖但板块尚未全面跟——更宜等确认再加仓")
-            view["factors"] = fac[:6]
+            view["factors"] = fac[:10]
 
     stock_desk = _build_pulse_stock_desk(
         picks,
@@ -2706,6 +2848,7 @@ def _build_sector_pulse(
         "bias": primary.get("bias"),
         "bias_zh": primary.get("bias_zh"),
         "summary": primary.get("summary"),
+        "detail": primary.get("detail"),
         "playbook": primary.get("playbook"),
         "factors": primary.get("factors") or [],
         "leaders": primary.get("leaders") or [],

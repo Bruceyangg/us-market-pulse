@@ -4933,9 +4933,10 @@ function renderSectorPulse(data) {
       rank: r.rank || i + 1,
     }));
   }
-  const factors = (view.factors || pulse.factors || []).slice(0, 6);
+  const factors = (view.factors || pulse.factors || []).slice(0, 10);
   const intel = (pulse.intel || []).slice(0, 4);
   const playbook = String(view.playbook || pulse.playbook || "").trim();
+  const detail = String(view.detail || pulse.detail || "").trim();
   const stockDesk = pulse.stock_desk || {};
   const stockStrong = (stockDesk.strong || []).slice(0, 4);
   const stockWatch = (stockDesk.watch || []).slice(0, 3);
@@ -5044,23 +5045,30 @@ function renderSectorPulse(data) {
             hz1 ? "" : "is-active"
           }" data-pulse-horizon="2w">两周分析</button>
         </div>
-        <p class="sector-pulse-summary">${escapeHtml(
-          view.summary || pulse.summary || "暂无总判",
-        )}</p>
-        ${
-          playbook
-            ? `<p class="sector-pulse-playbook"><strong>下一步</strong> · ${escapeHtml(
-                playbook.replace(/^下一步[：:]?\s*/, ""),
-              )}</p>`
-            : ""
-        }
-        ${
-          factors.length
-            ? `<ul class="sector-pulse-factors">${factors
-                .map((f) => `<li>${escapeHtml(f)}</li>`)
-                .join("")}</ul>`
-            : ""
-        }
+        <div class="sector-pulse-analysis">
+          <p class="sector-pulse-summary">${escapeHtml(
+            view.summary || pulse.summary || "暂无总判",
+          )}</p>
+          ${
+            detail
+              ? `<p class="sector-pulse-detail">${escapeHtml(detail)}</p>`
+              : ""
+          }
+          ${
+            playbook
+              ? `<p class="sector-pulse-playbook"><strong>下一步</strong> · ${escapeHtml(
+                  playbook.replace(/^下一步[：:]?\s*/, ""),
+                )}</p>`
+              : ""
+          }
+          ${
+            factors.length
+              ? `<ul class="sector-pulse-factors">${factors
+                  .map((f) => `<li>${escapeHtml(f)}</li>`)
+                  .join("")}</ul>`
+              : ""
+          }
+        </div>
         ${stockBlock()}
         <div class="sector-pulse-intel">
           <p class="sector-pulse-rank-label">情报交叉</p>
