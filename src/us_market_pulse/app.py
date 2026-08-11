@@ -49,7 +49,12 @@ from us_market_pulse.sectors import (
     fetch_symbol_desk_chart,
 )
 from us_market_pulse.us_markets import build_us_markets_desk
-from us_market_pulse.symbol_lookup import resolve_holding_query, suggest_holdings
+from us_market_pulse.symbol_lookup import (
+    resolve_holding_query,
+    resolve_market_query,
+    suggest_holdings,
+    suggest_market_holdings,
+)
 from us_market_pulse.topics import build_war_desk
 from us_market_pulse.portfolio import (
     MAX_HOLDINGS,
@@ -532,13 +537,25 @@ async def api_portfolio_lookup(
     q: str = Query(default=""),
     limit: int = Query(default=8, ge=1, le=20),
 ) -> dict[str, Any]:
+    """Resolve tickers / names against local catalog + Yahoo US market search."""
     query = (q or "").strip()
-    resolved = resolve_holding_query(query) if query else None
+    if not query:
+        return {"ok": True, "q": "", "resolved": None, "suggestions": []}
+    resolved = await resolve_market_query(query)
+    suggestions = await suggest_market_holdings(query, limit=limit)
+    # Ensure resolved is first suggestion when present.
+    if resolved and resolved.get("symbol"):
+        sym = str(resolved["symbol"]).upper()
+        suggestions = [resolved] + [
+            s for s in suggestions if str(s.get("symbol") or "").upper() != sym
+        ]
+        suggestions = suggestions[:limit]
     return {
         "ok": True,
         "q": query,
         "resolved": resolved,
-        "suggestions": suggest_holdings(query, limit=limit) if query else [],
+        "suggestions": suggestions,
+        "source": (resolved or {}).get("source") or "none",
     }
 
 

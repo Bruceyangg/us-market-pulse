@@ -1725,8 +1725,8 @@ async def fetch_symbol_desk_chart(
 ) -> dict[str, Any]:
     """Standalone multi-TF + 分时 bundle for search/guest desk upgrades.
 
-    Avoids rebuilding the whole sector board when only one out-of-universe
-    symbol needs charts.
+    Yahoo + Nasdaq path (same as sector selected upgrade). Works for any
+    US-listed ticker, not only curated sector constituents.
     """
     sym = (symbol or "").strip().upper()
     if not sym:
@@ -1764,48 +1764,83 @@ async def fetch_symbol_desk_chart(
             "errors": [f"{sym}: {exc.__class__.__name__}"],
         }
 
-    if not bundle or not (
-        _pick_has_chart(bundle) or _pick_has_intraday(bundle)
-    ):
+    # Day tape from CNBC/Yahoo even when multi-TF chart is thin (Yahoo 429).
+    day_q: dict[str, Any] = {}
+    try:
+        day_map = await asyncio.wait_for(
+            fetch_day_quotes([sym], overnight_priority=[sym], bypass_cache=force),
+            timeout=4.0,
+        )
+        day_q = day_map.get(sym) or {}
+    except Exception:  # noqa: BLE001
+        day_q = {}
+
+    has_chart = bool(
+        bundle and (_pick_has_chart(bundle) or _pick_has_intraday(bundle))
+    )
+    has_quote = bool(
+        isinstance(day_q.get("price"), (int, float))
+        or isinstance(day_q.get("change_pct"), (int, float))
+    )
+    if not has_chart and not has_quote:
         return {
             "ok": False,
             "symbol": sym,
             "pick": bundle,
-            "errors": list(errs or []) + [f"{sym}: no chart data"],
+            "errors": list(errs or [])
+            + [f"{sym}: Yahoo/Nasdaq 未找到可用行情（请确认代码）"],
         }
 
+    base = dict(bundle or {"symbol": sym, "series": {}, "points": []})
+    if day_q:
+        apply_list_quote_fields(base, day_q)
+        if day_q.get("price") is not None:
+            base["price"] = day_q.get("price")
+        if day_q.get("change") is not None:
+            base["change"] = day_q.get("change")
+        if day_q.get("change_pct") is not None:
+            base["change_pct"] = day_q.get("change_pct")
+
     vc = _value_chain_for(sym)
-    wave = _momentum_fields(bundle)
+    wave = _momentum_fields(base)
     name = (
         (vc.get("name") if isinstance(vc, dict) else None)
-        or bundle.get("label")
-        or bundle.get("name")
+        or base.get("label")
+        or base.get("name")
         or sym
     )
     pick = {
-        **bundle,
+        **base,
         "symbol": sym,
         "name": name,
         "label": name,
-        "month_change_pct": wave.get("month_change_pct"),
+        "month_change_pct": wave.get("month_change_pct")
+        if wave.get("month_change_pct") is not None
+        else base.get("month_change_pct"),
         "quarter_change_pct": wave.get("quarter_change_pct"),
         "momentum": wave.get("momentum"),
         "is_wave": wave.get("is_wave"),
         "value_chain": vc,
-        "lite": False,
+        "lite": not has_chart,
         "chart_attempted": True,
         "is_search": True,
     }
     try:
-        from us_market_pulse.symbol_lookup import resolve_holding_query
+        from us_market_pulse.symbol_lookup import resolve_market_query
 
-        hit = resolve_holding_query(sym)
-        if hit and hit.get("name"):
+        hit = await resolve_market_query(sym)
+        if hit and hit.get("name") and hit.get("name") != sym:
             pick["name"] = hit["name"]
             pick["label"] = hit["name"]
     except Exception:  # noqa: BLE001
         pass
-    return {"ok": True, "symbol": sym, "pick": pick, "errors": list(errs or [])}
+    return {
+        "ok": True,
+        "symbol": sym,
+        "pick": pick,
+        "errors": list(errs or []),
+        "has_chart": has_chart,
+    }
 
 
 def _session_id_et(ts: int) -> str:

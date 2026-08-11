@@ -7793,13 +7793,18 @@ async function enterSectorSearchMode(hitOrSymbol) {
   renderValueChain(state.sectors?.value_chain || null);
   els.sectorsDesk?.scrollIntoView({ behavior: "smooth", block: "start" });
 
-  // Chart first (dedicated API), then desk for news / chain / earnings.
+  // Chart first (Yahoo/Nasdaq dedicated API), then desk for news / chain.
   void upgradeSectorSymbolChart(symbol, { force: true }).then((ok) => {
     if (!state.sectorSearchMode || state.sectorSymbol !== symbol) return;
     syncSearchHitsFromDesk(state.sectors);
     renderSectorSearchList();
-    if (
-      ok &&
+    if (!ok && !deskChartReady(state.sectors?.selected_pick)) {
+      if (els.sectorStockSearchHint) {
+        els.sectorStockSearchHint.textContent = `未从 Yahoo/Nasdaq 取到 ${symbol} 行情 · 请确认美股代码（可点返回板块）`;
+      }
+      setStatus(`${symbol} 暂无美股行情`);
+      markSectorChartAttempted(symbol);
+    } else if (
       !pickHasIntraday(state.sectors?.selected_pick) &&
       pickHasChart(state.sectors?.selected_pick) &&
       state.sectorTf === "intraday"
@@ -7841,11 +7846,14 @@ async function submitSectorStockSearch() {
     openSectorStockFromSearch(sectorStockSuggestRows[sectorStockSuggestIdx]);
     return;
   }
-  // Prefer global lookup so non-sector names/tickers resolve correctly.
+  if (els.sectorStockSearchHint) {
+    els.sectorStockSearchHint.textContent = "正在 Yahoo 检索全美股票…";
+  }
+  // Yahoo US market lookup (plus local catalog) — not limited to sector boards.
   try {
     const res = await fetch(
       `/api/portfolio/lookup?q=${encodeURIComponent(q)}&limit=8`,
-      { signal: AbortSignal.timeout(8000) },
+      { signal: AbortSignal.timeout(10000) },
     );
     if (res.ok) {
       const data = await res.json();
@@ -7856,7 +7864,8 @@ async function submitSectorStockSearch() {
           symbol: hit.symbol,
           name: hit.name || hit.symbol,
           sectorId,
-          local: Boolean(sectorId),
+          local: Boolean(sectorId) || hit.source === "local",
+          source: hit.source || data.source || "",
         });
         return;
       }
@@ -7870,20 +7879,22 @@ async function submitSectorStockSearch() {
     return;
   }
   const maybeSym = q.toUpperCase().replace(/[^A-Z0-9.-]/g, "");
-  if (maybeSym && maybeSym.length <= 8) {
+  // Only accept short ticker-shaped fallbacks (avoid "STARBUCKS" as a symbol).
+  if (maybeSym && maybeSym.length <= 5) {
     openSectorStockFromSearch({
       symbol: maybeSym,
       name: maybeSym,
       sectorId: findSectorForSymbol(maybeSym),
       local: Boolean(findSectorForSymbol(maybeSym)),
+      source: "ticker",
     });
     return;
   }
   if (els.sectorStockSearchHint) {
     els.sectorStockSearchHint.textContent =
-      "未找到，试试代码或中文名（如 NVDA、英伟达、TSLA）";
+      "Yahoo 未匹配到美股 · 试试代码或英文名（如 SBUX、Starbucks、KO）";
   }
-  setStatus("未找到匹配个股");
+  setStatus("未找到匹配美股");
 }
 
 els.sectorStockSearchForm?.addEventListener("submit", (event) => {
