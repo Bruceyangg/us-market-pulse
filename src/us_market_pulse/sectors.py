@@ -2852,7 +2852,7 @@ def _build_pulse_stock_desk(
                 "stance": stance,
                 "stance_zh": stance_zh,
                 "industries": industries,
-                "reason": " · ".join(reasons[:3]) or "数据不足",
+                "reason": " · ".join(reasons[:2]) or "数据不足",
                 "action": action,
                 "intel_sentiment": (
                     str(hit.get("sentiment") or "") if hit else ""
@@ -2861,13 +2861,15 @@ def _build_pulse_stock_desk(
         )
 
     scored.sort(key=lambda r: float(r.get("score") or -999), reverse=True)
-    # Rank-split so 偏多 / 偏空 both get a fuller list; columns scroll in UI.
+    # Rough thirds: 偏多 / 偏空 / 观察·谨慎 — columns scroll in UI.
     n = len(scored)
-    strong_n = min(10, max(4, (n * 2 + 2) // 5))  # ~40%
-    bearish_n = min(10, max(3, (n * 2 + 2) // 5))  # ~40%
-    if strong_n + bearish_n > n:
-        bearish_n = max(2, n - strong_n) if n >= 4 else max(1, n - strong_n)
-    watch_n, weak_n = 6, 4
+    third = max(3, (n + 2) // 3)
+    strong_n = min(8, third)
+    bearish_n = min(8, third)
+    # Leave a real middle band for 观察/谨慎 (watch + weak).
+    watch_n, weak_n = 8, 5
+    if strong_n + bearish_n > max(0, n - 3):
+        bearish_n = max(2, n - strong_n - 3) if n >= 6 else max(1, n - strong_n)
 
     def _as_strong(row: dict[str, Any]) -> dict[str, Any]:
         if row.get("stance") == "accumulate":

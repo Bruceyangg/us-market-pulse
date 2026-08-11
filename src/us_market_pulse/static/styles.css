@@ -3683,25 +3683,14 @@ html[data-theme="dark"] .us-futures-card {
 
 .sector-pulse-stock-list {
   display: grid;
-  gap: 0.3rem;
-  max-height: min(26rem, 52vh);
+  gap: 0.4rem;
+  max-height: min(32rem, 58vh);
   overflow-x: hidden;
   overflow-y: auto;
   overscroll-behavior: contain;
-  padding: 0.1rem 0.2rem 0.25rem 0;
+  padding: 0.1rem 0.25rem 0.35rem 0;
   scrollbar-gutter: stable;
   -webkit-overflow-scrolling: touch;
-  mask-image: linear-gradient(
-    to bottom,
-    #000 0%,
-    #000 calc(100% - 1.1rem),
-    transparent 100%
-  );
-}
-
-.sector-pulse-stock-list:hover,
-.sector-pulse-stock-list:focus-within {
-  mask-image: none;
 }
 
 .sector-pulse-stock-list::-webkit-scrollbar {
@@ -3719,10 +3708,11 @@ html[data-theme="dark"] .us-futures-card {
 
 .sector-pulse-stock {
   display: grid;
-  gap: 0.2rem;
+  gap: 0.28rem;
   width: 100%;
+  min-width: 0;
   margin: 0;
-  padding: 0.48rem 0.58rem;
+  padding: 0.62rem 0.68rem 0.7rem;
   border: 1px solid color-mix(in srgb, var(--line) 80%, transparent);
   border-radius: 10px;
   background: color-mix(in srgb, var(--panel) 72%, transparent);
@@ -3731,7 +3721,10 @@ html[data-theme="dark"] .us-futures-card {
   text-align: left;
   cursor: pointer;
   transition: border-color 0.15s ease, background 0.15s ease;
-  min-height: 5.1rem;
+  min-height: 7.6rem;
+  overflow: hidden;
+  box-sizing: border-box;
+  align-content: start;
 }
 
 .sector-pulse-stock:hover {
@@ -3829,7 +3822,9 @@ html[data-theme="dark"] .us-futures-card {
 
 .sector-pulse-stock .stock-metrics {
   display: flex;
+  flex-wrap: wrap;
   gap: 0.55rem;
+  min-width: 0;
   font-size: 0.72rem;
   font-weight: 650;
   font-variant-numeric: tabular-nums;
@@ -3845,9 +3840,18 @@ html[data-theme="dark"] .us-futures-card {
 
 .sector-pulse-stock .stock-reason,
 .sector-pulse-stock .stock-action {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
+  overflow: hidden;
+  min-width: 0;
+  max-width: 100%;
   font-size: 0.68rem;
-  line-height: 1.4;
+  line-height: 1.45;
   color: var(--ink-soft);
+  overflow-wrap: anywhere;
+  word-break: break-word;
 }
 
 .sector-pulse-stock .stock-action {

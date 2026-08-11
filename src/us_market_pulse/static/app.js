@@ -5000,10 +5000,10 @@ function renderSectorPulse(data) {
   const playbook = String(view.playbook || pulse.playbook || "").trim();
   const detail = String(view.detail || pulse.detail || "").trim();
   const stockDesk = pulse.stock_desk || {};
-  const stockStrong = (stockDesk.strong || []).slice(0, 10);
-  const stockBearish = (stockDesk.bearish || []).slice(0, 10);
-  const stockWatch = (stockDesk.watch || []).slice(0, 6);
-  const stockWeak = (stockDesk.weak || []).slice(0, 4);
+  const stockStrong = (stockDesk.strong || []).slice(0, 8);
+  const stockBearish = (stockDesk.bearish || []).slice(0, 8);
+  const stockWatch = (stockDesk.watch || []).slice(0, 8);
+  const stockWeak = (stockDesk.weak || []).slice(0, 5);
   const pulseHzButtons = [
     ["1w", "一周"],
     ["2w", "两周"],
@@ -5039,6 +5039,13 @@ function renderSectorPulse(data) {
           )
           .join("")}</span>`
       : "";
+    const clipText = (text, max = 52) => {
+      const s = String(text || "").trim();
+      if (s.length <= max) return s;
+      return `${s.slice(0, max - 1)}…`;
+    };
+    const reason = clipText(row.reason || "", 56);
+    const action = clipText(row.action || "", 48);
     return `
       <button type="button" class="sector-pulse-stock ${tone}" data-pulse-symbol="${escapeHtml(
         row.symbol || "",
@@ -5067,8 +5074,8 @@ function renderSectorPulse(data) {
                 )}</span>`
           }</span>
         </span>
-        <span class="stock-reason">${colorizePctHtml(row.reason || "")}</span>
-        <span class="stock-action">${colorizePctHtml(row.action || "")}</span>
+        <span class="stock-reason">${colorizePctHtml(reason)}</span>
+        <span class="stock-action">${colorizePctHtml(action)}</span>
       </button>
     `;
   };
