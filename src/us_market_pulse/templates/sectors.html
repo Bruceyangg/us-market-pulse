@@ -104,6 +104,38 @@
           <div class="sector-chip skeleton"></div>
         </div>
 
+        <section class="sector-stock-search" id="sector-stock-search" aria-label="搜索个股">
+          <form class="sector-stock-search-form" id="sector-stock-search-form" autocomplete="off">
+            <label class="sr-only" for="sector-stock-q">搜索个股代码或名称</label>
+            <div class="sector-stock-search-field">
+              <input
+                type="search"
+                id="sector-stock-q"
+                name="q"
+                placeholder="搜索个股代码 / 名称，如 NVDA、英伟达"
+                enterkeyhint="search"
+                autocomplete="off"
+                spellcheck="false"
+                aria-autocomplete="list"
+                aria-controls="sector-stock-suggest"
+                aria-expanded="false"
+              />
+              <div
+                class="sector-stock-suggest"
+                id="sector-stock-suggest"
+                role="listbox"
+                hidden
+              ></div>
+            </div>
+            <button type="submit" class="btn btn-compact" id="sector-stock-search-btn">
+              打开
+            </button>
+          </form>
+          <p class="sector-stock-search-hint" id="sector-stock-search-hint">
+            搜索后联动下方成分列表 · 走势图 · 产业链与情报
+          </p>
+        </section>
+
         <section class="sectors-desk" aria-label="板块工作台">
           <aside class="sectors-list-pane" id="sector-picks" aria-label="板块成分">
             <div class="sectors-pane-head">

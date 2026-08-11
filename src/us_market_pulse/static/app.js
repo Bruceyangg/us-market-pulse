@@ -151,6 +151,12 @@ const els = {
   usFuturesTfFilters: document.getElementById("us-futures-tf-filters"),
   usFuturesGrid: document.getElementById("us-futures-grid"),
   sectorEtfGrid: document.getElementById("sector-etf-grid"),
+  sectorStockSearch: document.getElementById("sector-stock-search"),
+  sectorStockSearchForm: document.getElementById("sector-stock-search-form"),
+  sectorStockQ: document.getElementById("sector-stock-q"),
+  sectorStockSuggest: document.getElementById("sector-stock-suggest"),
+  sectorStockSearchHint: document.getElementById("sector-stock-search-hint"),
+  sectorStockSearchBtn: document.getElementById("sector-stock-search-btn"),
   sectorPicksTitle: document.getElementById("sector-picks-title"),
   sectorPicksBlurb: document.getElementById("sector-picks-blurb"),
   sectorPickList: document.getElementById("sector-pick-list"),
@@ -5987,23 +5993,39 @@ function paintSectorSwitchPlaceholder(sectorId) {
   }
 }
 
-function openSectorDesk(id, { scroll = true } = {}) {
+function openSectorDesk(id, { scroll = true, symbol = "" } = {}) {
   const sectorId = (id || "").trim().toLowerCase();
   if (!sectorId) return;
+  const wantSym = (symbol || "").trim().toUpperCase();
   const same = sectorId === state.sectorId;
   state.sectorId = sectorId;
   if (!same) {
-    state.sectorSymbol = "";
+    state.sectorSymbol = wantSym;
     state.chartUpgradeSym = "";
     state.symbolNewsRetrySym = "";
     // Keep any in-flight request from painting the previous sector.
     state.sectorsLoadPending = {
       force: false,
       sectorId,
-      sectorSymbol: "",
+      sectorSymbol: wantSym,
     };
+  } else if (wantSym) {
+    state.sectorSymbol = wantSym;
   }
   syncSectorQuery();
+
+  const finishScroll = () => {
+    if (scroll && els.sectorsDesk) {
+      els.sectorsDesk.scrollIntoView({ behavior: "smooth", block: "start" });
+    }
+  };
+
+  // Same desk + explicit symbol: paint selection without a full sector reload.
+  if (same && wantSym && state.sectors?.picks?.length) {
+    selectSectorSymbol(wantSym);
+    finishScroll();
+    return;
+  }
 
   // Optimistic: cache first; otherwise paint ticker shells from ETF card metadata
   // so the left list never keeps showing the previous module.
@@ -6023,11 +6045,13 @@ function openSectorDesk(id, { scroll = true } = {}) {
     sectorDeskQuoteCoverage(state.sectors) >= 0.4
       ? Promise.resolve(state.sectors)
       : loadSectorDesk({ force: false });
-  Promise.resolve(load).finally(() => {
-    if (scroll && els.sectorsDesk) {
-      els.sectorsDesk.scrollIntoView({ behavior: "smooth", block: "start" });
-    }
-  });
+  Promise.resolve(load)
+    .then(() => {
+      if (wantSym && state.sectorId === sectorId) {
+        selectSectorSymbol(wantSym);
+      }
+    })
+    .finally(finishScroll);
 }
 
 function prefetchSectorDesk(id) {
@@ -6879,6 +6903,384 @@ function scheduleSectorsDeskHeightSync() {
     requestAnimationFrame(syncSectorsDeskHeights);
   });
 }
+
+/** Prefer first listed home when a ticker appears in multiple desks. */
+const SECTOR_HOME_BY_SYMBOL = (() => {
+  const home = {};
+  const boards = [
+    ["energy", ["XOM", "CVX", "COP", "SLB", "EOG", "OXY", "MPC", "VLO", "WMB", "OKE", "SHW"]],
+    ["cloud", ["MSFT", "AMZN", "GOOGL", "ORCL", "SNOW", "DDOG", "NET", "CRWD", "PANW", "NOW", "MDB", "ZS"]],
+    ["semis", ["NVDA", "TSM", "ASML", "AVGO", "AMAT", "MU", "LRCX", "KLAC", "QCOM", "AMD", "ARM"]],
+    ["ai", ["NVDA", "AMD", "AVGO", "PLTR", "SMCI", "ARM", "META", "MSFT", "GOOGL", "SNOW", "ISRG"]],
+    ["tech", ["MSFT", "AAPL", "NVDA", "AVGO", "CRM", "ADBE", "ORCL", "NOW", "PANW", "IBM"]],
+    ["nasdaq", ["NVDA", "MSFT", "META", "AMZN", "GOOGL", "AVGO", "COST", "NFLX", "TSLA", "AMD"]],
+    ["finance", ["JPM", "BAC", "GS", "MS", "V", "MA", "SCHW", "C", "AXP", "BLK"]],
+    ["health", ["LLY", "UNH", "JNJ", "ABBV", "MRK", "AMGN", "ISRG", "SYK", "PFE", "VRTX"]],
+  ];
+  for (const [id, syms] of boards) {
+    for (const sym of syms) {
+      if (!home[sym]) home[sym] = id;
+    }
+  }
+  return home;
+})();
+
+function sectorLabelById(id) {
+  const sid = (id || "").trim().toLowerCase();
+  if (!sid) return "";
+  const row = (state.sectors?.sectors || []).find((s) => s.id === sid);
+  return row?.label || sid;
+}
+
+function findSectorForSymbol(symbol) {
+  const sym = (symbol || "").trim().toUpperCase();
+  if (!sym) return "";
+  const curId = (state.sectorId || "").trim().toLowerCase();
+  if (
+    curId &&
+    (state.sectors?.picks || []).some((p) => String(p.symbol || "").toUpperCase() === sym)
+  ) {
+    return curId;
+  }
+  for (const [id, wrap] of Object.entries(state.sectorCache || {})) {
+    const picks = wrap?.data?.picks || [];
+    if (picks.some((p) => String(p.symbol || "").toUpperCase() === sym)) {
+      return String(id || "").toLowerCase();
+    }
+  }
+  for (const row of state.sectors?.sectors || []) {
+    const bag = [
+      ...(row.universe || []),
+      ...(row.picks || []),
+      ...(row.pick_preview || []),
+    ];
+    const hit = bag.some((item) => {
+      if (typeof item === "string") return item.toUpperCase() === sym;
+      return String(item?.symbol || "").toUpperCase() === sym;
+    });
+    if (hit) return String(row.id || "").toLowerCase();
+  }
+  return SECTOR_HOME_BY_SYMBOL[sym] || curId || "";
+}
+
+function collectLocalSectorSearchHits(query) {
+  const q = (query || "").trim();
+  if (!q) return [];
+  const qUpper = q.toUpperCase();
+  const qLower = q.toLowerCase();
+  const seen = new Set();
+  const hits = [];
+
+  const push = (row) => {
+    const symbol = String(row.symbol || "").toUpperCase();
+    if (!symbol || seen.has(symbol)) return;
+    seen.add(symbol);
+    hits.push(row);
+  };
+
+  const matchPick = (pick, sectorId, sectorLabel) => {
+    const symbol = String(pick?.symbol || "").toUpperCase();
+    const name = String(pick?.name || "");
+    if (!symbol) return;
+    const nameLower = name.toLowerCase();
+    const ok =
+      symbol.startsWith(qUpper) ||
+      symbol.includes(qUpper) ||
+      (name && (nameLower.includes(qLower) || name.includes(q)));
+    if (!ok) return;
+    const score = symbol === qUpper ? 0 : symbol.startsWith(qUpper) ? 1 : 2;
+    push({
+      symbol,
+      name: name || symbol,
+      sectorId: (sectorId || pick.sector_id || "").toLowerCase(),
+      sectorLabel: sectorLabel || pick.sector_label || "",
+      local: true,
+      score,
+    });
+  };
+
+  for (const pick of state.sectors?.picks || []) {
+    matchPick(
+      pick,
+      state.sectorId || state.sectors?.active_sector_id,
+      state.sectors?.active_sector?.label || sectorLabelById(state.sectorId),
+    );
+  }
+  for (const [id, wrap] of Object.entries(state.sectorCache || {})) {
+    for (const pick of wrap?.data?.picks || []) {
+      matchPick(pick, id, sectorLabelById(id));
+    }
+  }
+  for (const row of state.sectors?.sectors || []) {
+    const label = row.label || row.id || "";
+    for (const item of row.pick_preview || row.universe || row.picks || []) {
+      if (typeof item === "string") {
+        matchPick({ symbol: item, name: item }, row.id, label);
+      } else if (item && typeof item === "object") {
+        matchPick(item, row.id, label);
+      }
+    }
+  }
+
+  hits.sort((a, b) => a.score - b.score || a.symbol.localeCompare(b.symbol));
+  return hits.slice(0, 8);
+}
+
+let sectorStockSuggestRows = [];
+let sectorStockSuggestIdx = -1;
+let sectorStockLookupTimer = 0;
+let sectorStockLookupSeq = 0;
+
+function hideSectorStockSuggest() {
+  if (!els.sectorStockSuggest) return;
+  els.sectorStockSuggest.hidden = true;
+  els.sectorStockSuggest.innerHTML = "";
+  sectorStockSuggestRows = [];
+  sectorStockSuggestIdx = -1;
+  if (els.sectorStockQ) els.sectorStockQ.setAttribute("aria-expanded", "false");
+}
+
+function paintSectorStockSuggest(rows, { keepIndex = false } = {}) {
+  if (!els.sectorStockSuggest) return;
+  sectorStockSuggestRows = rows || [];
+  if (!sectorStockSuggestRows.length) {
+    hideSectorStockSuggest();
+    return;
+  }
+  if (
+    !keepIndex ||
+    sectorStockSuggestIdx < 0 ||
+    sectorStockSuggestIdx >= sectorStockSuggestRows.length
+  ) {
+    sectorStockSuggestIdx = 0;
+  }
+  els.sectorStockSuggest.hidden = false;
+  if (els.sectorStockQ) els.sectorStockQ.setAttribute("aria-expanded", "true");
+  els.sectorStockSuggest.innerHTML = sectorStockSuggestRows
+    .map((row, i) => {
+      const meta = row.local
+        ? row.sectorLabel || "板块内"
+        : row.sectorLabel || "全市场";
+      return `
+        <button type="button" class="sector-stock-suggest-item ${
+          i === sectorStockSuggestIdx ? "is-active" : ""
+        }" role="option" data-suggest-idx="${i}" aria-selected="${
+          i === sectorStockSuggestIdx ? "true" : "false"
+        }">
+          <span class="sym">${escapeHtml(row.symbol || "")}</span>
+          <span class="meta ${row.local ? "is-local" : ""}">${escapeHtml(meta)}</span>
+          <span class="name">${escapeHtml(row.name || row.symbol || "")}</span>
+        </button>
+      `;
+    })
+    .join("");
+  els.sectorStockSuggest
+    .querySelectorAll("[data-suggest-idx]")
+    .forEach((btn) => {
+      btn.addEventListener("mousedown", (event) => {
+        event.preventDefault();
+        const idx = Number(btn.getAttribute("data-suggest-idx"));
+        const hit = sectorStockSuggestRows[idx];
+        if (hit) openSectorStockFromSearch(hit);
+      });
+    });
+}
+
+async function refreshSectorStockSuggest(query) {
+  if (!els.sectorStockSuggest) return;
+  const q = (query || "").trim();
+  if (q.length < 1) {
+    hideSectorStockSuggest();
+    if (els.sectorStockSearchHint) {
+      els.sectorStockSearchHint.textContent =
+        "搜索后联动下方成分列表 · 走势图 · 产业链与情报";
+    }
+    return;
+  }
+  const local = collectLocalSectorSearchHits(q);
+  paintSectorStockSuggest(local);
+  const seq = ++sectorStockLookupSeq;
+  try {
+    const res = await fetch(
+      `/api/portfolio/lookup?q=${encodeURIComponent(q)}&limit=8`,
+      { signal: AbortSignal.timeout(8000) },
+    );
+    if (!res.ok || seq !== sectorStockLookupSeq) return;
+    const data = await res.json();
+    if (seq !== sectorStockLookupSeq) return;
+    const remote = (data.suggestions || []).map((row) => {
+      const symbol = String(row.symbol || "").toUpperCase();
+      const sectorId = findSectorForSymbol(symbol);
+      return {
+        symbol,
+        name: row.name || symbol,
+        sectorId,
+        sectorLabel: sectorLabelById(sectorId),
+        local: Boolean(sectorId),
+        score: 3,
+      };
+    });
+    const merged = [];
+    const seen = new Set();
+    for (const row of [...local, ...remote]) {
+      const sym = String(row.symbol || "").toUpperCase();
+      if (!sym || seen.has(sym)) continue;
+      seen.add(sym);
+      merged.push(row);
+    }
+    paintSectorStockSuggest(merged.slice(0, 8));
+    if (els.sectorStockSearchHint) {
+      if (merged.length) {
+        els.sectorStockSearchHint.textContent = `候选 ${merged
+          .slice(0, 3)
+          .map((r) => r.symbol)
+          .join(" / ")} · 回车或点击打开下方工作台`;
+      } else if (data.resolved?.symbol) {
+        els.sectorStockSearchHint.textContent = `将打开 ${
+          data.resolved.name || data.resolved.symbol
+        }（${data.resolved.symbol}）`;
+      } else {
+        els.sectorStockSearchHint.textContent =
+          "未找到，试试代码或中文名（如 NVDA、英伟达）";
+      }
+    }
+  } catch {
+    /* keep local suggestions */
+  }
+}
+
+function openSectorStockFromSearch(hitOrSymbol) {
+  const hit =
+    typeof hitOrSymbol === "string"
+      ? {
+          symbol: hitOrSymbol,
+          sectorId: findSectorForSymbol(hitOrSymbol),
+          name: hitOrSymbol,
+        }
+      : hitOrSymbol || {};
+  const symbol = String(hit.symbol || "").trim().toUpperCase();
+  if (!symbol) {
+    if (els.sectorStockSearchHint) {
+      els.sectorStockSearchHint.textContent =
+        "未找到，试试代码或中文名（如 NVDA、英伟达）";
+    }
+    return;
+  }
+  const sectorId = (
+    hit.sectorId ||
+    findSectorForSymbol(symbol) ||
+    state.sectorId ||
+    ""
+  )
+    .toString()
+    .toLowerCase();
+  hideSectorStockSuggest();
+  if (els.sectorStockQ) els.sectorStockQ.value = symbol;
+  if (els.sectorStockSearchHint) {
+    const label = hit.name && hit.name !== symbol ? `${hit.name} · ${symbol}` : symbol;
+    const desk = sectorLabelById(sectorId);
+    els.sectorStockSearchHint.textContent = desk
+      ? `已打开 ${label} · ${desk}`
+      : `已打开 ${label}`;
+  }
+  setStatus(
+    `搜索 ${symbol}${sectorId ? ` · ${sectorLabelById(sectorId)}` : ""}`,
+  );
+  if (sectorId) {
+    openSectorDesk(sectorId, { scroll: true, symbol });
+    return;
+  }
+  state.sectorSymbol = symbol;
+  syncSectorQuery();
+  loadSectorDesk({ force: false }).finally(() => {
+    selectSectorSymbol(symbol);
+    els.sectorsDesk?.scrollIntoView({ behavior: "smooth", block: "start" });
+  });
+}
+
+async function submitSectorStockSearch() {
+  const q = (els.sectorStockQ?.value || "").trim();
+  if (!q) {
+    els.sectorStockQ?.focus();
+    return;
+  }
+  if (
+    sectorStockSuggestIdx >= 0 &&
+    sectorStockSuggestRows[sectorStockSuggestIdx]
+  ) {
+    openSectorStockFromSearch(sectorStockSuggestRows[sectorStockSuggestIdx]);
+    return;
+  }
+  const local = collectLocalSectorSearchHits(q);
+  if (local[0]) {
+    openSectorStockFromSearch(local[0]);
+    return;
+  }
+  try {
+    const res = await fetch(
+      `/api/portfolio/lookup?q=${encodeURIComponent(q)}&limit=1`,
+      { signal: AbortSignal.timeout(8000) },
+    );
+    if (res.ok) {
+      const data = await res.json();
+      const hit = data.resolved || (data.suggestions || [])[0];
+      if (hit?.symbol) {
+        openSectorStockFromSearch({
+          symbol: hit.symbol,
+          name: hit.name || hit.symbol,
+          sectorId: findSectorForSymbol(hit.symbol),
+        });
+        return;
+      }
+    }
+  } catch {
+    /* fall through */
+  }
+  const maybeSym = q.toUpperCase().replace(/[^A-Z0-9.-]/g, "");
+  if (maybeSym && maybeSym.length <= 8) {
+    openSectorStockFromSearch(maybeSym);
+    return;
+  }
+  if (els.sectorStockSearchHint) {
+    els.sectorStockSearchHint.textContent =
+      "未找到，试试代码或中文名（如 NVDA、英伟达）";
+  }
+  setStatus("未找到匹配个股");
+}
+
+els.sectorStockSearchForm?.addEventListener("submit", (event) => {
+  event.preventDefault();
+  submitSectorStockSearch();
+});
+
+els.sectorStockQ?.addEventListener("input", () => {
+  clearTimeout(sectorStockLookupTimer);
+  sectorStockLookupTimer = setTimeout(() => {
+    refreshSectorStockSuggest(els.sectorStockQ?.value || "");
+  }, 160);
+});
+
+els.sectorStockQ?.addEventListener("keydown", (event) => {
+  if (!sectorStockSuggestRows.length) return;
+  if (event.key === "ArrowDown") {
+    event.preventDefault();
+    sectorStockSuggestIdx =
+      (sectorStockSuggestIdx + 1) % sectorStockSuggestRows.length;
+    paintSectorStockSuggest(sectorStockSuggestRows, { keepIndex: true });
+  } else if (event.key === "ArrowUp") {
+    event.preventDefault();
+    sectorStockSuggestIdx =
+      (sectorStockSuggestIdx - 1 + sectorStockSuggestRows.length) %
+      sectorStockSuggestRows.length;
+    paintSectorStockSuggest(sectorStockSuggestRows, { keepIndex: true });
+  } else if (event.key === "Escape") {
+    hideSectorStockSuggest();
+  }
+});
+
+els.sectorStockQ?.addEventListener("blur", () => {
+  setTimeout(() => hideSectorStockSuggest(), 140);
+});
 
 function selectSectorSymbol(sym) {
   const symbol = (sym || "").trim().toUpperCase();
