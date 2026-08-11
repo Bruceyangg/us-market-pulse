@@ -542,11 +542,25 @@ async function refreshChartLive(key) {
   } catch (err) {
     setStatus(`分时刷新失败：${err?.message || err || "请重试"}`);
   } finally {
-    const done = liveBtn();
-    if (done) {
-      done.classList.remove("is-busy");
-      done.disabled = false;
+    // Chart shell may have been rebuilt (futures grid); clear every live button
+    // under the original root and the current zoom meta root.
+    const roots = new Set(
+      [meta.root, chartZoomData.get(key)?.root].filter(Boolean),
+    );
+    for (const root of roots) {
+      root.querySelectorAll('[data-zoom-act="live-refresh"]').forEach((el) => {
+        el.classList.remove("is-busy");
+        el.disabled = false;
+      });
     }
+    document
+      .querySelectorAll(
+        '#us-futures-grid [data-zoom-act="live-refresh"].is-busy, #sector-pick-chart [data-zoom-act="live-refresh"].is-busy, #portfolio-chart [data-zoom-act="live-refresh"].is-busy',
+      )
+      .forEach((el) => {
+        el.classList.remove("is-busy");
+        el.disabled = false;
+      });
   }
 }
 
@@ -5463,9 +5477,8 @@ async function refreshActiveIntraday({ force = false } = {}) {
     const url = `/api/quote/intraday?symbol=${encodeURIComponent(sym)}${
       force ? "&refresh=true" : ""
     }`;
-    // Night force refresh may scrape Yahoo Overnight (slower than Nasdaq tape).
-    const timeoutMs =
-      force && sessionFromClock().id === "night" ? 16000 : force ? 12000 : 8000;
+    // Manual force may bypass day-quote cache / scrape Yahoo Overnight.
+    const timeoutMs = force ? 18000 : 8000;
     const res = await fetch(url, {
       credentials: "same-origin",
       signal: AbortSignal.timeout(timeoutMs),
