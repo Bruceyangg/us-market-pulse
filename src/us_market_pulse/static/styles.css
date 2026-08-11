@@ -3616,7 +3616,7 @@ html[data-theme="dark"] .us-futures-card {
 
 .sector-pulse-stocks {
   display: grid;
-  gap: 0.5rem;
+  gap: 0.55rem;
   margin-top: 0.2rem;
   padding-top: 0.65rem;
   border-top: 1px solid color-mix(in srgb, var(--line) 70%, transparent);
@@ -3624,8 +3624,41 @@ html[data-theme="dark"] .us-futures-card {
 
 .sector-pulse-stocks-head {
   display: grid;
-  gap: 0.22rem;
+  gap: 0.35rem;
   width: 100%;
+}
+
+.sector-pulse-stocks-title {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0.45rem 0.7rem;
+  margin: 0;
+  padding: 0.52rem 0.8rem;
+  border-radius: 12px;
+  border: 1px solid color-mix(in srgb, #6aa8d4 42%, var(--line));
+  background:
+    linear-gradient(
+      105deg,
+      color-mix(in srgb, #6aa8d4 26%, var(--panel)) 0%,
+      color-mix(in srgb, #6aa8d4 10%, var(--panel)) 55%,
+      color-mix(in srgb, var(--panel) 92%, transparent) 100%
+    );
+  box-shadow: inset 0 1px 0 color-mix(in srgb, #fff 8%, transparent);
+}
+
+.sector-pulse-stocks-title .title-main {
+  font-size: 1.12rem;
+  font-weight: 800;
+  letter-spacing: -0.02em;
+  line-height: 1.25;
+  color: var(--ink);
+}
+
+.sector-pulse-stocks-title .title-sector {
+  font-size: 0.84rem;
+  font-weight: 700;
+  color: color-mix(in srgb, #6aa8d4 70%, var(--ink-soft));
 }
 
 .sector-pulse-stocks-summary {
@@ -3637,7 +3670,7 @@ html[data-theme="dark"] .us-futures-card {
 
 .sector-pulse-stock-cols {
   display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 0.65rem;
 }
 
@@ -3678,8 +3711,42 @@ html[data-theme="dark"] .us-futures-card {
   border-color: color-mix(in srgb, var(--tape-up, #d92b2b) 28%, var(--line));
 }
 
+.sector-pulse-stock.is-bearish {
+  border-color: color-mix(in srgb, #c47a2c 34%, var(--line));
+}
+
 .sector-pulse-stock.is-weak {
   border-color: color-mix(in srgb, var(--tape-down, #0f8a6a) 28%, var(--line));
+}
+
+.sector-pulse-stock .stock-industries {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.22rem;
+}
+
+.sector-pulse-stock .stock-industries .ind {
+  display: inline-flex;
+  align-items: center;
+  max-width: 100%;
+  padding: 0.08rem 0.38rem;
+  border-radius: 999px;
+  border: 1px solid color-mix(in srgb, var(--line) 85%, transparent);
+  background: color-mix(in srgb, var(--bg, var(--panel)) 55%, transparent);
+  font-size: 0.62rem;
+  font-weight: 650;
+  line-height: 1.25;
+  color: var(--ink-soft);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sector-pulse-stock .stock-industries .ind.is-core {
+  font-weight: 780;
+  color: var(--ink);
+  border-color: color-mix(in srgb, #6aa8d4 40%, var(--line));
+  background: color-mix(in srgb, #6aa8d4 12%, var(--panel));
 }
 
 .sector-pulse-stock .stock-top {
@@ -3718,6 +3785,10 @@ html[data-theme="dark"] .us-futures-card {
 
 .sector-pulse-stock.is-strong .stance {
   color: color-mix(in srgb, var(--tape-up, #d92b2b) 85%, var(--ink));
+}
+
+.sector-pulse-stock.is-bearish .stance {
+  color: color-mix(in srgb, #c47a2c 88%, var(--ink));
 }
 
 .sector-pulse-stock.is-weak .stance {
@@ -3773,10 +3844,20 @@ html[data-theme="dark"] .us-futures-card {
   padding: 0.45rem 0.55rem;
 }
 
+@media (max-width: 1100px) {
+  .sector-pulse-stock-cols {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
 @media (max-width: 860px) {
   .sector-pulse-stock-cols,
   .sector-pulse-intel-grid {
     grid-template-columns: 1fr;
+  }
+
+  .sector-pulse-stocks-title .title-main {
+    font-size: 1.02rem;
   }
 }
 

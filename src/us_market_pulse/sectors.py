@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import re
 import time
 from datetime import date, datetime, timedelta
 from typing import Any
@@ -16,7 +17,7 @@ from us_market_pulse.earnings_calendar import (
     lookup_upcoming_earnings,
     peek_upcoming_earnings_map,
 )
-from us_market_pulse.market_map import symbols_for_desk
+from us_market_pulse.market_map import MARKET_MAP, symbols_for_desk
 from us_market_pulse.markets import (
     PORTFOLIO_TIMEFRAMES,
     _session_id_for_ts,
@@ -2670,6 +2671,65 @@ def _build_pulse_horizon_view(
     }
 
 
+def _short_industry_tags(text: str) -> list[str]:
+    """Split VALUE_CHAIN industry blurb into short tags (core → secondary)."""
+    raw = str(text or "").strip()
+    if not raw or raw.startswith("待补充"):
+        return []
+    # Drop parenthetical notes for compact chips.
+    cleaned = re.sub(r"[（(][^）)]*[）)]", "", raw)
+    parts = re.split(r"[+/、，,；;]|与|及", cleaned)
+    out: list[str] = []
+    for part in parts:
+        tag = str(part or "").strip(" ·.-。．、")
+        if not tag or len(tag) < 2:
+            continue
+        if len(tag) > 10:
+            tag = tag[:10]
+        if tag not in out:
+            out.append(tag)
+        if len(out) >= 3:
+            break
+    return out
+
+
+def _industries_for_symbol(
+    symbol: str,
+    *,
+    prefer_desk: str | None = None,
+) -> list[str]:
+    """Sub-industry labels from market map groups + value-chain, max 3."""
+    sym = str(symbol or "").upper().strip()
+    if not sym:
+        return []
+    prefer = str(prefer_desk or "").strip().lower()
+    preferred: list[str] = []
+    others: list[str] = []
+    for sector in MARKET_MAP:
+        desk = str(sector.get("desk_id") or sector.get("id") or "").lower()
+        for group in sector.get("groups") or []:
+            hit = any(
+                str(st.get("symbol") or "").upper() == sym
+                for st in (group.get("stocks") or [])
+            )
+            if not hit:
+                continue
+            label = str(group.get("label") or "").strip()
+            if not label:
+                continue
+            if prefer and desk == prefer:
+                if label not in preferred:
+                    preferred.append(label)
+            elif label not in preferred and label not in others:
+                others.append(label)
+    # VALUE_CHAIN short tags fill remaining slots (secondary).
+    vc = VALUE_CHAIN.get(sym) or {}
+    for tag in _short_industry_tags(str(vc.get("industry") or "")):
+        if tag not in preferred and tag not in others:
+            others.append(tag)
+    return (preferred + others)[:3]
+
+
 def _pulse_stock_intel_hit(
     symbol: str,
     name: str,
@@ -2696,10 +2756,12 @@ def _build_pulse_stock_desk(
     *,
     intel: list[dict[str, Any]] | None = None,
     sector_label: str | None = None,
+    sector_id: str | None = None,
     etf_day_pct: float | None = None,
 ) -> dict[str, Any]:
     """Active-sector stock strength + recommendation, cross-checked with intel."""
     label = str(sector_label or "当前板块").strip() or "当前板块"
+    desk_key = str(sector_id or "").strip()
     rows_in = [p for p in (picks or []) if isinstance(p, dict) and p.get("symbol")]
     scored: list[dict[str, Any]] = []
     for p in rows_in:
@@ -2712,6 +2774,7 @@ def _build_pulse_stock_desk(
             vs = round(day - etf_day_pct, 2)
         move = p.get("move_analysis") if isinstance(p.get("move_analysis"), dict) else {}
         hit = _pulse_stock_intel_hit(sym, name, list(intel or []))
+        industries = _industries_for_symbol(sym, prefer_desk=desk_key or None)
         score = 0.0
         if month is not None:
             score += month * 0.55
@@ -2731,6 +2794,8 @@ def _build_pulse_stock_desk(
             stance, stance_zh = "accumulate", "偏多跟踪"
         elif score <= -1.5:
             stance, stance_zh = "avoid", "谨慎回避"
+        elif score <= -0.4:
+            stance, stance_zh = "reduce", "偏空跟踪"
         else:
             stance, stance_zh = "watch", "观察等待"
 
@@ -2761,6 +2826,8 @@ def _build_pulse_stock_desk(
 
         if stance == "accumulate":
             action = "回撤确认后跟踪，优先看相对强度未破"
+        elif stance == "reduce":
+            action = "偏弱跟踪：控制仓位，等止稳或跌出性价比"
         elif stance == "avoid":
             action = "暂不追高，等止跌与情报转暖再议"
         else:
@@ -2777,6 +2844,7 @@ def _build_pulse_stock_desk(
                 "score": round(score, 2),
                 "stance": stance,
                 "stance_zh": stance_zh,
+                "industries": industries,
                 "reason": " · ".join(reasons[:3]) or "数据不足",
                 "action": action,
                 "intel_sentiment": (
@@ -2788,12 +2856,32 @@ def _build_pulse_stock_desk(
     scored.sort(key=lambda r: float(r.get("score") or -999), reverse=True)
     strong = [r for r in scored if r.get("stance") == "accumulate"][:4]
     if not strong:
-        # No clear accumulate — show best non-avoid names without relabeling.
-        strong = [r for r in scored if r.get("stance") != "avoid"][:2]
+        # No clear accumulate — show best non-bear names without relabeling.
+        strong = [
+            r
+            for r in scored
+            if r.get("stance") not in {"avoid", "reduce"}
+        ][:2]
+    bearish = [r for r in scored if r.get("stance") == "reduce"][:3]
     weak = [r for r in reversed(scored) if r.get("stance") == "avoid"][:3]
-    if not weak and len(scored) >= 2:
-        weak = [scored[-1]]
-    used = {x.get("symbol") for x in strong} | {x.get("symbol") for x in weak}
+    if not weak and not bearish and len(scored) >= 2:
+        # Keep a soft-bear sample when nothing clearly weak.
+        soft = scored[-1]
+        if soft.get("stance") == "watch":
+            soft = {
+                **soft,
+                "stance": "reduce",
+                "stance_zh": "偏空跟踪",
+                "action": "偏弱跟踪：控制仓位，等止稳或跌出性价比",
+            }
+            bearish = [soft]
+        else:
+            weak = [soft]
+    used = (
+        {x.get("symbol") for x in strong}
+        | {x.get("symbol") for x in bearish}
+        | {x.get("symbol") for x in weak}
+    )
     watch = [r for r in scored if r.get("symbol") not in used][:3]
 
     if not scored:
@@ -2802,9 +2890,17 @@ def _build_pulse_stock_desk(
         top = "、".join(
             f"{x['symbol']}" for x in strong[:2] if x.get("symbol")
         ) or "龙头样本"
+        soft_bit = ""
+        if bearish:
+            soft_bit = (
+                "偏空跟踪 "
+                + "、".join(str(x["symbol"]) for x in bearish[:2] if x.get("symbol"))
+                + "；"
+            )
         summary = (
             f"结合「{label}」成分涨跌与情报交叉："
             f"优先关注 {top} 的相对强度；"
+            f"{soft_bit}"
             f"{'舆情偏空个股先降权重，' if any(r.get('intel_sentiment') == 'bearish' for r in scored[:6]) else ''}"
             "推荐以回撤确认代替追高。"
         )
@@ -2813,6 +2909,7 @@ def _build_pulse_stock_desk(
         "sector_label": label,
         "summary": summary,
         "strong": strong,
+        "bearish": bearish,
         "watch": watch,
         "weak": weak,
         "count": len(scored),
@@ -2972,6 +3069,7 @@ def _build_sector_pulse(
         picks,
         intel=intel_rows,
         sector_label=active_label or (rows[0]["label"] if rows else "当前板块"),
+        sector_id=active_id,
         etf_day_pct=etf_day_pct
         if etf_day_pct is not None
         else next(
