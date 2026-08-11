@@ -5289,14 +5289,20 @@ function renderSectorPulse(data, { soft = false } = {}) {
   els.sectorPulseBody
     .querySelectorAll("[data-pulse-sector]")
     .forEach((btn) => {
+      btn.addEventListener("pointerenter", () => {
+        const id = btn.getAttribute("data-pulse-sector");
+        if (id) prefetchSectorDesk(id);
+      });
       btn.addEventListener("click", () => {
         const id = btn.getAttribute("data-pulse-sector");
         if (!id) return;
+        markPulseRankActive(id);
+        paintPulseSwitchHint(id);
         // Rank → left pulse + stock desk stay in the研判区 (no jump to bottom desk).
         openSectorDesk(id, { scroll: false });
-        els.sectorPulse?.scrollIntoView({ behavior: "smooth", block: "nearest" });
       });
     });
+  warmPulseRankPrefetch(data || state.sectors);
   els.sectorPulseBody
     .querySelectorAll("[data-pulse-symbol]")
     .forEach((btn) => {
@@ -5867,7 +5873,15 @@ function sectorDeskQuoteCoverage(data) {
 
 /** Align with server _PICKS_TTL (180s) + a little headroom for soft switches. */
 const SECTOR_CACHE_TTL_MS = 240_000;
+/** Fresh enough to paint instantly and refresh in background only. */
+const SECTOR_CACHE_FRESH_MS = 90_000;
 const sectorInflight = new Map();
+
+function sectorCacheAge(id) {
+  const row = state.sectorCache?.[id];
+  if (!row?.data) return Number.POSITIVE_INFINITY;
+  return Date.now() - Number(row.at || 0);
+}
 
 function sectorCacheGet(id) {
   const row = state.sectorCache?.[id];
@@ -5886,6 +5900,72 @@ function sectorCachePut(id, data) {
   if (!id || !data) return;
   if (sectorDeskQuoteCoverage(data) < 0.4) return;
   state.sectorCache[id] = { at: Date.now(), data };
+}
+
+function markPulseRankActive(sectorId) {
+  const id = String(sectorId || "")
+    .trim()
+    .toLowerCase();
+  if (!els.sectorPulseBody || !id) return;
+  els.sectorPulseBody.querySelectorAll("[data-pulse-sector]").forEach((btn) => {
+    const bid = String(btn.getAttribute("data-pulse-sector") || "")
+      .trim()
+      .toLowerCase();
+    const on = bid === id;
+    btn.classList.toggle("is-active", on);
+    btn.setAttribute("aria-pressed", on ? "true" : "false");
+    const wrap = btn.querySelector(".name-wrap");
+    if (!wrap) return;
+    let tag = wrap.querySelector(".rank-focus");
+    if (on && !tag) {
+      tag = document.createElement("span");
+      tag.className = "rank-focus";
+      tag.textContent = "聚焦";
+      wrap.appendChild(tag);
+    } else if (!on && tag) {
+      tag.remove();
+    }
+  });
+}
+
+function paintPulseSwitchHint(sectorId) {
+  const id = String(sectorId || "")
+    .trim()
+    .toLowerCase();
+  if (!els.sectorPulseBody || !id) return;
+  markPulseRankActive(id);
+  const pulse = state.sectors?.sector_pulse || {};
+  const hz = state.sectorPulseHorizon || pulse.default_horizon || "2w";
+  const ranking = pulse.horizons?.[hz]?.ranking || pulse.ranking || [];
+  const row =
+    ranking.find((r) => String(r?.id || "").toLowerCase() === id) ||
+    (state.sectors?.sectors || []).find(
+      (s) => String(s?.id || "").toLowerCase() === id,
+    );
+  const label = String(row?.label || id);
+  const titleSector = els.sectorPulseBody.querySelector(
+    ".sector-pulse-stocks-title .title-sector",
+  );
+  if (titleSector) titleSector.textContent = label;
+  const summary = els.sectorPulseBody.querySelector(
+    ".sector-pulse-stocks-summary",
+  );
+  if (summary) {
+    summary.textContent = `正在切换「${label}」个股强弱与推荐…`;
+  }
+}
+
+function warmPulseRankPrefetch(data) {
+  const pulse = data?.sector_pulse || {};
+  const hz = state.sectorPulseHorizon || pulse.default_horizon || "2w";
+  const ranking = pulse.horizons?.[hz]?.ranking || pulse.ranking || [];
+  ranking.slice(0, 5).forEach((row, i) => {
+    const id = String(row?.id || "")
+      .trim()
+      .toLowerCase();
+    if (!id || id === state.sectorId) return;
+    window.setTimeout(() => prefetchSectorDesk(id), 100 + i * 140);
+  });
 }
 
 function pickHasChart(pick) {
@@ -6482,6 +6562,7 @@ function paintSectorSwitchPlaceholder(sectorId) {
   state.sectorSymbol = "";
   renderSectorEtfs(sectors);
   renderSectorPicks(stub);
+  paintPulseSwitchHint(sectorId);
   if (els.sectorPicksBlurb) {
     els.sectorPicksBlurb.textContent = picks.length
       ? `${picks.length} 只成分 · 行情刷新中…`
@@ -6499,6 +6580,8 @@ function openSectorDesk(id, { scroll = true, symbol = "" } = {}) {
   }
   const same = sectorId === state.sectorId;
   state.sectorId = sectorId;
+  // Instant rank highlight — don't wait on network / full pulse rebuild.
+  markPulseRankActive(sectorId);
   if (!same) {
     state.sectorSymbol = wantSym;
     state.chartUpgradeSym = "";
@@ -6527,25 +6610,45 @@ function openSectorDesk(id, { scroll = true, symbol = "" } = {}) {
     finishScroll();
     return;
   }
+  if (same && !wantSym) {
+    finishScroll();
+    return;
+  }
 
-  // Optimistic: cache first; otherwise paint ticker shells from ETF card metadata
-  // so the left list never keeps showing the previous module.
+  // Optimistic: always paint warm cache first for instant联动.
   const cached = sectorCacheGet(sectorId);
-  if (cached && (!same || !state.sectors)) {
+  const cacheAge = sectorCacheAge(sectorId);
+  if (cached) {
+    state.sectorPulseSig = "";
     renderSectorDesk(cached);
-  } else if (!same) {
+    markPulseRankActive(sectorId);
+    // Fresh cache: show immediately, soft-refresh in background (fast path).
+    if (cacheAge < SECTOR_CACHE_FRESH_MS) {
+      if (wantSym) selectSectorSymbol(wantSym);
+      void loadSectorDesk({ force: false });
+      finishScroll();
+      return;
+    }
+  } else {
     paintSectorSwitchPlaceholder(sectorId);
   }
 
-  // Soft refresh on switch (server picks cache). force=true was making every
-  // module click wait on a full rebuild and feel stuck / show stale data.
-  const load =
-    same &&
-    state.sectors &&
-    pickHasChart(state.sectors.selected_pick) &&
-    sectorDeskQuoteCoverage(state.sectors) >= 0.4
-      ? Promise.resolve(state.sectors)
-      : loadSectorDesk({ force: false });
+  // Reuse hover/prefetch in-flight request when possible (avoid duplicate /api/sectors).
+  const pref = sectorInflight.get(sectorId);
+  const load = pref
+    ? pref.then((data) => {
+        if (data && state.sectorId === sectorId) {
+          sectorCachePut(sectorId, data);
+          state.sectorPulseSig = "";
+          renderSectorDesk(data);
+          markPulseRankActive(sectorId);
+          syncSectorQuery();
+          persistPageDataCache();
+          return data;
+        }
+        return loadSectorDesk({ force: false });
+      })
+    : loadSectorDesk({ force: false });
   Promise.resolve(load)
     .then(() => {
       if (wantSym && state.sectorId === sectorId) {
@@ -6576,12 +6679,13 @@ function prefetchSectorDesk(id) {
 
 function warmHotSectorPrefetch(sectors) {
   const rows = (sectors || []).filter((r) => r?.id);
-  const hot = rows.filter((r) => r.is_hot).slice(0, 2);
-  const rest = rows.filter((r) => !r.is_hot).slice(0, 1);
+  const hot = rows.filter((r) => r.is_hot).slice(0, 3);
+  const rest = rows.filter((r) => !r.is_hot).slice(0, 2);
   [...hot, ...rest].forEach((row, i) => {
     if (!row.id || row.id === state.sectorId) return;
-    window.setTimeout(() => prefetchSectorDesk(row.id), 180 + i * 220);
+    window.setTimeout(() => prefetchSectorDesk(row.id), 120 + i * 160);
   });
+  warmPulseRankPrefetch(state.sectors);
 }
 
 function renderSectorEtfs(sectors) {
