@@ -4003,10 +4003,14 @@ html[data-theme="dark"] .sector-pulse-hz.is-active {
 
 .sector-stock-search-form .btn {
   flex: 0 0 auto;
-  min-width: 4.5rem;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 4.75rem;
   height: 2.45rem;
-  padding-left: 1rem;
-  padding-right: 1rem;
+  padding: 0 1.15rem;
+  text-align: center;
+  line-height: 1;
 }
 
 .sector-stock-search-hint {

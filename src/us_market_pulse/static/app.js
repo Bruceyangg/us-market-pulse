@@ -7093,7 +7093,7 @@ async function refreshSectorStockSuggest(query) {
     hideSectorStockSuggest();
     if (els.sectorStockSearchHint) {
       els.sectorStockSearchHint.textContent =
-        "搜索后联动下方成分列表 · 走势图 · 产业链与情报";
+        "支持板块内外个股 · 搜索后联动下方列表 / 走势 / 产业链与情报";
     }
     return;
   }
@@ -7176,26 +7176,19 @@ function openSectorStockFromSearch(hitOrSymbol) {
     .toLowerCase();
   hideSectorStockSuggest();
   if (els.sectorStockQ) els.sectorStockQ.value = symbol;
+  const hostSector =
+    sectorId ||
+    (state.sectorId || "").toLowerCase() ||
+    String(state.sectors?.sectors?.[0]?.id || "tech").toLowerCase();
   if (els.sectorStockSearchHint) {
     const label = hit.name && hit.name !== symbol ? `${hit.name} · ${symbol}` : symbol;
-    const desk = sectorLabelById(sectorId);
-    els.sectorStockSearchHint.textContent = desk
-      ? `已打开 ${label} · ${desk}`
-      : `已打开 ${label}`;
+    const host = sectorLabelById(hostSector) || "当前工作台";
+    els.sectorStockSearchHint.textContent = hit.local
+      ? `已搜索 ${label} · ${host}`
+      : `已搜索 ${label} · 全市场（挂到${host}）`;
   }
-  setStatus(
-    `搜索 ${symbol}${sectorId ? ` · ${sectorLabelById(sectorId)}` : ""}`,
-  );
-  if (sectorId) {
-    openSectorDesk(sectorId, { scroll: true, symbol });
-    return;
-  }
-  state.sectorSymbol = symbol;
-  syncSectorQuery();
-  loadSectorDesk({ force: false }).finally(() => {
-    selectSectorSymbol(symbol);
-    els.sectorsDesk?.scrollIntoView({ behavior: "smooth", block: "start" });
-  });
+  setStatus(`搜索 ${symbol} · ${sectorLabelById(hostSector) || hostSector}`);
+  openSectorDesk(hostSector, { scroll: true, symbol });
 }
 
 async function submitSectorStockSearch() {
@@ -7211,24 +7204,22 @@ async function submitSectorStockSearch() {
     openSectorStockFromSearch(sectorStockSuggestRows[sectorStockSuggestIdx]);
     return;
   }
-  const local = collectLocalSectorSearchHits(q);
-  if (local[0]) {
-    openSectorStockFromSearch(local[0]);
-    return;
-  }
+  // Prefer global lookup so non-sector names/tickers resolve correctly.
   try {
     const res = await fetch(
-      `/api/portfolio/lookup?q=${encodeURIComponent(q)}&limit=1`,
+      `/api/portfolio/lookup?q=${encodeURIComponent(q)}&limit=8`,
       { signal: AbortSignal.timeout(8000) },
     );
     if (res.ok) {
       const data = await res.json();
       const hit = data.resolved || (data.suggestions || [])[0];
       if (hit?.symbol) {
+        const sectorId = findSectorForSymbol(hit.symbol);
         openSectorStockFromSearch({
           symbol: hit.symbol,
           name: hit.name || hit.symbol,
-          sectorId: findSectorForSymbol(hit.symbol),
+          sectorId,
+          local: Boolean(sectorId),
         });
         return;
       }
@@ -7236,14 +7227,24 @@ async function submitSectorStockSearch() {
   } catch {
     /* fall through */
   }
+  const local = collectLocalSectorSearchHits(q);
+  if (local[0]) {
+    openSectorStockFromSearch(local[0]);
+    return;
+  }
   const maybeSym = q.toUpperCase().replace(/[^A-Z0-9.-]/g, "");
   if (maybeSym && maybeSym.length <= 8) {
-    openSectorStockFromSearch(maybeSym);
+    openSectorStockFromSearch({
+      symbol: maybeSym,
+      name: maybeSym,
+      sectorId: findSectorForSymbol(maybeSym),
+      local: Boolean(findSectorForSymbol(maybeSym)),
+    });
     return;
   }
   if (els.sectorStockSearchHint) {
     els.sectorStockSearchHint.textContent =
-      "未找到，试试代码或中文名（如 NVDA、英伟达）";
+      "未找到，试试代码或中文名（如 NVDA、英伟达、TSLA）";
   }
   setStatus("未找到匹配个股");
 }

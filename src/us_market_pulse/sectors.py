@@ -3441,10 +3441,9 @@ async def build_sector_desk(
 
     selected = (selected_symbol or "").strip().upper()
     universe = {str(s).strip().upper() for s in pick_symbols if str(s).strip()}
-    in_rows = any(p.get("symbol") == selected for p in pick_rows)
-    # Keep an explicit ?symbol= even on cold refresh (pick_rows empty before quotes).
-    # Only fall back when the request has no symbol or it's outside this sector universe.
-    if not selected or (not in_rows and selected not in universe):
+    # Keep an explicit ?symbol= even when it is outside the active sector universe
+    # (desk search / deep-link). Only fall back when the client sent no symbol.
+    if not selected:
         selected = (
             pick_rows[0]["symbol"]
             if pick_rows
@@ -3506,11 +3505,8 @@ async def build_sector_desk(
             ),
             reverse=True,
         )
-        # Do not drop an in-universe ?symbol= if its lite row failed to build.
-        if not selected or (
-            not any(p.get("symbol") == selected for p in pick_rows)
-            and selected not in universe
-        ):
+        # Only fall back when no symbol was requested.
+        if not selected:
             selected = pick_rows[0]["symbol"] if pick_rows else selected
     else:
         priced = sum(
@@ -3564,6 +3560,43 @@ async def build_sector_desk(
                     row["change_pct"] = quote.get("change_pct")
                     row["momentum"] = float(quote["change_pct"] or 0)
 
+    # Inject out-of-universe / search symbols into the left list so the desk can
+    # still chart, news, and chain-link them while hosting the current sector.
+    if selected and not any(p.get("symbol") == selected for p in pick_rows):
+        try:
+            guest_quotes = await asyncio.wait_for(
+                fetch_day_quotes(
+                    [selected],
+                    overnight_priority=[selected],
+                    bypass_cache=force,
+                ),
+                timeout=2.5,
+            )
+        except asyncio.TimeoutError:
+            guest_quotes = {}
+        guest = _lite_pick_from_quote(
+            selected,
+            guest_quotes.get(selected),
+            active=active,
+            home_etf=home_etf,
+            sector_id=sector_id,
+        )
+        try:
+            from us_market_pulse.symbol_lookup import resolve_holding_query
+
+            hit = resolve_holding_query(selected)
+            if hit and hit.get("name"):
+                guest["name"] = hit["name"]
+                guest["label"] = hit["name"]
+        except Exception:  # noqa: BLE001
+            pass
+        guest["is_search"] = True
+        host_label = str((active or {}).get("label") or "")
+        guest["sector_label"] = (
+            f"{host_label} · 搜索" if host_label else "搜索个股"
+        )
+        pick_rows.insert(0, guest)
+
     # List first: sparks from cache. Selected chart races briefly (≤2s), then
     # continues in background so 成分股 never waits on a full multi-TF fetch.
     selected_pick = next((p for p in pick_rows if p.get("symbol") == selected), None)
@@ -3603,7 +3636,11 @@ async def build_sector_desk(
             "move_analysis": None,
             "lite": False,
             "chart_attempted": True,
+            "is_search": bool((prev_row or {}).get("is_search"))
+            or (selected not in universe),
         }
+        if rich.get("is_search") and sector_label:
+            rich["sector_label"] = f"{sector_label} · 搜索"
         apply_list_quote_fields(rich, prev_row)
         for idx, row in enumerate(pick_rows):
             if row.get("symbol") == selected:
