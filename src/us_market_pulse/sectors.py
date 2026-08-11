@@ -2300,17 +2300,14 @@ def _build_pulse_stock_desk(
 
     scored.sort(key=lambda r: float(r.get("score") or -999), reverse=True)
     strong = [r for r in scored if r.get("stance") == "accumulate"][:4]
-    if len(strong) < 2:
-        strong = scored[:3]
+    if not strong:
+        # No clear accumulate — show best non-avoid names without relabeling.
+        strong = [r for r in scored if r.get("stance") != "avoid"][:2]
     weak = [r for r in reversed(scored) if r.get("stance") == "avoid"][:3]
-    if len(weak) < 1:
-        weak = list(reversed(scored[-2:])) if len(scored) >= 2 else []
-    watch = [
-        r
-        for r in scored
-        if r.get("stance") == "watch"
-        and r.get("symbol") not in {x.get("symbol") for x in strong}
-    ][:3]
+    if not weak and len(scored) >= 2:
+        weak = [scored[-1]]
+    used = {x.get("symbol") for x in strong} | {x.get("symbol") for x in weak}
+    watch = [r for r in scored if r.get("symbol") not in used][:3]
 
     if not scored:
         summary = f"「{label}」成分股报价不足，暂无法给出个股强弱与推荐。"
