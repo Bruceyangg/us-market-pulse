@@ -43,7 +43,11 @@ from us_market_pulse.earnings_calendar import (
 )
 from us_market_pulse.market_map import build_market_map
 from us_market_pulse.chains import build_chains_desk
-from us_market_pulse.sectors import build_sector_desk, fetch_intraday_snapshot
+from us_market_pulse.sectors import (
+    build_sector_desk,
+    fetch_intraday_snapshot,
+    fetch_symbol_desk_chart,
+)
 from us_market_pulse.us_markets import build_us_markets_desk
 from us_market_pulse.symbol_lookup import resolve_holding_query, suggest_holdings
 from us_market_pulse.topics import build_war_desk
@@ -296,6 +300,15 @@ async def api_quote_intraday(
     if not snap:
         raise HTTPException(status_code=404, detail="暂无分时数据")
     return snap
+
+
+@app.get("/api/quote/chart")
+async def api_quote_chart(
+    symbol: str = Query(..., min_length=1, max_length=24),
+    refresh: bool = Query(default=False),
+) -> dict[str, Any]:
+    """Standalone multi-TF + 分时 upgrade for desk search / guest symbols."""
+    return await fetch_symbol_desk_chart(symbol, force=refresh)
 
 
 @app.get("/api/sectors/map")

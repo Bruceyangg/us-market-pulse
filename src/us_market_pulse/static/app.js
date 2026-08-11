@@ -5801,11 +5801,85 @@ function markSectorChartAttempted(sym) {
   clearSectorChartLoading(want);
 }
 
-/** Retry soft desk + intraday fetch for search/guest symbols until chart arrives. */
+/** Merge a standalone /api/quote/chart pick into the open sector desk. */
+function applySectorChartPick(sym, chartPick) {
+  if (!state.sectors || !chartPick) return false;
+  const want = String(sym || "").toUpperCase();
+  if (!want || state.sectorSymbol !== want) return false;
+  const prev = state.sectors.selected_pick;
+  const hostLabel = state.sectors?.active_sector?.label || "";
+  const next = mergePickPreserveIntraday(
+    {
+      ...chartPick,
+      symbol: want,
+      sector_id: state.sectorId || chartPick.sector_id,
+      sector_label: chartPick.is_search
+        ? hostLabel
+          ? `${hostLabel} · 搜索`
+          : chartPick.sector_label || "搜索个股"
+        : chartPick.sector_label || hostLabel,
+      lite: false,
+      chart_attempted: true,
+    },
+    prev?.symbol === want ? prev : null,
+  );
+  state.sectors.selected_pick = next;
+  state.sectors.selected_symbol = want;
+  const picks = state.sectors.picks || [];
+  const idx = picks.findIndex((p) => String(p.symbol || "").toUpperCase() === want);
+  if (idx >= 0) {
+    picks[idx] = mergeListQuoteFields(
+      mergePickPreserveIntraday({ ...picks[idx], ...next, symbol: want }, picks[idx]),
+      picks[idx],
+    );
+  } else {
+    picks.unshift(next);
+  }
+  state.sectors.picks = picks;
+  if (next.value_chain) state.sectors.value_chain = next.value_chain;
+  // Patch list row in place — do not rebuild (avoids scroll jump).
+  if (!els.sectorPickList?.querySelector(`[data-symbol="${want}"]`)) {
+    renderSectorPicks(state.sectors);
+  } else {
+    refreshActiveRowQuote(els.sectorPickList, next, "data-symbol");
+    markActiveListRow(els.sectorPickList, want, "data-symbol");
+    paintSectorSelection();
+  }
+  clearSectorChartLoading(want);
+  persistPageDataCache();
+  return deskChartReady(next);
+}
+
+async function fetchSectorSymbolChart(sym, { force = false } = {}) {
+  const want = String(sym || "").trim().toUpperCase();
+  if (!want) return null;
+  const params = new URLSearchParams({ symbol: want });
+  if (force) params.set("refresh", "true");
+  const res = await fetch(`/api/quote/chart?${params.toString()}`, {
+    credentials: "same-origin",
+    signal: AbortSignal.timeout(force ? 28000 : 22000),
+  });
+  if (!res.ok) return null;
+  return res.json();
+}
+
+/** Dedicated chart path for search guests — does not rebuild the whole desk. */
+async function upgradeSectorSymbolChart(sym, { force = false } = {}) {
+  const want = String(sym || "").trim().toUpperCase();
+  if (!want || PAGE !== "sectors") return false;
+  try {
+    const data = await fetchSectorSymbolChart(want, { force });
+    if (!data?.ok || !data.pick) return false;
+    return applySectorChartPick(want, data.pick);
+  } catch {
+    return false;
+  }
+}
+
+/** Retry chart/intraday for search/guest symbols until ready (or give up). */
 function scheduleSectorChartCatchup(sym, { reason = "" } = {}) {
   const sel = String(sym || "").toUpperCase();
   if (!sel || PAGE !== "sectors") return;
-  // Coalesce overlapping catchups (search + loadSectorDesk both call this).
   if (
     state.chartUpgradeSym === sel &&
     Date.now() < Number(state.chartLoadingUntil || 0) &&
@@ -5814,11 +5888,11 @@ function scheduleSectorChartCatchup(sym, { reason = "" } = {}) {
     return;
   }
   state.chartUpgradeSym = sel;
-  state.chartLoadingUntil = Date.now() + 16000;
+  state.chartLoadingUntil = Date.now() + 20000;
   state.chartUpgradeAttempts = 0;
   const token = (state.chartCatchupToken = (state.chartCatchupToken || 0) + 1);
 
-  const step = () => {
+  const step = async () => {
     if (token !== state.chartCatchupToken) return;
     if (state.sectorSymbol !== sel) return;
     const pick = state.sectors?.selected_pick;
@@ -5834,14 +5908,54 @@ function scheduleSectorChartCatchup(sym, { reason = "" } = {}) {
       renderSectorPickChart();
       return;
     }
-    if (!state.sectorsLoadBusy) {
-      void loadSectorDesk({ force: false });
+    // Prefer dedicated chart API — avoids wiping the pick list / scroll.
+    const ok = await upgradeSectorSymbolChart(sel, {
+      force: n >= 2 || reason === "search",
+    });
+    if (ok || deskChartReady(state.sectors?.selected_pick)) {
+      clearSectorChartLoading(sel);
+      return;
     }
-    void refreshActiveIntraday({ force: n >= 2 || reason === "search" });
-    window.setTimeout(step, n === 1 ? 900 : 2200);
+    void refreshActiveIntraday({ force: true });
+    window.setTimeout(step, n === 1 ? 800 : 2000);
   };
 
-  window.setTimeout(step, reason === "search" ? 350 : 700);
+  window.setTimeout(step, reason === "search" ? 200 : 500);
+}
+
+/** Update session badges / hold tags without rebuilding the list (keeps scroll). */
+function refreshSectorPickListLive() {
+  const data = state.sectors;
+  if (!data?.picks?.length || !els.sectorPickList) return;
+  const rows = els.sectorPickList.querySelectorAll(".sector-pick-row[data-symbol]");
+  if (!rows.length) {
+    renderSectorPicks(data);
+    return;
+  }
+  data.picks = data.picks.map((p) => applyClockSession(p));
+  if (data.selected_pick) {
+    data.selected_pick = applyClockSession(data.selected_pick);
+  }
+  for (const pick of data.picks) {
+    refreshActiveRowQuote(els.sectorPickList, pick, "data-symbol");
+    const row = els.sectorPickList.querySelector(
+      `.sector-pick-row[data-symbol="${String(pick.symbol || "").toUpperCase()}"]`,
+    );
+    if (!row) continue;
+    const held = isInHoldings(pick.symbol);
+    row.classList.toggle("in-holding", held);
+    const holdBtn = row.querySelector(".sector-hold-btn");
+    if (holdBtn) {
+      holdBtn.classList.toggle("is-held", held);
+      holdBtn.setAttribute("data-hold-action", held ? "remove" : "add");
+      holdBtn.textContent = held ? "−" : "+";
+    }
+  }
+  markActiveListRow(
+    els.sectorPickList,
+    data.selected_symbol || state.sectorSymbol,
+    "data-symbol",
+  );
 }
 
 function pickHasTfSeries(pick, tf) {
@@ -7617,14 +7731,62 @@ function selectSectorSymbol(sym) {
   });
 }
 
+function sectorPickListSignature(picks) {
+  return (picks || [])
+    .map((p) => String(p?.symbol || "").toUpperCase())
+    .filter(Boolean)
+    .join("|");
+}
+
 function renderSectorDesk(data) {
+  const prev = state.sectors;
+  const sameBoard =
+    prev &&
+    data &&
+    prev.active_sector_id &&
+    prev.active_sector_id === data.active_sector_id &&
+    sectorPickListSignature(prev.picks) === sectorPickListSignature(data.picks) &&
+    Boolean(els.sectorPickList?.querySelector(".sector-pick-row"));
+
+  // Keep richer local chart for the selected search guest across soft polls.
+  if (
+    sameBoard &&
+    prev?.selected_pick &&
+    data?.selected_symbol &&
+    prev.selected_pick.symbol === data.selected_symbol &&
+    deskChartReady(prev.selected_pick) &&
+    !deskChartReady(data.selected_pick)
+  ) {
+    data.selected_pick = mergePickPreserveIntraday(
+      data.selected_pick || prev.selected_pick,
+      prev.selected_pick,
+    );
+    data.picks = (data.picks || []).map((p) =>
+      p.symbol === data.selected_symbol
+        ? mergePickPreserveIntraday({ ...p, ...data.selected_pick }, p)
+        : p,
+    );
+  }
+
   state.sectors = data || null;
   if (data?.active_sector_id) state.sectorId = data.active_sector_id;
   if (data?.selected_symbol) state.sectorSymbol = data.selected_symbol;
   renderSectorPulse(data);
   renderAiDesk(data?.hot_desk || data?.ai_desk);
   renderSectorEtfs(data?.sectors || []);
-  renderSectorPicks(data);
+  if (sameBoard) {
+    // Soft poll: patch quotes in place so the list doesn't jump to top.
+    state.sectors = data;
+    refreshSectorPickListLive();
+    paintSectorSelection();
+    renderSectorNewsFeed(data);
+    renderSymbolNewsFeed(data);
+    renderEarningsCalendar(data);
+    renderValueChain(data?.value_chain || data?.selected_pick?.value_chain);
+    scheduleSectorsDeskHeightSync();
+  } else {
+    renderSectorPicks(data);
+  }
 }
 
 function paintSectorDeskError(message) {
@@ -9306,7 +9468,7 @@ function bootPage() {
       void loadUsMarketsDesk({ mode: "full", force: false });
     });
     void refreshHoldingSymbols().then(() => {
-      if (state.sectors) renderSectorPicks(state.sectors);
+      if (state.sectors?.picks?.length) refreshSectorPickListLive();
     });
     void loadSectorDesk().then(() => {
       // Lite list returns first; chart/news catch up without blocking 成分股.
@@ -9316,15 +9478,18 @@ function bootPage() {
           force: !pickHasIntraday(state.sectors?.selected_pick),
         });
       }
-      if (!pickHasChart(state.sectors?.selected_pick)) {
-        ensureMultiTfChartUpgrade({ force: false });
+      const sel = state.sectors?.selected_symbol || state.sectorSymbol;
+      if (sel && !deskChartReady(state.sectors?.selected_pick)) {
+        scheduleSectorChartCatchup(sel, {
+          reason: state.sectors?.selected_pick?.is_search ? "search" : "upgrade",
+        });
       }
       persistPageDataCache();
     });
     trackPageInterval(() => loadSectorDesk(), 90 * 1000);
-    // Keep 盘前/盘中/盘后/夜盘 badges in sync with ET clock between polls.
+    // Session badges only — never rebuild the list (that reset scroll to top).
     trackPageInterval(() => {
-      if (state.sectors?.picks?.length) renderSectorPicks(state.sectors);
+      if (state.sectors?.picks?.length) refreshSectorPickListLive();
     }, 30 * 1000);
     // Soft tape poll — never force over an in-flight request.
     trackPageInterval(() => {

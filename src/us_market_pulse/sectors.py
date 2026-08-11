@@ -1718,6 +1718,96 @@ async def _fetch_quote(
     return bundle, extra_errs
 
 
+async def fetch_symbol_desk_chart(
+    symbol: str,
+    *,
+    force: bool = False,
+) -> dict[str, Any]:
+    """Standalone multi-TF + 分时 bundle for search/guest desk upgrades.
+
+    Avoids rebuilding the whole sector board when only one out-of-universe
+    symbol needs charts.
+    """
+    sym = (symbol or "").strip().upper()
+    if not sym:
+        return {"ok": False, "symbol": "", "errors": ["empty symbol"]}
+    yahoo_headers = {
+        "User-Agent": USER_AGENT,
+        "Accept": "application/json",
+        "Accept-Language": "en-US,en;q=0.9",
+        "Origin": "https://finance.yahoo.com",
+        "Referer": "https://finance.yahoo.com/",
+    }
+    errs: list[str] = []
+    bundle: dict[str, Any] | None = None
+    try:
+        async with httpx.AsyncClient(
+            headers=yahoo_headers,
+            follow_redirects=True,
+            trust_env=False,
+            timeout=httpx.Timeout(20.0, connect=3.0),
+        ) as client:
+            bundle, errs = await asyncio.wait_for(
+                _fetch_quote_limited(client, sym, sym, force=force),
+                timeout=22.0,
+            )
+    except asyncio.TimeoutError:
+        return {
+            "ok": False,
+            "symbol": sym,
+            "errors": [f"{sym}: chart timeout"],
+        }
+    except Exception as exc:  # noqa: BLE001
+        return {
+            "ok": False,
+            "symbol": sym,
+            "errors": [f"{sym}: {exc.__class__.__name__}"],
+        }
+
+    if not bundle or not (
+        _pick_has_chart(bundle) or _pick_has_intraday(bundle)
+    ):
+        return {
+            "ok": False,
+            "symbol": sym,
+            "pick": bundle,
+            "errors": list(errs or []) + [f"{sym}: no chart data"],
+        }
+
+    vc = _value_chain_for(sym)
+    wave = _momentum_fields(bundle)
+    name = (
+        (vc.get("name") if isinstance(vc, dict) else None)
+        or bundle.get("label")
+        or bundle.get("name")
+        or sym
+    )
+    pick = {
+        **bundle,
+        "symbol": sym,
+        "name": name,
+        "label": name,
+        "month_change_pct": wave.get("month_change_pct"),
+        "quarter_change_pct": wave.get("quarter_change_pct"),
+        "momentum": wave.get("momentum"),
+        "is_wave": wave.get("is_wave"),
+        "value_chain": vc,
+        "lite": False,
+        "chart_attempted": True,
+        "is_search": True,
+    }
+    try:
+        from us_market_pulse.symbol_lookup import resolve_holding_query
+
+        hit = resolve_holding_query(sym)
+        if hit and hit.get("name"):
+            pick["name"] = hit["name"]
+            pick["label"] = hit["name"]
+    except Exception:  # noqa: BLE001
+        pass
+    return {"ok": True, "symbol": sym, "pick": pick, "errors": list(errs or [])}
+
+
 def _session_id_et(ts: int) -> str:
     dt = datetime.fromtimestamp(int(ts), tz=_ET)
     mins = dt.hour * 60 + dt.minute
