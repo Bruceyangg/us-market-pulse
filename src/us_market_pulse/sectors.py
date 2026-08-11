@@ -23,8 +23,7 @@ from us_market_pulse.markets import (
     _session_segments,
     fetch_symbol_bundle,
 )
-from us_market_pulse.feeds import fetch_google_news
-from us_market_pulse.feeds import fetch_google_news
+from us_market_pulse.feeds import fetch_google_news, peek_intel_items
 from us_market_pulse.portfolio_intel import match_portfolio_intel
 from us_market_pulse.sentiment import enrich_sentiment
 from us_market_pulse.translate import enrich_titles
@@ -2045,6 +2044,288 @@ def _move_analysis(
     }
 
 
+def _build_sector_pulse(
+    sectors: list[dict[str, Any]],
+    *,
+    sector_news: list[dict[str, Any]] | None = None,
+    active_id: str | None = None,
+    active_label: str | None = None,
+) -> dict[str, Any]:
+    """Cross-sector 1–2 week pulse: ranking, bias, intel, next-step playbook."""
+    rows: list[dict[str, Any]] = []
+    for raw in sectors or []:
+        if not isinstance(raw, dict):
+            continue
+        sid = str(raw.get("id") or "").strip()
+        label = str(raw.get("label") or sid or "").strip()
+        if not sid or not label:
+            continue
+        day = _pct(raw.get("change_pct"))
+        month = _pct(raw.get("month_change_pct"))
+        # Prefer month when it carries real medium-term signal; else day tape.
+        horizon_pct = month if month is not None else day
+        score = _momentum_score(day, month if month is not None else day)
+        rows.append(
+            {
+                "id": sid,
+                "label": label,
+                "symbol": str(raw.get("symbol") or ""),
+                "blurb": str(raw.get("blurb") or ""),
+                "change_pct": day,
+                "month_change_pct": month,
+                "horizon_pct": horizon_pct,
+                "momentum": score,
+                "is_hot": bool(raw.get("is_hot")),
+                "is_wave": bool(raw.get("is_wave")),
+                "active": sid == str(active_id or ""),
+            }
+        )
+
+    rows.sort(
+        key=lambda r: (
+            float(r.get("momentum") or -999),
+            float(r.get("horizon_pct") if r.get("horizon_pct") is not None else -999),
+        ),
+        reverse=True,
+    )
+
+    up = sum(1 for r in rows if (r.get("horizon_pct") or 0) > 0.15)
+    down = sum(1 for r in rows if (r.get("horizon_pct") or 0) < -0.15)
+    flat = max(0, len(rows) - up - down)
+    avg = (
+        round(
+            sum(float(r.get("horizon_pct") or 0) for r in rows) / len(rows),
+            2,
+        )
+        if rows
+        else 0.0
+    )
+
+    if avg >= 1.0 and up >= down:
+        bias, bias_zh = "bullish", "偏多"
+    elif avg <= -1.0 and down >= up:
+        bias, bias_zh = "bearish", "偏空"
+    elif up >= down + 2:
+        bias, bias_zh = "bullish", "结构性偏多"
+    elif down >= up + 2:
+        bias, bias_zh = "bearish", "结构性偏空"
+    else:
+        bias, bias_zh = "neutral", "板块轮动"
+
+    leaders = [
+        {
+            "id": r["id"],
+            "label": r["label"],
+            "change_pct": r.get("horizon_pct"),
+            "day_pct": r.get("change_pct"),
+            "note": "一轮涨势" if r.get("is_wave") else ("热点" if r.get("is_hot") else "领涨"),
+        }
+        for r in rows
+        if (r.get("horizon_pct") or 0) > 0
+    ][:4]
+    laggards = [
+        {
+            "id": r["id"],
+            "label": r["label"],
+            "change_pct": r.get("horizon_pct"),
+            "day_pct": r.get("change_pct"),
+            "note": "承压",
+        }
+        for r in reversed(rows)
+        if (r.get("horizon_pct") or 0) < 0
+    ][:4]
+
+    factors: list[str] = []
+    if rows:
+        factors.append(
+            f"样本 {len(rows)} 个板块：上涨 {up} / 下跌 {down} / 平盘 {flat}，"
+            f"近端均值 {avg:+.2f}%"
+        )
+    if leaders:
+        top = "、".join(
+            f"{x['label']} {float(x['change_pct']):+.1f}%"
+            for x in leaders[:3]
+            if x.get("change_pct") is not None
+        )
+        if top:
+            factors.append(f"近端领涨：{top}")
+    if laggards:
+        weak = "、".join(
+            f"{x['label']} {float(x['change_pct']):+.1f}%"
+            for x in laggards[:3]
+            if x.get("change_pct") is not None
+        )
+        if weak:
+            factors.append(f"近端承压：{weak}")
+
+    # Rotation read: growth vs defensive-ish labels
+    growth_ids = {"semis", "tech", "cloud", "ai", "nasdaq"}
+    defense_ids = {"health", "energy", "finance"}
+    growth_avg = [
+        float(r["horizon_pct"])
+        for r in rows
+        if r["id"] in growth_ids and r.get("horizon_pct") is not None
+    ]
+    defense_avg = [
+        float(r["horizon_pct"])
+        for r in rows
+        if r["id"] in defense_ids and r.get("horizon_pct") is not None
+    ]
+    if growth_avg and defense_avg:
+        g = sum(growth_avg) / len(growth_avg)
+        d = sum(defense_avg) / len(defense_avg)
+        if g - d >= 1.2:
+            factors.append(
+                f"成长/科技链相对医疗·金融·能源更强（约 {g - d:+.1f}%），风险偏好偏积极"
+            )
+        elif d - g >= 1.2:
+            factors.append(
+                f"医疗·金融·能源相对成长更强（约 {d - g:+.1f}%），资金更偏轮动避险"
+            )
+        else:
+            factors.append("成长与非成长差距有限，更像板块内轮动而非单边风格")
+
+    # Intel: prefer active sector news, then cached intel matching sector labels.
+    label_set = {str(r["label"]) for r in rows}
+    label_set.update({str(r["id"]) for r in rows})
+    intel_pool: list[dict[str, Any]] = []
+    for item in sector_news or []:
+        if isinstance(item, dict):
+            intel_pool.append(item)
+    try:
+        for item in peek_intel_items() or []:
+            if not isinstance(item, dict):
+                continue
+            blob = " ".join(
+                str(item.get(k) or "")
+                for k in ("title", "title_zh", "summary", "brief_zh", "topics")
+            )
+            if any(lab and lab in blob for lab in label_set):
+                intel_pool.append(item)
+            elif any(
+                tok in blob
+                for tok in (
+                    "semiconductor",
+                    "AI",
+                    "oil",
+                    "Fed",
+                    "earnings",
+                    "芯片",
+                    "能源",
+                    "美联储",
+                    "财报",
+                )
+            ):
+                intel_pool.append(item)
+    except Exception:  # noqa: BLE001
+        pass
+
+    # Dedupe by title
+    seen_t: set[str] = set()
+    intel_rows: list[dict[str, Any]] = []
+    themes: list[str] = []
+    bull_n = bear_n = 0
+    for item in intel_pool:
+        title = str(item.get("title_zh") or item.get("title") or "").strip()
+        if not title or title in seen_t:
+            continue
+        seen_t.add(title)
+        sent = str(item.get("sentiment") or "neutral")
+        if sent == "bullish":
+            bull_n += 1
+        elif sent == "bearish":
+            bear_n += 1
+        slim = _slim_news_item(dict(item))
+        intel_rows.append(slim)
+        theme = str(
+            item.get("category_zh")
+            or item.get("category")
+            or item.get("source")
+            or ""
+        ).strip()
+        if theme and theme not in themes:
+            themes.append(theme)
+        if len(intel_rows) >= 5:
+            break
+
+    if intel_rows:
+        factors.append(
+            f"相关情报 {len(intel_rows)} 条（利多 {bull_n} / 利空 {bear_n}），"
+            "需与涨跌方向交叉验证"
+        )
+        if bear_n > bull_n + 1 and bias != "bearish":
+            factors.append("舆情偏空但盘面未必同步——留意预期差与假突破")
+        elif bull_n > bear_n + 1 and bias != "bullish":
+            factors.append("舆情偏暖但板块尚未全面跟——更宜等确认再加仓")
+
+    active_bit = ""
+    if active_label:
+        active_row = next((r for r in rows if r.get("active")), None)
+        if active_row and active_row.get("horizon_pct") is not None:
+            active_bit = (
+                f"当前聚焦「{active_label}」近端 {float(active_row['horizon_pct']):+.1f}%，"
+            )
+        else:
+            active_bit = f"当前聚焦「{active_label}」，"
+
+    if bias == "bullish":
+        summary = (
+            f"{active_bit}近 1–2 周视角下板块整体偏强（均值 {avg:+.2f}%），"
+            f"领涨集中在"
+            f"{'、'.join(x['label'] for x in leaders[:2]) or '少数热点'}。"
+            "宜沿强势板块找相对强度确认，避免在落后板块盲目抄底。"
+        )
+        playbook = (
+            "下一步：优先跟踪领涨板块的回撤买点与龙头相对强度；"
+            "用分时/日线确认未破近端结构后再加仓，落后板块仅作观察。"
+        )
+    elif bias == "bearish":
+        summary = (
+            f"{active_bit}近 1–2 周视角下板块整体偏弱（均值 {avg:+.2f}%），"
+            f"压力主要来自"
+            f"{'、'.join(x['label'] for x in laggards[:2]) or '多数板块'}。"
+            "宜降低追高意愿，先看避险与高股息是否继续吸金。"
+        )
+        playbook = (
+            "下一步：控制成长股仓位弹性，关注防御/能源等相对强势是否延续；"
+            "反弹先减风险，等跌势板块出现放量止跌再议布局。"
+        )
+    else:
+        summary = (
+            f"{active_bit}近 1–2 周更像板块轮动而非单边趋势（均值 {avg:+.2f}%）。"
+            "强弱切换快，胜负手在相对强度与情报催化，而不是指数方向本身。"
+        )
+        playbook = (
+            "下一步：围绕领涨板块做「强者恒强」跟踪，承压板块只做反弹观察；"
+            "结合情报主题验证催化是否兑现，再决定加仓或换仓。"
+        )
+
+    return {
+        "horizon": "1-2w",
+        "horizon_zh": "近 1–2 周",
+        "title": "板块动向研判",
+        "blurb": "涨跌结构 · 热点评判 · 情报交叉 · 下一步布局",
+        "bias": bias,
+        "bias_zh": bias_zh,
+        "summary": summary,
+        "playbook": playbook,
+        "factors": factors[:6],
+        "leaders": leaders,
+        "laggards": laggards,
+        "breadth": {
+            "up": up,
+            "down": down,
+            "flat": flat,
+            "total": len(rows),
+            "avg_pct": avg,
+        },
+        "themes": themes[:4],
+        "intel": intel_rows[:5],
+        "active_sector_id": active_id,
+        "fetched_at": time.time(),
+    }
+
+
 def _yahoo_raw(value: Any) -> Any:
     if isinstance(value, dict):
         if "raw" in value:
@@ -3293,6 +3574,13 @@ async def build_sector_desk(
             wire_selected if p.get("symbol") == selected else p for p in wire_picks
         ]
 
+    sector_pulse = _build_sector_pulse(
+        sectors,
+        sector_news=sector_news_slim,
+        active_id=sector_id,
+        active_label=str((active or {}).get("label") or sector_id or ""),
+    )
+
     return {
         **payload,
         "sectors": [_slim_sector_etf(dict(s)) for s in sectors],
@@ -3301,6 +3589,7 @@ async def build_sector_desk(
         "market_session_label": session_from_clock()[1],
         "ai_desk": hot_desk,
         "hot_desk": hot_desk,
+        "sector_pulse": sector_pulse,
         "hot_sectors": [s for s in sectors if s.get("is_hot")][:4],
         "active_sector_id": sector_id,
         "active_sector": _slim_sector_etf(dict(active)) if active else active,

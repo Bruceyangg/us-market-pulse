@@ -140,6 +140,11 @@ const els = {
   hotSectorsBlurb: document.getElementById("hot-sectors-blurb"),
   sectorMapBlurb: document.getElementById("sector-map-blurb"),
   sectorMapCanvas: document.getElementById("sector-map-canvas"),
+  sectorPulse: document.getElementById("sector-pulse"),
+  sectorPulseTitle: document.getElementById("sector-pulse-title"),
+  sectorPulseBlurb: document.getElementById("sector-pulse-blurb"),
+  sectorPulseBias: document.getElementById("sector-pulse-bias"),
+  sectorPulseBody: document.getElementById("sector-pulse-body"),
   usMarketsBlurb: document.getElementById("us-markets-blurb"),
   usMarketsStrip: document.getElementById("us-markets-strip"),
   usFuturesTfFilters: document.getElementById("us-futures-tf-filters"),
@@ -4725,6 +4730,167 @@ function mergeListQuoteFields(next, prev) {
   return applyClockSession(out);
 }
 
+function renderSectorPulse(data) {
+  if (!els.sectorPulseBody) return;
+  const pulse =
+    data?.sector_pulse ||
+    (Array.isArray(data?.sectors) && data.sectors.length
+      ? {
+          // Soft fallback if an older payload lacked sector_pulse.
+          horizon_zh: "近 1–2 周",
+          title: "板块动向研判",
+          blurb: "涨跌结构 · 热点评判 · 情报交叉 · 下一步布局",
+          bias: "neutral",
+          bias_zh: "板块轮动",
+          summary: "正在根据板块强弱与情报生成近两周研判…",
+          playbook: "",
+          factors: [],
+          leaders: (data.sectors || [])
+            .filter((s) => Number(s.change_pct) > 0)
+            .slice(0, 3)
+            .map((s) => ({
+              id: s.id,
+              label: s.label,
+              change_pct: s.change_pct,
+              note: s.is_hot ? "热点" : "领涨",
+            })),
+          laggards: (data.sectors || [])
+            .filter((s) => Number(s.change_pct) < 0)
+            .slice(-3)
+            .reverse()
+            .map((s) => ({
+              id: s.id,
+              label: s.label,
+              change_pct: s.change_pct,
+              note: "承压",
+            })),
+          breadth: null,
+          intel: (data.sector_news || []).slice(0, 3),
+        }
+      : null);
+
+  if (!pulse) {
+    els.sectorPulseBody.innerHTML =
+      '<p class="empty">暂无板块动向研判，请点击刷新。</p>';
+    if (els.sectorPulseBias) {
+      els.sectorPulseBias.className = "brief-chip";
+      els.sectorPulseBias.textContent = "暂无";
+    }
+    return;
+  }
+
+  if (els.sectorPulseTitle) {
+    els.sectorPulseTitle.textContent = pulse.title || "板块动向研判";
+  }
+  if (els.sectorPulseBlurb) {
+    const breadth = pulse.breadth || {};
+    const bits = [pulse.blurb || pulse.horizon_zh || "近 1–2 周"];
+    if (breadth.total) {
+      bits.push(
+        `涨 ${breadth.up || 0} / 跌 ${breadth.down || 0} · 均值 ${
+          breadth.avg_pct == null ? "—" : pctText(breadth.avg_pct)
+        }`,
+      );
+    }
+    els.sectorPulseBlurb.textContent = bits.join(" · ");
+  }
+  if (els.sectorPulseBias) {
+    const bias = String(pulse.bias || "neutral");
+    els.sectorPulseBias.className = `brief-chip bias-${
+      bias === "bullish" ? "bullish" : bias === "bearish" ? "bearish" : ""
+    }`.trim();
+    els.sectorPulseBias.textContent = pulse.bias_zh || "研判中";
+  }
+
+  const rankBtn = (row, kind) => {
+    const pct = row?.change_pct;
+    const cls =
+      typeof pct === "number" ? (pct < 0 ? "down" : pct > 0 ? "up" : "") : "";
+    return `
+      <button type="button" class="sector-pulse-rank" data-pulse-sector="${escapeHtml(
+        row.id || "",
+      )}" title="打开 ${escapeHtml(row.label || "")}">
+        <span class="name">${escapeHtml(row.label || row.id || "")}</span>
+        <span class="pct ${cls}">${escapeHtml(
+          pct == null ? "—" : pctText(pct),
+        )}</span>
+        <span class="note">${escapeHtml(row.note || kind)}</span>
+      </button>
+    `;
+  };
+
+  const leaders = (pulse.leaders || []).slice(0, 4);
+  const laggards = (pulse.laggards || []).slice(0, 4);
+  const factors = (pulse.factors || []).slice(0, 6);
+  const intel = (pulse.intel || []).slice(0, 4);
+  const playbook = String(pulse.playbook || "").trim();
+
+  els.sectorPulseBody.innerHTML = `
+    <div class="sector-pulse-grid">
+      <div class="sector-pulse-main">
+        <p class="sector-pulse-summary">${escapeHtml(
+          pulse.summary || "暂无总判",
+        )}</p>
+        ${
+          playbook
+            ? `<p class="sector-pulse-playbook"><strong>下一步</strong> · ${escapeHtml(
+                playbook.replace(/^下一步[：:]?\s*/, ""),
+              )}</p>`
+            : ""
+        }
+        ${
+          factors.length
+            ? `<ul class="sector-pulse-factors">${factors
+                .map((f) => `<li>${escapeHtml(f)}</li>`)
+                .join("")}</ul>`
+            : ""
+        }
+      </div>
+      <aside class="sector-pulse-side">
+        <div class="sector-pulse-rank-block">
+          <p class="sector-pulse-rank-label">近端领涨</p>
+          <div class="sector-pulse-rank-list">
+            ${
+              leaders.length
+                ? leaders.map((r) => rankBtn(r, "领涨")).join("")
+                : '<p class="empty">暂无领涨板块</p>'
+            }
+          </div>
+        </div>
+        <div class="sector-pulse-rank-block">
+          <p class="sector-pulse-rank-label">近端承压</p>
+          <div class="sector-pulse-rank-list">
+            ${
+              laggards.length
+                ? laggards.map((r) => rankBtn(r, "承压")).join("")
+                : '<p class="empty">暂无承压板块</p>'
+            }
+          </div>
+        </div>
+        <div class="sector-pulse-intel">
+          <p class="sector-pulse-rank-label">情报交叉</p>
+          <div class="spotlight-list compact">
+            ${
+              intel.length
+                ? intel.map((item) => spotlightCardHtml(item)).join("")
+                : '<p class="empty">暂无匹配情报，稍后随板块新闻补充。</p>'
+            }
+          </div>
+        </div>
+      </aside>
+    </div>
+  `;
+
+  els.sectorPulseBody
+    .querySelectorAll("[data-pulse-sector]")
+    .forEach((btn) => {
+      btn.addEventListener("click", () => {
+        const id = btn.getAttribute("data-pulse-sector");
+        if (id) openSectorDesk(id);
+      });
+    });
+}
+
 function renderAiDesk(aiDesk) {
   const data = aiDesk || {};
   const analysis = data.analysis || {};
@@ -6539,6 +6705,7 @@ function renderSectorDesk(data) {
   state.sectors = data || null;
   if (data?.active_sector_id) state.sectorId = data.active_sector_id;
   if (data?.selected_symbol) state.sectorSymbol = data.selected_symbol;
+  renderSectorPulse(data);
   renderAiDesk(data?.hot_desk || data?.ai_desk);
   renderSectorEtfs(data?.sectors || []);
   renderSectorPicks(data);

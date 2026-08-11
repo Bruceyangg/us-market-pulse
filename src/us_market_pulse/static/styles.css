@@ -3185,6 +3185,231 @@ html[data-theme="dark"] .us-futures-card {
   min-height: 16rem;
 }
 
+/* Cross-sector 1–2 week pulse — sits under 全板块涨跌图 */
+.sector-pulse-pane {
+  border: 1px solid var(--line);
+  border-radius: 18px;
+  background: color-mix(in srgb, var(--elevated-soft) 92%, transparent);
+  padding: 0.8rem 0.85rem 0.9rem;
+  display: grid;
+  gap: 0.65rem;
+}
+
+.sector-pulse-head {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 0.75rem;
+  flex-wrap: wrap;
+}
+
+.sector-pulse-kicker {
+  margin: 0;
+  font-size: 0.7rem;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--ink-soft);
+  opacity: 0.85;
+}
+
+.sector-pulse-head h2 {
+  margin: 0.12rem 0 0;
+  font-size: 1.05rem;
+  font-weight: 750;
+  letter-spacing: -0.02em;
+}
+
+.sector-pulse-head p#sector-pulse-blurb {
+  margin: 0.15rem 0 0;
+  color: var(--ink-soft);
+  font-size: 0.78rem;
+}
+
+.sector-pulse-head-meta {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.45rem;
+  flex-wrap: wrap;
+}
+
+.sector-pulse-body {
+  display: grid;
+  gap: 0.7rem;
+}
+
+.sector-pulse-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1.35fr) minmax(14rem, 0.9fr);
+  gap: 0.75rem 1rem;
+  align-items: start;
+}
+
+.sector-pulse-main {
+  display: grid;
+  gap: 0.55rem;
+  min-width: 0;
+}
+
+.sector-pulse-summary {
+  margin: 0;
+  font-size: 0.92rem;
+  line-height: 1.55;
+  color: var(--ink);
+}
+
+.sector-pulse-playbook {
+  margin: 0;
+  padding: 0.55rem 0.7rem;
+  border-left: 2px solid color-mix(in srgb, #6aa8d4 70%, var(--line));
+  background: color-mix(in srgb, #6aa8d4 8%, transparent);
+  font-size: 0.84rem;
+  line-height: 1.5;
+  color: var(--ink);
+}
+
+.sector-pulse-playbook strong {
+  font-weight: 750;
+  letter-spacing: 0.02em;
+}
+
+.sector-pulse-factors {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: grid;
+  gap: 0.28rem;
+}
+
+.sector-pulse-factors li {
+  position: relative;
+  padding-left: 0.85rem;
+  font-size: 0.8rem;
+  line-height: 1.45;
+  color: var(--ink-soft);
+}
+
+.sector-pulse-factors li::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: 0.55em;
+  width: 0.35rem;
+  height: 0.35rem;
+  border-radius: 1px;
+  background: color-mix(in srgb, var(--ink-soft) 55%, transparent);
+}
+
+.sector-pulse-side {
+  display: grid;
+  gap: 0.55rem;
+  min-width: 0;
+}
+
+.sector-pulse-rank-block {
+  display: grid;
+  gap: 0.3rem;
+}
+
+.sector-pulse-rank-label {
+  margin: 0;
+  font-size: 0.7rem;
+  font-weight: 750;
+  letter-spacing: 0.04em;
+  color: var(--ink-soft);
+}
+
+.sector-pulse-rank-list {
+  display: grid;
+  gap: 0.28rem;
+}
+
+.sector-pulse-rank {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 0.35rem 0.5rem;
+  align-items: center;
+  width: 100%;
+  margin: 0;
+  padding: 0.38rem 0.5rem;
+  border: 1px solid color-mix(in srgb, var(--line) 80%, transparent);
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--panel) 70%, transparent);
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  transition: border-color 0.15s ease, background 0.15s ease;
+}
+
+.sector-pulse-rank:hover {
+  border-color: color-mix(in srgb, #6aa8d4 45%, var(--line));
+  background: color-mix(in srgb, #6aa8d4 8%, var(--panel));
+}
+
+.sector-pulse-rank .name {
+  font-size: 0.82rem;
+  font-weight: 650;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sector-pulse-rank .note {
+  grid-column: 1 / -1;
+  font-size: 0.68rem;
+  color: var(--ink-soft);
+}
+
+.sector-pulse-rank .pct {
+  font-size: 0.82rem;
+  font-weight: 750;
+  font-variant-numeric: tabular-nums;
+}
+
+.sector-pulse-rank .pct.up {
+  color: var(--tape-up, #d92b2b);
+}
+
+.sector-pulse-rank .pct.down {
+  color: var(--tape-down, #0f8a6a);
+}
+
+.sector-pulse-intel {
+  display: grid;
+  gap: 0.3rem;
+}
+
+.sector-pulse-intel .spotlight-list.compact {
+  gap: 0.35rem;
+}
+
+.sector-pulse-intel .spotlight-card {
+  padding: 0.45rem 0.55rem;
+}
+
+.sector-pulse-breadth {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+}
+
+@media (max-width: 860px) {
+  .sector-pulse-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+html[data-theme="dark"] .sector-pulse-pane {
+  background: rgba(12, 20, 32, 0.55);
+  border-color: rgba(148, 163, 184, 0.16);
+}
+
+html[data-theme="dark"] .sector-pulse-playbook {
+  background: color-mix(in srgb, #6aa8d4 12%, transparent);
+}
+
 .sector-map-stage {
   position: relative;
   width: 100%;
