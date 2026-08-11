@@ -21,16 +21,23 @@
               <h2>美国市场</h2>
               <p id="us-markets-blurb">期货主连与宏观条 · 红涨绿跌 · 与下方板块台同步刷新</p>
             </div>
-            <button
-              type="button"
-              class="btn ghost btn-compact us-depth-toggle"
-              id="btn-us-futures-toggle"
-              aria-expanded="false"
-              aria-controls="us-futures-grid"
-              title="展开或收起指数期货走势图"
-            >
-              期货图
-            </button>
+            <div class="us-markets-head-actions">
+              <div class="tf-filters" id="us-strip-tf-filters" role="tablist" aria-label="行情条周期">
+                <button type="button" class="filter is-active" data-ustf="day" aria-selected="true">日图</button>
+                <button type="button" class="filter" data-ustf="month" aria-selected="false">月图</button>
+                <button type="button" class="filter" data-ustf="quarter" aria-selected="false">季图</button>
+              </div>
+              <button
+                type="button"
+                class="btn ghost btn-compact us-depth-toggle"
+                id="btn-us-futures-toggle"
+                aria-expanded="false"
+                aria-controls="us-futures-grid"
+                title="展开或收起指数期货走势图"
+              >
+                期货图
+              </button>
+            </div>
           </div>
           <div class="us-markets-strip-wrap">
             <div class="us-markets-strip" id="us-markets-strip" tabindex="0" aria-label="美国市场行情条">

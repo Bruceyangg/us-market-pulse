@@ -2898,6 +2898,18 @@ html[data-theme="dark"] .desk-chg-row {
   gap: 0.65rem;
 }
 
+.us-markets-head-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.45rem;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+.us-markets-head-actions .tf-filters {
+  flex-wrap: nowrap;
+}
+
 .us-markets-head h2 {
   margin: 0;
   font-size: 1.05rem;
@@ -2998,6 +3010,18 @@ html[data-theme="dark"] .desk-chg-row {
   width: 4.2rem;
   height: 2.15rem;
   display: block;
+}
+
+.us-strip-spark-empty {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 4.2rem;
+  height: 2.15rem;
+  font-size: 0.62rem;
+  font-weight: 650;
+  color: var(--ink-soft);
+  opacity: 0.75;
 }
 
 @media (max-width: 720px) {

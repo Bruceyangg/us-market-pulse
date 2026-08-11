@@ -46,6 +46,7 @@ const state = {
   sectorPrefetchTimer: null,
   usMarkets: null,
   usFuturesTf: "intraday",
+  usStripTf: "day",
   usMarketsPollBusy: false,
   usMarketsPollPending: null,
   marketsLoadBusy: false,
@@ -148,6 +149,7 @@ const els = {
   sectorPulseBody: document.getElementById("sector-pulse-body"),
   usMarketsBlurb: document.getElementById("us-markets-blurb"),
   usMarketsStrip: document.getElementById("us-markets-strip"),
+  usStripTfFilters: document.getElementById("us-strip-tf-filters"),
   usFuturesTfFilters: document.getElementById("us-futures-tf-filters"),
   usFuturesGrid: document.getElementById("us-futures-grid"),
   sectorEtfGrid: document.getElementById("sector-etf-grid"),
@@ -7613,10 +7615,22 @@ async function loadSectorDesk({ force = false, refreshMap = false } = {}) {
   }
 }
 
-function usStripSparkHtml(row) {
-  const pts = (row?.points || [])
+function usStripTfPoints(row, tf) {
+  const want = tf || state.usStripTf || "day";
+  const series = (row?.series || {})[want] || {};
+  const pts = (series.points || row?.points || [])
     .map((p) => Number(p?.v ?? p?.c))
     .filter((n) => Number.isFinite(n));
+  return pts;
+}
+
+function stripTfReady(tf) {
+  const want = tf || state.usStripTf || "day";
+  return (state.usMarkets?.strip || []).some((row) => usStripTfPoints(row, want).length >= 2);
+}
+
+function usStripSparkHtml(row, tf) {
+  const pts = usStripTfPoints(row, tf);
   if (pts.length < 2) return "";
   const w = 56;
   const h = 28;
@@ -7639,6 +7653,14 @@ function usStripSparkHtml(row) {
 function renderUsMarketsStrip(strip) {
   if (!els.usMarketsStrip) return;
   const rows = strip || [];
+  const tf = state.usStripTf || "day";
+  if (els.usStripTfFilters) {
+    els.usStripTfFilters.querySelectorAll("[data-ustf]").forEach((btn) => {
+      const on = btn.getAttribute("data-ustf") === tf;
+      btn.classList.toggle("is-active", on);
+      btn.setAttribute("aria-selected", on ? "true" : "false");
+    });
+  }
   if (!rows.length) {
     els.usMarketsStrip.innerHTML = '<p class="empty">暂无美国市场行情</p>';
     return;
@@ -7647,6 +7669,7 @@ function renderUsMarketsStrip(strip) {
     .map((row) => {
       const pct = row.change_pct;
       const cls = pctClass(pct);
+      const spark = usStripSparkHtml(row, tf);
       return `
         <article class="us-strip-card ${cls}" data-us-sym="${escapeHtml(
           row.symbol || ""
@@ -7658,7 +7681,12 @@ function renderUsMarketsStrip(strip) {
             )}</span>
             <span class="us-strip-chg ${cls}">${escapeHtml(pctText(pct))}</span>
           </div>
-          ${usStripSparkHtml(row)}
+          ${
+            spark ||
+            `<span class="us-strip-spark-empty">${escapeHtml(
+              { day: "日图", month: "月图", quarter: "季图" }[tf] || "走势"
+            )}</span>`
+          }
         </article>
       `;
     })
@@ -7792,6 +7820,19 @@ function mergeUsMarketsPayload(prev, next) {
   });
   if ((!next.strip || !next.strip.length) && prev.strip?.length) {
     next.strip = prev.strip;
+  } else if (prev.strip?.length && next.strip?.length) {
+    const prevBy = Object.fromEntries(
+      prev.strip.map((r) => [String(r.symbol || "").toUpperCase(), r]),
+    );
+    next.strip = next.strip.map((row) => {
+      const old = prevBy[String(row.symbol || "").toUpperCase()];
+      if (!old?.series) return row;
+      const series = { ...(old.series || {}) };
+      Object.entries(row.series || {}).forEach(([tf, s]) => {
+        if ((s?.points || []).length >= 2) series[tf] = s;
+      });
+      return { ...old, ...row, series };
+    });
   }
   return next;
 }
@@ -7914,6 +7955,18 @@ async function loadUsMarketsDesk({ force = false, mode = "full" } = {}) {
 
 function bindUsMarketsDesk() {
   if (PAGE !== "sectors") return;
+  els.usStripTfFilters?.querySelectorAll("[data-ustf]").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      const tf = btn.getAttribute("data-ustf");
+      if (!tf || tf === state.usStripTf) return;
+      state.usStripTf = tf;
+      renderUsMarketsStrip(state.usMarkets?.strip || []);
+      persistPageDataCache();
+      if (!stripTfReady(tf)) {
+        void loadUsMarketsDesk({ force: true, mode: "full" });
+      }
+    });
+  });
   els.usFuturesTfFilters?.querySelectorAll("[data-uftf]").forEach((btn) => {
     btn.addEventListener("click", () => {
       const tf = btn.getAttribute("data-uftf");
@@ -8286,6 +8339,7 @@ function persistPageDataCache() {
           sectorCache: state.sectorCache || {},
           usMarkets: state.usMarkets || null,
           usFuturesTf: state.usFuturesTf || "intraday",
+          usStripTf: state.usStripTf || "day",
         })
       );
     }
@@ -8405,6 +8459,9 @@ function paintFromPageDataCache(page = PAGE) {
     }
     if (row.usMarkets) {
       if (row.usFuturesTf) state.usFuturesTf = row.usFuturesTf;
+      if (row.usStripTf && ["day", "month", "quarter"].includes(row.usStripTf)) {
+        state.usStripTf = row.usStripTf;
+      }
       renderUsMarketsDesk(row.usMarkets);
     }
     return true;

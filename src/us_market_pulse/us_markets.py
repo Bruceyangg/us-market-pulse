@@ -145,12 +145,61 @@ def _parse_trade_time(raw: str) -> int | None:
         return None
 
 
+# Higher-TF sparks for the US markets strip (no intraday — desk uses day/month/quarter).
+_STRIP_TFS: tuple[str, ...] = ("day", "month", "quarter")
+
+
+def _spark_series_from_bars(
+    bars: list[dict[str, Any]],
+    *,
+    tf_id: str,
+    source: str,
+) -> dict[str, Any] | None:
+    if len(bars) < 2:
+        return None
+    max_n = 56 if tf_id == "day" else 40
+    sampled = even_sample_points(bars, max_n)
+    points = [
+        {"t": b.get("t"), "v": b.get("c")}
+        for b in sampled
+        if b.get("c") is not None and b.get("t") is not None
+    ]
+    if len(points) < 2:
+        return None
+    change, change_pct = _series_change(sampled, "candle")
+    return {
+        "tf": tf_id,
+        "label": {"day": "日图", "month": "月图", "quarter": "季图"}.get(tf_id, tf_id),
+        "points": points,
+        "change": change,
+        "change_pct": change_pct,
+        "source": source,
+    }
+
+
+def _merge_strip_series(
+    base: dict[str, Any] | None, overlay: dict[str, Any] | None
+) -> dict[str, Any]:
+    out = dict(base or {})
+    for tf_id, series in (overlay or {}).items():
+        if _series_ok(series):
+            out[tf_id] = series
+        elif tf_id not in out:
+            out[tf_id] = series
+    return out
+
+
 def _lite_strip_row(
     spec: dict[str, str],
     quote: dict[str, Any] | None,
     points: list[dict[str, Any]] | None = None,
+    series: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     q = quote or {}
+    series_map = dict(series or {})
+    # Prefer day spark as the default points payload for older clients.
+    day_pts = list(((series_map.get("day") or {}).get("points")) or [])
+    pts = day_pts[-48:] if len(day_pts) >= 2 else list(points or [])[-48:]
     return {
         "id": spec["id"],
         "symbol": spec["symbol"],
@@ -159,7 +208,8 @@ def _lite_strip_row(
         "price": q.get("price"),
         "change": q.get("change"),
         "change_pct": q.get("change_pct"),
-        "points": list(points or [])[-48:],
+        "points": pts,
+        "series": series_map,
         "url": f"https://finance.yahoo.com/quote/{urlquote(spec['symbol'], safe='')}",
         "source": q.get("source") or "cnbc",
     }
@@ -617,43 +667,54 @@ async def _build_us_markets_inner(
             quotes = {}
             errors.append("strip quotes: timeout")
 
-        # Strip sparks: only futures symbols already in charts (cheap), skip full strip
-        # hammering on every tape poll.
-        spark_syms = [s["symbol"] for s in fut_specs]
-        sparks: dict[str, list[dict[str, Any]]] = {}
-
-        async def spark_one(sym: str) -> None:
-            try:
-                bars = await asyncio.wait_for(
-                    _fetch_cnbc_bars(client, _cnbc_for(sym), "5M", lookback_days=2),
-                    timeout=3.0,
-                )
-            except asyncio.TimeoutError:
-                bars = []
-            if len(bars) < 2:
-                try:
-                    ybars = await asyncio.wait_for(
-                        _fetch_yahoo_bars(client, sym, range_="1d", interval="5m"),
-                        timeout=3.5,
-                    )
-                    bars = ybars
-                except asyncio.TimeoutError:
-                    bars = []
-            pts = [{"t": b["t"], "v": b["c"]} for b in bars]
-            sparks[sym.upper()] = pts[-48:]
-
-        await asyncio.gather(*(spark_one(s) for s in spark_syms))
-
+        # Strip sparks: day / month / quarter (no intraday). Reuse prior series on
+        # tape polls; only fill missing higher-TF series on full builds.
         prev_strip = {
             str(r.get("symbol") or "").upper(): r
             for r in ((prev or {}).get("strip") or [])
         }
+        strip_series_map: dict[str, dict[str, Any]] = {}
+
+        async def strip_series_one(sym: str) -> None:
+            old = prev_strip.get(sym.upper()) or {}
+            series = dict(old.get("series") or {})
+            # Always keep prior good series on tape; only fetch gaps on full.
+            want_tfs = (
+                [tf for tf in _STRIP_TFS if not _series_ok(series.get(tf))]
+                if need_full
+                else []
+            )
+            for tf_id in want_tfs:
+                try:
+                    bars, src = await asyncio.wait_for(
+                        _bars_for_tf(client, sym, tf_id),
+                        timeout=5.0,
+                    )
+                except asyncio.TimeoutError:
+                    bars, src = [], "timeout"
+                spark = _spark_series_from_bars(bars, tf_id=tf_id, source=src)
+                if spark:
+                    series[tf_id] = spark
+            strip_series_map[sym.upper()] = series
+
+        await asyncio.gather(
+            *(strip_series_one(s["symbol"]) for s in US_MARKET_STRIP)
+        )
+
         strip = []
         for spec in US_MARKET_STRIP:
             old = prev_strip.get(spec["symbol"].upper()) or {}
-            pts = sparks.get(spec["symbol"].upper()) or list(old.get("points") or [])
+            series = _merge_strip_series(
+                old.get("series"),
+                strip_series_map.get(spec["symbol"].upper()),
+            )
+            day_pts = list(((series.get("day") or {}).get("points")) or [])
+            pts = day_pts or list(old.get("points") or [])
             row = _lite_strip_row(
-                spec, quotes.get(spec["symbol"].upper()), pts
+                spec,
+                quotes.get(spec["symbol"].upper()),
+                pts,
+                series=series,
             )
             if row.get("price") is None and old:
                 row["price"] = old.get("price")
@@ -727,25 +788,48 @@ async def _build_us_markets_inner(
     order = {s["id"]: i for i, s in enumerate(fut_specs)}
     futures.sort(key=lambda r: order.get(str(r.get("id") or ""), 99))
 
-    # Backfill strip sparks / quotes from futures when missing.
+    # Backfill strip higher-TF sparks / quotes from futures when missing.
     by_sym = {str(f.get("symbol") or "").upper(): f for f in futures}
     for row in strip:
         sym = str(row.get("symbol") or "").upper()
         fut = by_sym.get(sym)
         if not fut:
             continue
-        if not row.get("points"):
-            intra = ((fut.get("series") or {}).get("intraday") or {})
-            pts = list(intra.get("points") or [])[-48:]
-            if len(pts) >= 2:
-                row["points"] = [
-                    {
-                        "t": p.get("t"),
-                        "v": p.get("v") if p.get("v") is not None else p.get("c"),
-                    }
-                    for p in pts
-                    if (p.get("v") is not None or p.get("c") is not None)
-                ]
+        series = dict(row.get("series") or {})
+        fut_series = fut.get("series") or {}
+        for tf_id in _STRIP_TFS:
+            if _series_ok(series.get(tf_id)):
+                continue
+            src = fut_series.get(tf_id) or {}
+            raw_pts = list(src.get("points") or [])
+            if len(raw_pts) < 2:
+                continue
+            # Futures series may be candles; normalize to spark {t,v}.
+            spark_pts = [
+                {
+                    "t": p.get("t"),
+                    "v": p.get("v") if p.get("v") is not None else p.get("c"),
+                }
+                for p in raw_pts
+                if (p.get("v") is not None or p.get("c") is not None)
+                and p.get("t") is not None
+            ]
+            if len(spark_pts) < 2:
+                continue
+            series[tf_id] = {
+                "tf": tf_id,
+                "label": {"day": "日图", "month": "月图", "quarter": "季图"}.get(
+                    tf_id, tf_id
+                ),
+                "points": spark_pts[-56:],
+                "change": src.get("change"),
+                "change_pct": src.get("change_pct"),
+                "source": src.get("source") or fut.get("source") or "cnbc",
+            }
+        row["series"] = series
+        day_pts = list(((series.get("day") or {}).get("points")) or [])
+        if len(day_pts) >= 2:
+            row["points"] = day_pts[-48:]
         if row.get("price") is None:
             row["price"] = fut.get("price")
             row["change"] = fut.get("change")
@@ -821,6 +905,16 @@ async def _build_us_markets_inner(
             old = prev_by.get(str(fut.get("id") or "").lower())
             if old:
                 fut["series"] = _merge_futures_series(old, fut)
+        prev_strip_by = {
+            str(r.get("symbol") or "").upper(): r for r in (prev.get("strip") or [])
+        }
+        for row in payload["strip"]:
+            old = prev_strip_by.get(str(row.get("symbol") or "").upper())
+            if old:
+                row["series"] = _merge_strip_series(old.get("series"), row.get("series"))
+                day_pts = list(((row.get("series") or {}).get("day") or {}).get("points") or [])
+                if len(day_pts) >= 2:
+                    row["points"] = day_pts[-48:]
     _CACHE["payload"] = payload
     _CACHE["fetched_at"] = now
     return dict(payload)
