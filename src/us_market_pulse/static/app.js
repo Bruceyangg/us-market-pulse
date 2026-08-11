@@ -55,6 +55,7 @@ const state = {
   sectorsLoadSeq: 0,
   sectorsLoadPending: null,
   sectorPulseHorizon: "2w",
+  sectorPulseSig: "",
   sectorSearchMode: false,
   sectorSearchQuery: "",
   sectorSearchHits: [],
@@ -4775,8 +4776,43 @@ function mergeListQuoteFields(next, prev) {
   return applyClockSession(out);
 }
 
-function renderSectorPulse(data) {
+function sectorPulseSignature(data) {
+  const pulse = data?.sector_pulse || {};
+  const desk = pulse.stock_desk || {};
+  const hz = state.sectorPulseHorizon || pulse.default_horizon || "2w";
+  const view = pulse.horizons?.[hz] || pulse;
+  const pack = (list) =>
+    (list || [])
+      .map((x) => `${x?.symbol || ""}:${x?.stance || ""}:${x?.score ?? ""}`)
+      .join(",");
+  const ranks = (view.ranking || pulse.ranking || [])
+    .slice(0, 8)
+    .map((r) => `${r?.id || ""}:${r?.week_pct ?? r?.change_pct ?? ""}`)
+    .join("|");
+  return [
+    data?.active_sector_id || pulse.active_sector_id || "",
+    hz,
+    view.bias || pulse.bias || "",
+    String(view.summary || pulse.summary || "").slice(0, 48),
+    pack(desk.strong),
+    pack(desk.bearish),
+    pack(desk.watch),
+    pack(desk.weak),
+    ranks,
+  ].join("~");
+}
+
+function renderSectorPulse(data, { soft = false } = {}) {
   if (!els.sectorPulseBody) return;
+  const nextSig = sectorPulseSignature(data);
+  if (soft && nextSig && nextSig === state.sectorPulseSig) {
+    return;
+  }
+  const keepScroll = soft
+    ? Array.from(
+        els.sectorPulseBody.querySelectorAll(".sector-pulse-stock-list"),
+      ).map((el) => el.scrollTop)
+    : [];
   const pulse =
     data?.sector_pulse ||
     (Array.isArray(data?.sectors) && data.sectors.length
@@ -5256,23 +5292,26 @@ function renderSectorPulse(data) {
       });
     });
   // Keep list wheel scroll inside the column (more picks than viewport).
-  els.sectorPulseBody
-    .querySelectorAll(".sector-pulse-stock-list")
-    .forEach((list) => {
-      list.addEventListener(
-        "wheel",
-        (event) => {
-          if (list.scrollHeight <= list.clientHeight + 1) return;
-          const dy = event.deltaY;
-          const top = list.scrollTop;
-          const max = list.scrollHeight - list.clientHeight;
-          const atTop = top <= 0 && dy < 0;
-          const atBottom = top >= max - 1 && dy > 0;
-          if (!atTop && !atBottom) event.stopPropagation();
-        },
-        { passive: true },
-      );
-    });
+  const lists = els.sectorPulseBody.querySelectorAll(
+    ".sector-pulse-stock-list",
+  );
+  lists.forEach((list, idx) => {
+    if (keepScroll[idx] != null) list.scrollTop = keepScroll[idx];
+    list.addEventListener(
+      "wheel",
+      (event) => {
+        if (list.scrollHeight <= list.clientHeight + 1) return;
+        const dy = event.deltaY;
+        const top = list.scrollTop;
+        const max = list.scrollHeight - list.clientHeight;
+        const atTop = top <= 0 && dy < 0;
+        const atBottom = top >= max - 1 && dy > 0;
+        if (!atTop && !atBottom) event.stopPropagation();
+      },
+      { passive: true },
+    );
+  });
+  state.sectorPulseSig = nextSig;
 }
 
 function renderAiDesk(aiDesk) {
@@ -8109,8 +8148,9 @@ function selectSectorSymbol(sym) {
   }
   data.selected_earnings =
     data.selected_pick?.earnings || pick.earnings || null;
+  // Never keep the previous symbol's chain blurb after a switch.
   data.value_chain =
-    data.selected_pick?.value_chain || pick.value_chain || data.value_chain;
+    data.selected_pick?.value_chain || pick.value_chain || null;
   // Keep prior news briefly when slim rows have no feed yet (avoids empty flash).
   const nextNews =
     data.selected_pick?.symbol_news || pick.symbol_news || [];
@@ -8129,9 +8169,17 @@ function selectSectorSymbol(sym) {
   refreshActiveRowQuote(els.sectorPickList, data.selected_pick || pick, "data-symbol");
   setStatus(`已切换 ${pick.name || symbol} · ${pick.sector_label || ""}`);
   persistPageDataCache();
-  if (already || deskChartReady(data.selected_pick)) {
+  const chartReady = already || deskChartReady(data.selected_pick);
+  if (chartReady) {
     clearSectorChartLoading(symbol);
     if (state.sectorTf === "intraday") refreshActiveIntraday({ force: false });
+    // Soft desk sync so news / 产业链 / 财报 stay linked (no chart storm).
+    const needDesk =
+      !already ||
+      !(data.symbol_news || []).length ||
+      !data.value_chain ||
+      !data.selected_earnings;
+    if (needDesk) void loadSectorDesk({ force: false });
     return;
   }
   // Soft upgrade — force=true wiped picks cache and also force-refreshed the map.
@@ -8139,10 +8187,8 @@ function selectSectorSymbol(sym) {
   if (state.sectorTf === "intraday") {
     refreshActiveIntraday({ force: needForceIntra });
   }
-  loadSectorDesk({ force: false });
-  scheduleSectorChartCatchup(symbol, {
-    reason: pick.is_search ? "search" : "upgrade",
-  });
+  // Desk load schedules chart catchup when needed — avoid duplicate fan-out.
+  void loadSectorDesk({ force: false });
 }
 
 function sectorPickListSignature(picks) {
@@ -8187,7 +8233,7 @@ function renderSectorDesk(data) {
     state.sectorId = data.active_sector_id;
   }
   if (data?.selected_symbol) state.sectorSymbol = data.selected_symbol;
-  renderSectorPulse(data);
+  renderSectorPulse(data, { soft: Boolean(sameBoard) });
   renderAiDesk(data?.hot_desk || data?.ai_desk);
   renderSectorEtfs(data?.sectors || []);
   if (state.sectorSearchMode) {
@@ -8259,11 +8305,13 @@ async function loadSectorDesk({ force = false, refreshMap = false } = {}) {
   if (force) params.set("refresh", "true");
   setStatus(force ? "强制刷新板块…" : "同步板块行情与情报…");
   if (els.sectorsRefresh) els.sectorsRefresh.disabled = true;
-  // Map is independent — never block the desk. Only force-refresh map on explicit 刷新.
+  // Map is independent — soft desk polls skip map unless empty / explicit refresh.
   const wantMap = Boolean(refreshMap || force);
-  const mapPromise = wantMap
-    ? loadSectorMap({ force }).catch(() => null)
-    : loadSectorMap({ force: false }).catch(() => null);
+  const mapMissing = !state.sectorMap && !isSectorMapCollapsed();
+  const mapPromise =
+    wantMap || mapMissing
+      ? loadSectorMap({ force: wantMap }).catch(() => null)
+      : Promise.resolve(state.sectorMap);
   try {
     // Reuse in-flight prefetch for the same soft sector request (no symbol / no force).
     let data = null;
@@ -9130,6 +9178,63 @@ function pageDataKey(page = PAGE) {
   return `pulse_data:${page}`;
 }
 
+function slimSeriesForCache(series, { keepFull = false } = {}) {
+  if (!series || typeof series !== "object") return series;
+  const out = {};
+  for (const [tf, pack] of Object.entries(series)) {
+    if (!pack || typeof pack !== "object") continue;
+    const pts = Array.isArray(pack.points) ? pack.points : [];
+    const max = keepFull ? 180 : 48;
+    out[tf] = {
+      ...pack,
+      points: pts.length > max ? pts.slice(-max) : pts,
+    };
+  }
+  return out;
+}
+
+function slimSectorsForCache(data) {
+  if (!data || typeof data !== "object") return data;
+  const sel = String(data.selected_symbol || "").toUpperCase();
+  const slimPick = (p) => {
+    if (!p || typeof p !== "object") return p;
+    const isSel = String(p.symbol || "").toUpperCase() === sel;
+    const row = { ...p };
+    if (row.series) {
+      row.series = slimSeriesForCache(row.series, { keepFull: isSel });
+    }
+    if (Array.isArray(row.symbol_news)) {
+      row.symbol_news = row.symbol_news.slice(0, isSel ? 6 : 0);
+    }
+    return row;
+  };
+  return {
+    ...data,
+    picks: (data.picks || []).map(slimPick),
+    selected_pick: slimPick(data.selected_pick),
+    sector_news: (data.sector_news || []).slice(0, 8),
+    symbol_news: (data.symbol_news || []).slice(0, 8),
+    sector_bearish: (data.sector_bearish || []).slice(0, 6),
+    hot_sectors: (data.hot_sectors || []).slice(0, 4),
+  };
+}
+
+function slimSectorCacheForPersist(cache) {
+  const src = cache || {};
+  const prefer = [
+    state.sectorId,
+    ...(state.sectors?.hot_sectors || []).map((s) => s.id),
+  ].filter(Boolean);
+  const ids = [...new Set([...prefer, ...Object.keys(src)])].slice(0, 4);
+  const out = {};
+  for (const id of ids) {
+    const row = src[id];
+    if (!row?.data) continue;
+    out[id] = { at: row.at, data: slimSectorsForCache(row.data) };
+  }
+  return out;
+}
+
 function persistPageDataCache() {
   try {
     if (PAGE === "desk" && state.portfolio) {
@@ -9153,11 +9258,11 @@ function persistPageDataCache() {
         pageDataKey("sectors"),
         JSON.stringify({
           at: Date.now(),
-          sectors: state.sectors,
+          sectors: slimSectorsForCache(state.sectors),
           sectorId: state.sectorId,
           sectorSymbol: state.sectorSymbol,
           sectorTf: state.sectorTf,
-          sectorCache: state.sectorCache || {},
+          sectorCache: slimSectorCacheForPersist(state.sectorCache),
           usMarkets: state.usMarkets || null,
           usFuturesTf: state.usFuturesTf || "intraday",
           usStripTf: state.usStripTf || "day",
@@ -9967,22 +10072,40 @@ function bootPage() {
       }
       persistPageDataCache();
     });
-    trackPageInterval(() => loadSectorDesk(), 90 * 1000);
-    // Session badges only — never rebuild the list (that reset scroll to top).
-    trackPageInterval(() => {
-      if (state.sectors?.picks?.length) refreshSectorPickListLive();
-    }, 30 * 1000);
-    // Soft tape poll — never force over an in-flight request.
-    trackPageInterval(() => {
-      if ((state.usFuturesTf || "intraday") === "intraday") {
-        loadUsMarketsDesk({ force: false, mode: "tape" });
+    const whenVisible = (fn) => () => {
+      if (typeof document !== "undefined" && document.visibilityState === "hidden") {
+        return;
       }
-    }, 5000);
-    trackPageInterval(() => {
-      loadUsMarketsDesk({ force: false, mode: "full" });
-    }, 90 * 1000);
-    trackPageInterval(() => refreshHoldingSymbols({ force: true }), 120 * 1000);
-    trackPageInterval(() => refreshActiveIntraday(), 1500);
+      fn();
+    };
+    trackPageInterval(whenVisible(() => loadSectorDesk()), 90 * 1000);
+    // Session badges only — never rebuild the list (that reset scroll to top).
+    trackPageInterval(
+      whenVisible(() => {
+        if (state.sectors?.picks?.length) refreshSectorPickListLive();
+      }),
+      30 * 1000,
+    );
+    // Soft tape poll — never force over an in-flight request.
+    trackPageInterval(
+      whenVisible(() => {
+        if ((state.usFuturesTf || "intraday") === "intraday") {
+          loadUsMarketsDesk({ force: false, mode: "tape" });
+        }
+      }),
+      10000,
+    );
+    trackPageInterval(
+      whenVisible(() => {
+        loadUsMarketsDesk({ force: false, mode: "full" });
+      }),
+      90 * 1000,
+    );
+    trackPageInterval(
+      whenVisible(() => refreshHoldingSymbols({ force: true })),
+      120 * 1000,
+    );
+    trackPageInterval(whenVisible(() => refreshActiveIntraday()), 2000);
   } else if (PAGE === "earnings") {
     bindEarningsDesk();
     const painted = paintFromPageDataCache("earnings");

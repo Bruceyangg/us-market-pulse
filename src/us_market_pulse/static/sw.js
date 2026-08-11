@@ -1,8 +1,8 @@
 /* Pulse Desk lightweight shell cache — HTML/auth pages always network-first. */
-const CACHE = "pulse-desk-shell-v133";
+const CACHE = "pulse-desk-shell-v134";
 const SHELL = [
-  "/static/styles.css?v=20260806e39",
-  "/static/app.js?v=20260806e39",
+  "/static/styles.css?v=20260811a12",
+  "/static/app.js?v=20260811a12",
   "/static/manifest.webmanifest",
   "/static/icons/apple-touch-icon.png",
   "/static/icons/icon-192.png",
@@ -35,6 +35,10 @@ function isHtmlRequest(req, url) {
   return false;
 }
 
+function isVersionedStatic(url) {
+  return url.pathname.startsWith("/static/") && url.searchParams.has("v");
+}
+
 self.addEventListener("fetch", (event) => {
   const req = event.request;
   if (req.method !== "GET") return;
@@ -55,7 +59,23 @@ self.addEventListener("fetch", (event) => {
     return;
   }
 
-  // Static assets: prefer cache, refresh in background
+  // Versioned static (?v=): network-first so bumps apply immediately.
+  if (isVersionedStatic(url)) {
+    event.respondWith(
+      fetch(req)
+        .then((res) => {
+          if (res && res.ok) {
+            const copy = res.clone();
+            caches.open(CACHE).then((cache) => cache.put(req, copy));
+          }
+          return res;
+        })
+        .catch(async () => (await caches.match(req)) || Response.error()),
+    );
+    return;
+  }
+
+  // Other static assets: prefer cache, refresh in background
   event.respondWith(
     caches.match(req).then((cached) => {
       const network = fetch(req)
