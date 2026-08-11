@@ -2156,17 +2156,19 @@ def _pulse_rank_reason(
     is_wave: bool,
     is_hot: bool,
     kind: str,
+    window_short: str = "两周",
 ) -> str:
     bits: list[str] = []
+    w = window_short or "两周"
     if week is not None and day is not None:
         if week > 0 and day >= 0:
-            bits.append("两周顺势")
+            bits.append(f"{w}顺势")
         elif week > 0 and day < 0:
-            bits.append("两周仍强·今日回撤")
+            bits.append(f"{w}仍强·今日回撤")
         elif week < 0 and day > 0:
-            bits.append("两周偏弱·今日反弹")
+            bits.append(f"{w}偏弱·今日反弹")
         elif week < 0 and day <= 0:
-            bits.append("两周承压")
+            bits.append(f"{w}承压")
     if week is not None and avg_week is not None:
         rs = week - avg_week
         if rs >= 1.5:
@@ -2181,6 +2183,208 @@ def _pulse_rank_reason(
         bits.append("领涨" if kind == "leader" else "承压")
     # Keep card dense but readable
     return " · ".join(bits[:3])
+
+
+def _build_pulse_horizon_view(
+    rows: list[dict[str, Any]],
+    *,
+    pct_key: str,
+    horizon_id: str,
+    horizon_zh: str,
+    window_short: str,
+    active_label: str | None = None,
+) -> dict[str, Any]:
+    """One horizon slice: full high→low ranking + narrative."""
+    def _val(r: dict[str, Any]) -> float | None:
+        return _pct(r.get(pct_key))
+
+    pool = [r for r in rows if _val(r) is not None]
+    use_day_fallback = not pool
+    if use_day_fallback:
+        pool = [r for r in rows if r.get("day_pct") is not None]
+        pct_key_eff = "day_pct"
+        window_short = "今日"
+        horizon_zh = "近端（周收益待补）"
+    else:
+        pct_key_eff = pct_key
+
+    pool = sorted(
+        pool,
+        key=lambda r: float(_pct(r.get(pct_key_eff)) or -999),
+        reverse=True,
+    )
+    up = sum(1 for r in pool if (float(_pct(r.get(pct_key_eff)) or 0)) > 0.15)
+    down = sum(1 for r in pool if (float(_pct(r.get(pct_key_eff)) or 0)) < -0.15)
+    flat = max(0, len(pool) - up - down)
+    avg = (
+        round(
+            sum(float(_pct(r.get(pct_key_eff)) or 0) for r in pool) / len(pool),
+            2,
+        )
+        if pool
+        else 0.0
+    )
+
+    if avg >= 1.0 and up >= down:
+        bias, bias_zh = "bullish", "偏多"
+    elif avg <= -1.0 and down >= up:
+        bias, bias_zh = "bearish", "偏空"
+    elif up >= down + 2:
+        bias, bias_zh = "bullish", "结构性偏多"
+    elif down >= up + 2:
+        bias, bias_zh = "bearish", "结构性偏空"
+    else:
+        bias, bias_zh = "neutral", "板块轮动"
+
+    ranking: list[dict[str, Any]] = []
+    for idx, r in enumerate(pool):
+        pct = _pct(r.get(pct_key_eff))
+        day = r.get("day_pct")
+        kind = "leader" if (pct or 0) >= 0 else "laggard"
+        ranking.append(
+            {
+                "rank": idx + 1,
+                "id": r["id"],
+                "label": r["label"],
+                "symbol": r.get("symbol") or "",
+                "change_pct": pct,
+                "week_pct": pct,
+                "week5_pct": r.get("week5_pct"),
+                "week10_pct": r.get("week10_pct"),
+                "day_pct": day,
+                "spark": list(r.get("week_spark") or [])[-12:],
+                "note": _pulse_rank_reason(
+                    day=day,
+                    week=pct,
+                    avg_week=avg if not use_day_fallback else None,
+                    is_wave=bool(r.get("is_wave")),
+                    is_hot=bool(r.get("is_hot")),
+                    kind=kind,
+                    window_short=window_short,
+                ),
+                "horizon_label": window_short if not use_day_fallback else "今日",
+                "active": bool(r.get("active")),
+            }
+        )
+
+    leaders = [x for x in ranking if (x.get("change_pct") or 0) > 0][:4]
+    laggards = [x for x in reversed(ranking) if (x.get("change_pct") or 0) < 0][:4]
+
+    factors: list[str] = []
+    if pool:
+        factors.append(
+            f"样本 {len(pool)} 个板块：上涨 {up} / 下跌 {down} / 平盘 {flat}，"
+            f"{window_short}均值 {avg:+.2f}%"
+        )
+    if leaders:
+        top = "、".join(
+            f"{x['label']} {float(x['change_pct']):+.1f}%"
+            for x in leaders[:3]
+            if x.get("change_pct") is not None
+        )
+        if top:
+            factors.append(f"{window_short}领涨：{top}")
+    if laggards:
+        weak = "、".join(
+            f"{x['label']} {float(x['change_pct']):+.1f}%"
+            for x in laggards[:3]
+            if x.get("change_pct") is not None
+        )
+        if weak:
+            factors.append(f"{window_short}承压：{weak}")
+
+    growth_ids = {"semis", "tech", "cloud", "ai", "nasdaq"}
+    defense_ids = {"health", "energy", "finance"}
+    growth_avg = [
+        float(_pct(r.get(pct_key_eff)) or 0)
+        for r in pool
+        if r["id"] in growth_ids
+    ]
+    defense_avg = [
+        float(_pct(r.get(pct_key_eff)) or 0)
+        for r in pool
+        if r["id"] in defense_ids
+    ]
+    if growth_avg and defense_avg:
+        g = sum(growth_avg) / len(growth_avg)
+        d = sum(defense_avg) / len(defense_avg)
+        if g - d >= 1.2:
+            factors.append(
+                f"成长/科技链相对医疗·金融·能源更强（约 {g - d:+.1f}%），风险偏好偏积极"
+            )
+        elif d - g >= 1.2:
+            factors.append(
+                f"医疗·金融·能源相对成长更强（约 {d - g:+.1f}%），资金更偏轮动避险"
+            )
+        else:
+            factors.append("成长与非成长差距有限，更像板块内轮动而非单边风格")
+
+    active_bit = ""
+    if active_label:
+        active_row = next((r for r in pool if r.get("active")), None)
+        if active_row and _pct(active_row.get(pct_key_eff)) is not None:
+            day_bit = ""
+            if active_row.get("day_pct") is not None:
+                day_bit = f"（今日 {float(active_row['day_pct']):+.1f}%）"
+            active_bit = (
+                f"当前聚焦「{active_label}」{window_short} "
+                f"{float(_pct(active_row.get(pct_key_eff))):+.1f}%{day_bit}，"
+            )
+        else:
+            active_bit = f"当前聚焦「{active_label}」，"
+
+    if bias == "bullish":
+        summary = (
+            f"{active_bit}{window_short}视角下板块整体偏强（均值 {avg:+.2f}%），"
+            f"领涨集中在"
+            f"{'、'.join(x['label'] for x in leaders[:2]) or '少数热点'}。"
+            "宜沿强势板块找相对强度确认，避免在落后板块盲目抄底。"
+        )
+        playbook = (
+            "下一步：优先跟踪领涨板块的回撤买点与龙头相对强度；"
+            "用分时/日线确认未破近端结构后再加仓，落后板块仅作观察。"
+        )
+    elif bias == "bearish":
+        summary = (
+            f"{active_bit}{window_short}视角下板块整体偏弱（均值 {avg:+.2f}%），"
+            f"压力主要来自"
+            f"{'、'.join(x['label'] for x in laggards[:2]) or '多数板块'}。"
+            "宜降低追高意愿，先看避险与高股息是否继续吸金。"
+        )
+        playbook = (
+            "下一步：控制成长股仓位弹性，关注防御/能源等相对强势是否延续；"
+            "反弹先减风险，等跌势板块出现放量止跌再议布局。"
+        )
+    else:
+        summary = (
+            f"{active_bit}{window_short}更像板块轮动而非单边趋势（均值 {avg:+.2f}%）。"
+            "强弱切换快，胜负手在相对强度与情报催化，而不是指数方向本身。"
+        )
+        playbook = (
+            "下一步：围绕领涨板块做「强者恒强」跟踪，承压板块只做反弹观察；"
+            "结合情报主题验证催化是否兑现，再决定加仓或换仓。"
+        )
+
+    return {
+        "id": horizon_id,
+        "horizon_zh": horizon_zh,
+        "window_short": window_short,
+        "bias": bias,
+        "bias_zh": bias_zh,
+        "summary": summary,
+        "playbook": playbook,
+        "factors": factors[:6],
+        "leaders": leaders,
+        "laggards": laggards,
+        "ranking": ranking,
+        "breadth": {
+            "up": up,
+            "down": down,
+            "flat": flat,
+            "total": len(pool),
+            "avg_pct": avg,
+        },
+    }
 
 
 def _pulse_stock_intel_hit(
@@ -2379,157 +2583,6 @@ def _build_sector_pulse(
             }
         )
 
-    rows.sort(
-        key=lambda r: (
-            float(
-                r.get("horizon_pct")
-                if r.get("horizon_pct") is not None
-                else r.get("day_pct")
-                if r.get("day_pct") is not None
-                else -999
-            ),
-            float(r.get("momentum") or -999),
-        ),
-        reverse=True,
-    )
-
-    scored = [r for r in rows if r.get("horizon_pct") is not None]
-    rank_pool = scored or rows
-    up = sum(1 for r in rank_pool if (r.get("horizon_pct") or r.get("day_pct") or 0) > 0.15)
-    down = sum(
-        1 for r in rank_pool if (r.get("horizon_pct") or r.get("day_pct") or 0) < -0.15
-    )
-    flat = max(0, len(rank_pool) - up - down)
-    avg = (
-        round(
-            sum(
-                float(
-                    r.get("horizon_pct")
-                    if r.get("horizon_pct") is not None
-                    else r.get("day_pct")
-                    or 0
-                )
-                for r in rank_pool
-            )
-            / len(rank_pool),
-            2,
-        )
-        if rank_pool
-        else 0.0
-    )
-    horizon_ready = any(r.get("horizon_ok") for r in rows)
-    horizon_zh = "近 10 个交易日（约两周）" if horizon_ready else "近端（两周收益待补）"
-
-    if avg >= 1.0 and up >= down:
-        bias, bias_zh = "bullish", "偏多"
-    elif avg <= -1.0 and down >= up:
-        bias, bias_zh = "bearish", "偏空"
-    elif up >= down + 2:
-        bias, bias_zh = "bullish", "结构性偏多"
-    elif down >= up + 2:
-        bias, bias_zh = "bearish", "结构性偏空"
-    else:
-        bias, bias_zh = "neutral", "板块轮动"
-
-    def _rank_row(r: dict[str, Any], kind: str) -> dict[str, Any]:
-        week = r.get("horizon_pct")
-        day = r.get("day_pct")
-        return {
-            "id": r["id"],
-            "label": r["label"],
-            "symbol": r.get("symbol") or "",
-            "change_pct": week if week is not None else day,
-            "week_pct": week,
-            "week5_pct": r.get("week5_pct"),
-            "day_pct": day,
-            "spark": list(r.get("week_spark") or [])[-12:],
-            "note": _pulse_rank_reason(
-                day=day,
-                week=week,
-                avg_week=avg if horizon_ready else None,
-                is_wave=bool(r.get("is_wave")),
-                is_hot=bool(r.get("is_hot")),
-                kind=kind,
-            ),
-            "horizon_label": "近两周" if week is not None else "今日",
-        }
-
-    def _rank_val(r: dict[str, Any]) -> float | None:
-        # When 2-week data is available, never mix day% into the ranking pool.
-        if horizon_ready:
-            return (
-                float(r["horizon_pct"])
-                if r.get("horizon_pct") is not None
-                else None
-            )
-        if r.get("day_pct") is not None:
-            return float(r["day_pct"])
-        return None
-
-    pool = [r for r in rows if _rank_val(r) is not None] or rows
-    leaders = [
-        _rank_row(r, "leader") for r in pool if (_rank_val(r) or 0) > 0
-    ][:4]
-    laggards = [
-        _rank_row(r, "laggard")
-        for r in reversed(pool)
-        if (_rank_val(r) or 0) < 0
-    ][:4]
-
-    factors: list[str] = []
-    if rows:
-        factors.append(
-            f"样本 {len(rank_pool)} 个板块：上涨 {up} / 下跌 {down} / 平盘 {flat}，"
-            f"{'近两周' if horizon_ready else '近端'}均值 {avg:+.2f}%"
-        )
-    if leaders:
-        top = "、".join(
-            f"{x['label']} {float(x['change_pct']):+.1f}%"
-            for x in leaders[:3]
-            if x.get("change_pct") is not None
-        )
-        if top:
-            factors.append(
-                f"{'近两周' if horizon_ready else '近端'}领涨：{top}"
-            )
-    if laggards:
-        weak = "、".join(
-            f"{x['label']} {float(x['change_pct']):+.1f}%"
-            for x in laggards[:3]
-            if x.get("change_pct") is not None
-        )
-        if weak:
-            factors.append(
-                f"{'近两周' if horizon_ready else '近端'}承压：{weak}"
-            )
-
-    # Rotation read: growth vs defensive-ish labels
-    growth_ids = {"semis", "tech", "cloud", "ai", "nasdaq"}
-    defense_ids = {"health", "energy", "finance"}
-    growth_avg = [
-        float(r["horizon_pct"])
-        for r in rows
-        if r["id"] in growth_ids and r.get("horizon_pct") is not None
-    ]
-    defense_avg = [
-        float(r["horizon_pct"])
-        for r in rows
-        if r["id"] in defense_ids and r.get("horizon_pct") is not None
-    ]
-    if growth_avg and defense_avg:
-        g = sum(growth_avg) / len(growth_avg)
-        d = sum(defense_avg) / len(defense_avg)
-        if g - d >= 1.2:
-            factors.append(
-                f"成长/科技链相对医疗·金融·能源更强（约 {g - d:+.1f}%），风险偏好偏积极"
-            )
-        elif d - g >= 1.2:
-            factors.append(
-                f"医疗·金融·能源相对成长更强（约 {d - g:+.1f}%），资金更偏轮动避险"
-            )
-        else:
-            factors.append("成长与非成长差距有限，更像板块内轮动而非单边风格")
-
     # Intel: prefer active sector news, then cached intel matching sector labels.
     label_set = {str(r["label"]) for r in rows}
     label_set.update({str(r["id"]) for r in rows})
@@ -2565,7 +2618,6 @@ def _build_sector_pulse(
     except Exception:  # noqa: BLE001
         pass
 
-    # Dedupe by title
     seen_t: set[str] = set()
     intel_rows: list[dict[str, Any]] = []
     themes: list[str] = []
@@ -2593,66 +2645,39 @@ def _build_sector_pulse(
         if len(intel_rows) >= 5:
             break
 
+    view_1w = _build_pulse_horizon_view(
+        rows,
+        pct_key="week5_pct",
+        horizon_id="1w",
+        horizon_zh="近 5 个交易日（约一周）",
+        window_short="近一周",
+        active_label=active_label,
+    )
+    view_2w = _build_pulse_horizon_view(
+        rows,
+        pct_key="week10_pct",
+        horizon_id="2w",
+        horizon_zh="近 10 个交易日（约两周）",
+        window_short="近两周",
+        active_label=active_label,
+    )
+
+    # Attach shared intel note onto each horizon's factors (keep lists short).
+    intel_note = ""
     if intel_rows:
-        factors.append(
+        intel_note = (
             f"相关情报 {len(intel_rows)} 条（利多 {bull_n} / 利空 {bear_n}），"
             "需与涨跌方向交叉验证"
         )
-        if bear_n > bull_n + 1 and bias != "bearish":
-            factors.append("舆情偏空但盘面未必同步——留意预期差与假突破")
-        elif bull_n > bear_n + 1 and bias != "bullish":
-            factors.append("舆情偏暖但板块尚未全面跟——更宜等确认再加仓")
-
-    active_bit = ""
-    if active_label:
-        active_row = next((r for r in rows if r.get("active")), None)
-        if active_row and active_row.get("horizon_pct") is not None:
-            day_bit = ""
-            if active_row.get("day_pct") is not None:
-                day_bit = f"（今日 {float(active_row['day_pct']):+.1f}%）"
-            active_bit = (
-                f"当前聚焦「{active_label}」近两周 "
-                f"{float(active_row['horizon_pct']):+.1f}%{day_bit}，"
-            )
-        elif active_row and active_row.get("day_pct") is not None:
-            active_bit = (
-                f"当前聚焦「{active_label}」今日 {float(active_row['day_pct']):+.1f}%，"
-            )
-        else:
-            active_bit = f"当前聚焦「{active_label}」，"
-
-    window_zh = "近两周" if horizon_ready else "近端"
-    if bias == "bullish":
-        summary = (
-            f"{active_bit}{window_zh}视角下板块整体偏强（均值 {avg:+.2f}%），"
-            f"领涨集中在"
-            f"{'、'.join(x['label'] for x in leaders[:2]) or '少数热点'}。"
-            "宜沿强势板块找相对强度确认，避免在落后板块盲目抄底。"
-        )
-        playbook = (
-            "下一步：优先跟踪领涨板块的回撤买点与龙头相对强度；"
-            "用分时/日线确认未破近端结构后再加仓，落后板块仅作观察。"
-        )
-    elif bias == "bearish":
-        summary = (
-            f"{active_bit}{window_zh}视角下板块整体偏弱（均值 {avg:+.2f}%），"
-            f"压力主要来自"
-            f"{'、'.join(x['label'] for x in laggards[:2]) or '多数板块'}。"
-            "宜降低追高意愿，先看避险与高股息是否继续吸金。"
-        )
-        playbook = (
-            "下一步：控制成长股仓位弹性，关注防御/能源等相对强势是否延续；"
-            "反弹先减风险，等跌势板块出现放量止跌再议布局。"
-        )
-    else:
-        summary = (
-            f"{active_bit}{window_zh}更像板块轮动而非单边趋势（均值 {avg:+.2f}%）。"
-            "强弱切换快，胜负手在相对强度与情报催化，而不是指数方向本身。"
-        )
-        playbook = (
-            "下一步：围绕领涨板块做「强者恒强」跟踪，承压板块只做反弹观察；"
-            "结合情报主题验证催化是否兑现，再决定加仓或换仓。"
-        )
+        for view in (view_1w, view_2w):
+            fac = list(view.get("factors") or [])
+            if intel_note and intel_note not in fac:
+                fac.append(intel_note)
+            if bear_n > bull_n + 1 and view.get("bias") != "bearish":
+                fac.append("舆情偏空但盘面未必同步——留意预期差与假突破")
+            elif bull_n > bear_n + 1 and view.get("bias") != "bullish":
+                fac.append("舆情偏暖但板块尚未全面跟——更宜等确认再加仓")
+            view["factors"] = fac[:6]
 
     stock_desk = _build_pulse_stock_desk(
         picks,
@@ -2670,26 +2695,25 @@ def _build_sector_pulse(
         ),
     )
 
+    # Default surface = 2w (fallback to 1w fields for older clients).
+    primary = view_2w if (view_2w.get("ranking") or []) else view_1w
     return {
-        "horizon": "10d" if horizon_ready else "day",
-        "horizon_zh": horizon_zh,
+        "horizon": primary.get("id") or "2w",
+        "horizon_zh": primary.get("horizon_zh") or "近 10 个交易日（约两周）",
+        "default_horizon": "2w",
         "title": "板块动向研判",
         "blurb": "涨跌结构 · 热点评判 · 个股强弱 · 情报交叉 · 下一步布局",
-        "bias": bias,
-        "bias_zh": bias_zh,
-        "summary": summary,
-        "playbook": playbook,
-        "factors": factors[:6],
-        "leaders": leaders,
-        "laggards": laggards,
+        "bias": primary.get("bias"),
+        "bias_zh": primary.get("bias_zh"),
+        "summary": primary.get("summary"),
+        "playbook": primary.get("playbook"),
+        "factors": primary.get("factors") or [],
+        "leaders": primary.get("leaders") or [],
+        "laggards": primary.get("laggards") or [],
+        "ranking": primary.get("ranking") or [],
+        "horizons": {"1w": view_1w, "2w": view_2w},
         "stock_desk": stock_desk,
-        "breadth": {
-            "up": up,
-            "down": down,
-            "flat": flat,
-            "total": len(rank_pool),
-            "avg_pct": avg,
-        },
+        "breadth": primary.get("breadth") or {},
         "themes": themes[:4],
         "intel": intel_rows[:5],
         "active_sector_id": active_id,

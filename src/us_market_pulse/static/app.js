@@ -53,6 +53,7 @@ const state = {
   sectorsLoadBusy: false,
   sectorsLoadSeq: 0,
   sectorsLoadPending: null,
+  sectorPulseHorizon: "2w",
   chartUpgradeSym: "",
   symbolNewsRetrySym: "",
   earnings: null,
@@ -4764,6 +4765,20 @@ function renderSectorPulse(data) {
               change_pct: s.change_pct,
               note: "承压",
             })),
+          ranking: (data.sectors || [])
+            .slice()
+            .sort((a, b) => Number(b.change_pct || 0) - Number(a.change_pct || 0))
+            .map((s, i) => ({
+              rank: i + 1,
+              id: s.id,
+              label: s.label,
+              symbol: s.symbol || "",
+              change_pct: s.change_pct,
+              week_pct: s.change_pct,
+              day_pct: s.change_pct,
+              note: Number(s.change_pct) < 0 ? "承压" : "领涨",
+              horizon_label: "今日",
+            })),
           breadth: null,
           intel: (data.sector_news || []).slice(0, 3),
         }
@@ -4779,19 +4794,46 @@ function renderSectorPulse(data) {
     return;
   }
 
+  const horizons = pulse.horizons || {};
+  const wanted = state.sectorPulseHorizon === "1w" ? "1w" : "2w";
+  const alt = wanted === "1w" ? "2w" : "1w";
+  const view =
+    horizons[wanted] ||
+    horizons[alt] ||
+    {
+      id: wanted,
+      horizon_zh: pulse.horizon_zh,
+      window_short: wanted === "1w" ? "近一周" : "近两周",
+      bias: pulse.bias,
+      bias_zh: pulse.bias_zh,
+      summary: pulse.summary,
+      playbook: pulse.playbook,
+      factors: pulse.factors,
+      leaders: pulse.leaders,
+      laggards: pulse.laggards,
+      ranking: pulse.ranking,
+      breadth: pulse.breadth,
+    };
+  state.sectorPulseHorizon = view.id === "1w" ? "1w" : "2w";
+  const windowShort =
+    view.window_short ||
+    (state.sectorPulseHorizon === "1w" ? "近一周" : "近两周");
+
   const kicker = document.getElementById("sector-pulse-kicker");
   if (kicker) {
-    kicker.textContent = `研判窗口 · ${pulse.horizon_zh || "近 10 个交易日（约两周）"}`;
+    kicker.textContent = `研判窗口 · ${
+      view.horizon_zh || pulse.horizon_zh || "近 10 个交易日（约两周）"
+    }`;
   }
   if (els.sectorPulseTitle) {
     els.sectorPulseTitle.textContent = pulse.title || "板块动向研判";
   }
   if (els.sectorPulseBlurb) {
-    const breadth = pulse.breadth || {};
+    const breadth = view.breadth || pulse.breadth || {};
     const bits = [pulse.blurb || "涨跌结构 · 热点评判 · 情报交叉 · 下一步布局"];
     if (breadth.total) {
       bits.push(
-        `涨 ${breadth.up || 0} / 跌 ${breadth.down || 0} · 近两周均值 ${
+        `涨 ${breadth.up || 0} / 跌 ${breadth.down || 0} · ${windowShort}均值 ${
           breadth.avg_pct == null ? "—" : pctText(breadth.avg_pct)
         }`,
       );
@@ -4799,11 +4841,11 @@ function renderSectorPulse(data) {
     els.sectorPulseBlurb.textContent = bits.join(" · ");
   }
   if (els.sectorPulseBias) {
-    const bias = String(pulse.bias || "neutral");
+    const bias = String(view.bias || pulse.bias || "neutral");
     els.sectorPulseBias.className = `brief-chip bias-${
       bias === "bullish" ? "bullish" : bias === "bearish" ? "bearish" : ""
     }`.trim();
-    els.sectorPulseBias.textContent = pulse.bias_zh || "研判中";
+    els.sectorPulseBias.textContent = view.bias_zh || pulse.bias_zh || "研判中";
   }
 
   const pulseSparkHtml = (spark) => {
@@ -4848,13 +4890,19 @@ function renderSectorPulse(data) {
             ? "up"
             : ""
         : "";
-    const horizon = row?.horizon_label || (row?.week_pct != null ? "近两周" : "今日");
+    const horizon = row?.horizon_label || windowShort;
+    const rankNo = row?.rank != null ? String(row.rank) : "";
     return `
       <button type="button" class="sector-pulse-rank" data-pulse-sector="${escapeHtml(
         row.id || "",
       )}" title="打开 ${escapeHtml(row.label || "")}">
         <span class="sector-pulse-rank-top">
           <span class="name-wrap">
+            ${
+              rankNo
+                ? `<span class="rank-no">${escapeHtml(rankNo)}</span>`
+                : ""
+            }
             <span class="name">${escapeHtml(row.label || row.id || "")}</span>
             <span class="sym">${escapeHtml(row.symbol || "")}</span>
           </span>
@@ -4876,15 +4924,23 @@ function renderSectorPulse(data) {
     `;
   };
 
-  const leaders = (pulse.leaders || []).slice(0, 4);
-  const laggards = (pulse.laggards || []).slice(0, 4);
-  const factors = (pulse.factors || []).slice(0, 6);
+  let ranking = Array.isArray(view.ranking) ? view.ranking.slice() : [];
+  if (!ranking.length) {
+    const leaders = view.leaders || pulse.leaders || [];
+    const laggards = view.laggards || pulse.laggards || [];
+    ranking = [...leaders, ...laggards].map((r, i) => ({
+      ...r,
+      rank: r.rank || i + 1,
+    }));
+  }
+  const factors = (view.factors || pulse.factors || []).slice(0, 6);
   const intel = (pulse.intel || []).slice(0, 4);
-  const playbook = String(pulse.playbook || "").trim();
+  const playbook = String(view.playbook || pulse.playbook || "").trim();
   const stockDesk = pulse.stock_desk || {};
   const stockStrong = (stockDesk.strong || []).slice(0, 4);
   const stockWatch = (stockDesk.watch || []).slice(0, 3);
   const stockWeak = (stockDesk.weak || []).slice(0, 3);
+  const hz1 = state.sectorPulseHorizon === "1w";
 
   const stockCard = (row, tone) => {
     const day = row?.change_pct;
@@ -4980,8 +5036,16 @@ function renderSectorPulse(data) {
   els.sectorPulseBody.innerHTML = `
     <div class="sector-pulse-grid">
       <div class="sector-pulse-main">
+        <div class="sector-pulse-horizon-bar" role="group" aria-label="研判周期">
+          <button type="button" class="sector-pulse-hz ${
+            hz1 ? "is-active" : ""
+          }" data-pulse-horizon="1w">一周分析</button>
+          <button type="button" class="sector-pulse-hz ${
+            hz1 ? "" : "is-active"
+          }" data-pulse-horizon="2w">两周分析</button>
+        </div>
         <p class="sector-pulse-summary">${escapeHtml(
-          pulse.summary || "暂无总判",
+          view.summary || pulse.summary || "暂无总判",
         )}</p>
         ${
           playbook
@@ -5010,23 +5074,22 @@ function renderSectorPulse(data) {
         </div>
       </div>
       <aside class="sector-pulse-side">
-        <div class="sector-pulse-rank-block">
-          <p class="sector-pulse-rank-label">近两周领涨</p>
-          <div class="sector-pulse-rank-list">
+        <div class="sector-pulse-rank-block sector-pulse-rank-block-full">
+          <p class="sector-pulse-rank-label">${escapeHtml(
+            windowShort,
+          )}涨跌幅排名 · 高→低</p>
+          <div class="sector-pulse-rank-list sector-pulse-rank-scroll">
             ${
-              leaders.length
-                ? leaders.map((r) => rankBtn(r, "领涨")).join("")
-                : '<p class="empty">暂无领涨板块</p>'
-            }
-          </div>
-        </div>
-        <div class="sector-pulse-rank-block">
-          <p class="sector-pulse-rank-label">近两周承压</p>
-          <div class="sector-pulse-rank-list">
-            ${
-              laggards.length
-                ? laggards.map((r) => rankBtn(r, "承压")).join("")
-                : '<p class="empty">暂无承压板块</p>'
+              ranking.length
+                ? ranking
+                    .map((r) =>
+                      rankBtn(
+                        r,
+                        (r.change_pct || 0) < 0 ? "承压" : "领涨",
+                      ),
+                    )
+                    .join("")
+                : '<p class="empty">暂无排名数据</p>'
             }
           </div>
         </div>
@@ -5034,6 +5097,17 @@ function renderSectorPulse(data) {
     </div>
   `;
 
+  els.sectorPulseBody
+    .querySelectorAll("[data-pulse-horizon]")
+    .forEach((btn) => {
+      btn.addEventListener("click", () => {
+        const hz = btn.getAttribute("data-pulse-horizon");
+        if (hz !== "1w" && hz !== "2w") return;
+        if (state.sectorPulseHorizon === hz) return;
+        state.sectorPulseHorizon = hz;
+        renderSectorPulse(data || state.sectors);
+      });
+    });
   els.sectorPulseBody
     .querySelectorAll("[data-pulse-sector]")
     .forEach((btn) => {
