@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import time
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 from typing import Any
 from zoneinfo import ZoneInfo
 
@@ -2044,6 +2044,145 @@ def _move_analysis(
     }
 
 
+# ETF ~2-week return memo for sector pulse (avoid N× daily scrapes per click).
+_PULSE_RET_CACHE: dict[str, dict[str, Any]] = {}
+_PULSE_RET_TTL = 900.0
+
+
+def _pct_from_closes(closes: list[float], lookback: int) -> float | None:
+    """Return % change over `lookback` trading sessions (e.g. 10 ≈ 2 weeks)."""
+    if lookback < 1 or len(closes) <= lookback:
+        return None
+    base = closes[-(lookback + 1)]
+    last = closes[-1]
+    if base == 0:
+        return None
+    try:
+        return round((last - base) / abs(base) * 100.0, 2)
+    except (TypeError, ValueError, ZeroDivisionError):
+        return None
+
+
+async def _attach_sector_horizon_returns(sectors: list[dict[str, Any]]) -> None:
+    """Stamp week5 / week10 ETF returns (+ spark) onto sector rows in-place."""
+    now = time.time()
+    need: list[str] = []
+    for row in sectors or []:
+        sym = str((row or {}).get("symbol") or "").upper().strip()
+        if not sym:
+            continue
+        hit = _PULSE_RET_CACHE.get(sym)
+        if (
+            isinstance(hit, dict)
+            and now - float(hit.get("at") or 0) < _PULSE_RET_TTL
+            and hit.get("week10_pct") is not None
+        ):
+            row["week5_pct"] = hit.get("week5_pct")
+            row["week10_pct"] = hit.get("week10_pct")
+            row["week_spark"] = list(hit.get("spark") or [])
+        else:
+            need.append(sym)
+    if not need:
+        return
+
+    uniq = list(dict.fromkeys(need))
+    from_d = date.today() - timedelta(days=45)
+
+    async def _one(
+        client: httpx.AsyncClient, sym: str, sem: asyncio.Semaphore
+    ) -> None:
+        async with sem:
+            bars: list[dict[str, Any]] = []
+            try:
+                # Sector board ETFs resolve under assetclass=etf on Nasdaq.
+                bars = await fetch_nasdaq_daily_bars(
+                    client,
+                    sym,
+                    fromdate=from_d,
+                    todate=date.today(),
+                    assetclass="etf",
+                )
+            except Exception:  # noqa: BLE001
+                bars = []
+            closes = [
+                float(b["c"])
+                for b in bars
+                if isinstance(b, dict) and isinstance(b.get("c"), (int, float))
+            ]
+            if len(closes) < 6:
+                return
+            week5 = _pct_from_closes(closes, 5)
+            week10 = _pct_from_closes(closes, 10)
+            spark = [round(c, 4) for c in closes[-12:]]
+            _PULSE_RET_CACHE[sym] = {
+                "at": time.time(),
+                "week5_pct": week5,
+                "week10_pct": week10 if week10 is not None else week5,
+                "spark": spark,
+            }
+
+    try:
+        async with httpx.AsyncClient(
+            follow_redirects=True,
+            trust_env=False,
+            timeout=httpx.Timeout(8.0, connect=2.5),
+        ) as client:
+            sem = asyncio.Semaphore(5)
+            await asyncio.wait_for(
+                asyncio.gather(
+                    *[_one(client, s, sem) for s in uniq],
+                    return_exceptions=True,
+                ),
+                timeout=7.0,
+            )
+    except Exception:  # noqa: BLE001
+        pass
+
+    for row in sectors or []:
+        sym = str((row or {}).get("symbol") or "").upper().strip()
+        hit = _PULSE_RET_CACHE.get(sym)
+        if not isinstance(hit, dict):
+            continue
+        row["week5_pct"] = hit.get("week5_pct")
+        row["week10_pct"] = hit.get("week10_pct")
+        row["week_spark"] = list(hit.get("spark") or [])
+
+
+def _pulse_rank_reason(
+    *,
+    day: float | None,
+    week: float | None,
+    avg_week: float | None,
+    is_wave: bool,
+    is_hot: bool,
+    kind: str,
+) -> str:
+    bits: list[str] = []
+    if week is not None and day is not None:
+        if week > 0 and day >= 0:
+            bits.append("两周顺势")
+        elif week > 0 and day < 0:
+            bits.append("两周仍强·今日回撤")
+        elif week < 0 and day > 0:
+            bits.append("两周偏弱·今日反弹")
+        elif week < 0 and day <= 0:
+            bits.append("两周承压")
+    if week is not None and avg_week is not None:
+        rs = week - avg_week
+        if rs >= 1.5:
+            bits.append("强于板块均值")
+        elif rs <= -1.5:
+            bits.append("弱于板块均值")
+    if is_wave:
+        bits.append("一轮涨势")
+    elif is_hot and kind == "leader":
+        bits.append("热点")
+    if not bits:
+        bits.append("领涨" if kind == "leader" else "承压")
+    # Keep card dense but readable
+    return " · ".join(bits[:3])
+
+
 def _build_sector_pulse(
     sectors: list[dict[str, Any]],
     *,
@@ -2051,7 +2190,7 @@ def _build_sector_pulse(
     active_id: str | None = None,
     active_label: str | None = None,
 ) -> dict[str, Any]:
-    """Cross-sector 1–2 week pulse: ranking, bias, intel, next-step playbook."""
+    """Cross-sector ~2-week pulse: ranking, bias, intel, next-step playbook."""
     rows: list[dict[str, Any]] = []
     for raw in sectors or []:
         if not isinstance(raw, dict):
@@ -2061,10 +2200,14 @@ def _build_sector_pulse(
         if not sid or not label:
             continue
         day = _pct(raw.get("change_pct"))
-        month = _pct(raw.get("month_change_pct"))
-        # Prefer month when it carries real medium-term signal; else day tape.
-        horizon_pct = month if month is not None else day
-        score = _momentum_score(day, month if month is not None else day)
+        week5 = _pct(raw.get("week5_pct"))
+        week10 = _pct(raw.get("week10_pct"))
+        # True horizon = ~10 trading days (≈2 weeks). Fall back to 5d, never
+        # silently reuse day% as "近两周" (that misled the desk UI).
+        horizon_pct = week10 if week10 is not None else week5
+        horizon_ok = horizon_pct is not None
+        score_basis = horizon_pct if horizon_ok else day
+        score = _momentum_score(day, score_basis)
         rows.append(
             {
                 "id": sid,
@@ -2072,8 +2215,12 @@ def _build_sector_pulse(
                 "symbol": str(raw.get("symbol") or ""),
                 "blurb": str(raw.get("blurb") or ""),
                 "change_pct": day,
-                "month_change_pct": month,
+                "day_pct": day,
+                "week5_pct": week5,
+                "week10_pct": week10,
                 "horizon_pct": horizon_pct,
+                "horizon_ok": horizon_ok,
+                "week_spark": list(raw.get("week_spark") or [])[-12:],
                 "momentum": score,
                 "is_hot": bool(raw.get("is_hot")),
                 "is_wave": bool(raw.get("is_wave")),
@@ -2083,23 +2230,44 @@ def _build_sector_pulse(
 
     rows.sort(
         key=lambda r: (
+            float(
+                r.get("horizon_pct")
+                if r.get("horizon_pct") is not None
+                else r.get("day_pct")
+                if r.get("day_pct") is not None
+                else -999
+            ),
             float(r.get("momentum") or -999),
-            float(r.get("horizon_pct") if r.get("horizon_pct") is not None else -999),
         ),
         reverse=True,
     )
 
-    up = sum(1 for r in rows if (r.get("horizon_pct") or 0) > 0.15)
-    down = sum(1 for r in rows if (r.get("horizon_pct") or 0) < -0.15)
-    flat = max(0, len(rows) - up - down)
+    scored = [r for r in rows if r.get("horizon_pct") is not None]
+    rank_pool = scored or rows
+    up = sum(1 for r in rank_pool if (r.get("horizon_pct") or r.get("day_pct") or 0) > 0.15)
+    down = sum(
+        1 for r in rank_pool if (r.get("horizon_pct") or r.get("day_pct") or 0) < -0.15
+    )
+    flat = max(0, len(rank_pool) - up - down)
     avg = (
         round(
-            sum(float(r.get("horizon_pct") or 0) for r in rows) / len(rows),
+            sum(
+                float(
+                    r.get("horizon_pct")
+                    if r.get("horizon_pct") is not None
+                    else r.get("day_pct")
+                    or 0
+                )
+                for r in rank_pool
+            )
+            / len(rank_pool),
             2,
         )
-        if rows
+        if rank_pool
         else 0.0
     )
+    horizon_ready = any(r.get("horizon_ok") for r in rows)
+    horizon_zh = "近 10 个交易日（约两周）" if horizon_ready else "近端（两周收益待补）"
 
     if avg >= 1.0 and up >= down:
         bias, bias_zh = "bullish", "偏多"
@@ -2112,34 +2280,56 @@ def _build_sector_pulse(
     else:
         bias, bias_zh = "neutral", "板块轮动"
 
-    leaders = [
-        {
+    def _rank_row(r: dict[str, Any], kind: str) -> dict[str, Any]:
+        week = r.get("horizon_pct")
+        day = r.get("day_pct")
+        return {
             "id": r["id"],
             "label": r["label"],
-            "change_pct": r.get("horizon_pct"),
-            "day_pct": r.get("change_pct"),
-            "note": "一轮涨势" if r.get("is_wave") else ("热点" if r.get("is_hot") else "领涨"),
+            "symbol": r.get("symbol") or "",
+            "change_pct": week if week is not None else day,
+            "week_pct": week,
+            "week5_pct": r.get("week5_pct"),
+            "day_pct": day,
+            "spark": list(r.get("week_spark") or [])[-12:],
+            "note": _pulse_rank_reason(
+                day=day,
+                week=week,
+                avg_week=avg if horizon_ready else None,
+                is_wave=bool(r.get("is_wave")),
+                is_hot=bool(r.get("is_hot")),
+                kind=kind,
+            ),
+            "horizon_label": "近两周" if week is not None else "今日",
         }
-        for r in rows
-        if (r.get("horizon_pct") or 0) > 0
+
+    def _rank_val(r: dict[str, Any]) -> float | None:
+        # When 2-week data is available, never mix day% into the ranking pool.
+        if horizon_ready:
+            return (
+                float(r["horizon_pct"])
+                if r.get("horizon_pct") is not None
+                else None
+            )
+        if r.get("day_pct") is not None:
+            return float(r["day_pct"])
+        return None
+
+    pool = [r for r in rows if _rank_val(r) is not None] or rows
+    leaders = [
+        _rank_row(r, "leader") for r in pool if (_rank_val(r) or 0) > 0
     ][:4]
     laggards = [
-        {
-            "id": r["id"],
-            "label": r["label"],
-            "change_pct": r.get("horizon_pct"),
-            "day_pct": r.get("change_pct"),
-            "note": "承压",
-        }
-        for r in reversed(rows)
-        if (r.get("horizon_pct") or 0) < 0
+        _rank_row(r, "laggard")
+        for r in reversed(pool)
+        if (_rank_val(r) or 0) < 0
     ][:4]
 
     factors: list[str] = []
     if rows:
         factors.append(
-            f"样本 {len(rows)} 个板块：上涨 {up} / 下跌 {down} / 平盘 {flat}，"
-            f"近端均值 {avg:+.2f}%"
+            f"样本 {len(rank_pool)} 个板块：上涨 {up} / 下跌 {down} / 平盘 {flat}，"
+            f"{'近两周' if horizon_ready else '近端'}均值 {avg:+.2f}%"
         )
     if leaders:
         top = "、".join(
@@ -2148,7 +2338,9 @@ def _build_sector_pulse(
             if x.get("change_pct") is not None
         )
         if top:
-            factors.append(f"近端领涨：{top}")
+            factors.append(
+                f"{'近两周' if horizon_ready else '近端'}领涨：{top}"
+            )
     if laggards:
         weak = "、".join(
             f"{x['label']} {float(x['change_pct']):+.1f}%"
@@ -2156,7 +2348,9 @@ def _build_sector_pulse(
             if x.get("change_pct") is not None
         )
         if weak:
-            factors.append(f"近端承压：{weak}")
+            factors.append(
+                f"{'近两周' if horizon_ready else '近端'}承压：{weak}"
+            )
 
     # Rotation read: growth vs defensive-ish labels
     growth_ids = {"semis", "tech", "cloud", "ai", "nasdaq"}
@@ -2262,15 +2456,24 @@ def _build_sector_pulse(
     if active_label:
         active_row = next((r for r in rows if r.get("active")), None)
         if active_row and active_row.get("horizon_pct") is not None:
+            day_bit = ""
+            if active_row.get("day_pct") is not None:
+                day_bit = f"（今日 {float(active_row['day_pct']):+.1f}%）"
             active_bit = (
-                f"当前聚焦「{active_label}」近端 {float(active_row['horizon_pct']):+.1f}%，"
+                f"当前聚焦「{active_label}」近两周 "
+                f"{float(active_row['horizon_pct']):+.1f}%{day_bit}，"
+            )
+        elif active_row and active_row.get("day_pct") is not None:
+            active_bit = (
+                f"当前聚焦「{active_label}」今日 {float(active_row['day_pct']):+.1f}%，"
             )
         else:
             active_bit = f"当前聚焦「{active_label}」，"
 
+    window_zh = "近两周" if horizon_ready else "近端"
     if bias == "bullish":
         summary = (
-            f"{active_bit}近 1–2 周视角下板块整体偏强（均值 {avg:+.2f}%），"
+            f"{active_bit}{window_zh}视角下板块整体偏强（均值 {avg:+.2f}%），"
             f"领涨集中在"
             f"{'、'.join(x['label'] for x in leaders[:2]) or '少数热点'}。"
             "宜沿强势板块找相对强度确认，避免在落后板块盲目抄底。"
@@ -2281,7 +2484,7 @@ def _build_sector_pulse(
         )
     elif bias == "bearish":
         summary = (
-            f"{active_bit}近 1–2 周视角下板块整体偏弱（均值 {avg:+.2f}%），"
+            f"{active_bit}{window_zh}视角下板块整体偏弱（均值 {avg:+.2f}%），"
             f"压力主要来自"
             f"{'、'.join(x['label'] for x in laggards[:2]) or '多数板块'}。"
             "宜降低追高意愿，先看避险与高股息是否继续吸金。"
@@ -2292,7 +2495,7 @@ def _build_sector_pulse(
         )
     else:
         summary = (
-            f"{active_bit}近 1–2 周更像板块轮动而非单边趋势（均值 {avg:+.2f}%）。"
+            f"{active_bit}{window_zh}更像板块轮动而非单边趋势（均值 {avg:+.2f}%）。"
             "强弱切换快，胜负手在相对强度与情报催化，而不是指数方向本身。"
         )
         playbook = (
@@ -2301,8 +2504,8 @@ def _build_sector_pulse(
         )
 
     return {
-        "horizon": "1-2w",
-        "horizon_zh": "近 1–2 周",
+        "horizon": "10d" if horizon_ready else "day",
+        "horizon_zh": horizon_zh,
         "title": "板块动向研判",
         "blurb": "涨跌结构 · 热点评判 · 情报交叉 · 下一步布局",
         "bias": bias,
@@ -2316,7 +2519,7 @@ def _build_sector_pulse(
             "up": up,
             "down": down,
             "flat": flat,
-            "total": len(rows),
+            "total": len(rank_pool),
             "avg_pct": avg,
         },
         "themes": themes[:4],
@@ -3574,6 +3777,11 @@ async def build_sector_desk(
             wire_selected if p.get("symbol") == selected else p for p in wire_picks
         ]
 
+    # Real ~10 trading-day returns for pulse rankings (not day tape).
+    try:
+        await _attach_sector_horizon_returns(sectors)
+    except Exception:  # noqa: BLE001
+        pass
     sector_pulse = _build_sector_pulse(
         sectors,
         sector_news=sector_news_slim,

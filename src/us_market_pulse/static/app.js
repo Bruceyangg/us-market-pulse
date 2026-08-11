@@ -4779,15 +4779,19 @@ function renderSectorPulse(data) {
     return;
   }
 
+  const kicker = document.getElementById("sector-pulse-kicker");
+  if (kicker) {
+    kicker.textContent = `研判窗口 · ${pulse.horizon_zh || "近 10 个交易日（约两周）"}`;
+  }
   if (els.sectorPulseTitle) {
     els.sectorPulseTitle.textContent = pulse.title || "板块动向研判";
   }
   if (els.sectorPulseBlurb) {
     const breadth = pulse.breadth || {};
-    const bits = [pulse.blurb || pulse.horizon_zh || "近 1–2 周"];
+    const bits = [pulse.blurb || "涨跌结构 · 热点评判 · 情报交叉 · 下一步布局"];
     if (breadth.total) {
       bits.push(
-        `涨 ${breadth.up || 0} / 跌 ${breadth.down || 0} · 均值 ${
+        `涨 ${breadth.up || 0} / 跌 ${breadth.down || 0} · 近两周均值 ${
           breadth.avg_pct == null ? "—" : pctText(breadth.avg_pct)
         }`,
       );
@@ -4802,19 +4806,72 @@ function renderSectorPulse(data) {
     els.sectorPulseBias.textContent = pulse.bias_zh || "研判中";
   }
 
+  const pulseSparkHtml = (spark) => {
+    const vals = (spark || [])
+      .map((v) => Number(v))
+      .filter((v) => Number.isFinite(v));
+    if (vals.length < 2) return "";
+    const w = 72;
+    const h = 18;
+    const min = Math.min(...vals);
+    const max = Math.max(...vals);
+    const span = max - min || 1;
+    const pts = vals
+      .map((v, i) => {
+        const x = (i / (vals.length - 1)) * w;
+        const y = h - ((v - min) / span) * (h - 2) - 1;
+        return `${x.toFixed(1)},${y.toFixed(1)}`;
+      })
+      .join(" ");
+    const up = vals[vals.length - 1] >= vals[0];
+    return `<svg class="sector-pulse-spark ${
+      up ? "up" : "down"
+    }" viewBox="0 0 ${w} ${h}" preserveAspectRatio="none" aria-hidden="true"><polyline fill="none" stroke="currentColor" stroke-width="1.6" points="${pts}" /></svg>`;
+  };
+
   const rankBtn = (row, kind) => {
-    const pct = row?.change_pct;
+    const weekPct = row?.week_pct ?? row?.change_pct;
+    const dayPct = row?.day_pct;
     const cls =
-      typeof pct === "number" ? (pct < 0 ? "down" : pct > 0 ? "up" : "") : "";
+      typeof weekPct === "number"
+        ? weekPct < 0
+          ? "down"
+          : weekPct > 0
+            ? "up"
+            : ""
+        : "";
+    const dayCls =
+      typeof dayPct === "number"
+        ? dayPct < 0
+          ? "down"
+          : dayPct > 0
+            ? "up"
+            : ""
+        : "";
+    const horizon = row?.horizon_label || (row?.week_pct != null ? "近两周" : "今日");
     return `
       <button type="button" class="sector-pulse-rank" data-pulse-sector="${escapeHtml(
         row.id || "",
       )}" title="打开 ${escapeHtml(row.label || "")}">
-        <span class="name">${escapeHtml(row.label || row.id || "")}</span>
-        <span class="pct ${cls}">${escapeHtml(
-          pct == null ? "—" : pctText(pct),
-        )}</span>
-        <span class="note">${escapeHtml(row.note || kind)}</span>
+        <span class="sector-pulse-rank-top">
+          <span class="name-wrap">
+            <span class="name">${escapeHtml(row.label || row.id || "")}</span>
+            <span class="sym">${escapeHtml(row.symbol || "")}</span>
+          </span>
+          <span class="pct-wrap">
+            <span class="pct-label">${escapeHtml(horizon)}</span>
+            <span class="pct ${cls}">${escapeHtml(
+              weekPct == null ? "—" : pctText(weekPct),
+            )}</span>
+          </span>
+        </span>
+        <span class="sector-pulse-rank-mid">
+          <span class="day ${dayCls}">今日 ${escapeHtml(
+            dayPct == null ? "—" : pctText(dayPct),
+          )}</span>
+          <span class="note">${escapeHtml(row.note || kind)}</span>
+        </span>
+        ${pulseSparkHtml(row.spark)}
       </button>
     `;
   };
@@ -4848,7 +4905,7 @@ function renderSectorPulse(data) {
       </div>
       <aside class="sector-pulse-side">
         <div class="sector-pulse-rank-block">
-          <p class="sector-pulse-rank-label">近端领涨</p>
+          <p class="sector-pulse-rank-label">近两周领涨</p>
           <div class="sector-pulse-rank-list">
             ${
               leaders.length
@@ -4858,7 +4915,7 @@ function renderSectorPulse(data) {
           </div>
         </div>
         <div class="sector-pulse-rank-block">
-          <p class="sector-pulse-rank-label">近端承压</p>
+          <p class="sector-pulse-rank-label">近两周承压</p>
           <div class="sector-pulse-rank-list">
             ${
               laggards.length

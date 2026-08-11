@@ -1388,10 +1388,12 @@ async def fetch_nasdaq_daily_bars(
     *,
     fromdate: date | str | None = None,
     todate: date | str | None = None,
+    assetclass: str = "stocks",
 ) -> list[dict[str, Any]]:
     """
     Daily OHLC from Nasdaq chart API (fromdate/todate).
     Used when Yahoo day/month/quarter charts are blocked (403/429).
+    Sector ETFs need assetclass="etf".
     """
     sym = (symbol or "").strip().upper()
     path_sym = _nasdaq_path_symbol(sym)
@@ -1399,9 +1401,10 @@ async def fetch_nasdaq_daily_bars(
         return []
     to_d = todate or date.today()
     from_d = fromdate or date(to_d.year - 25, 1, 1)
+    ac = (assetclass or "stocks").strip().lower() or "stocks"
     url = (
         f"https://api.nasdaq.com/api/quote/{quote(path_sym, safe='/')}/chart"
-        f"?assetclass=stocks&fromdate={from_d}&todate={to_d}"
+        f"?assetclass={ac}&fromdate={from_d}&todate={to_d}"
     )
     try:
         resp = await client.get(url, timeout=22.0, headers=_nasdaq_headers(path_sym))

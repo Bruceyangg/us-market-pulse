@@ -3326,12 +3326,10 @@ html[data-theme="dark"] .us-futures-card {
 
 .sector-pulse-rank {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
-  gap: 0.35rem 0.5rem;
-  align-items: center;
+  gap: 0.22rem;
   width: 100%;
   margin: 0;
-  padding: 0.38rem 0.5rem;
+  padding: 0.45rem 0.55rem 0.4rem;
   border: 1px solid color-mix(in srgb, var(--line) 80%, transparent);
   border-radius: 10px;
   background: color-mix(in srgb, var(--panel) 70%, transparent);
@@ -3347,25 +3345,88 @@ html[data-theme="dark"] .us-futures-card {
   background: color-mix(in srgb, #6aa8d4 8%, var(--panel));
 }
 
+.sector-pulse-rank-top {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 0.5rem;
+}
+
+.sector-pulse-rank .name-wrap {
+  min-width: 0;
+  display: grid;
+  gap: 0.05rem;
+}
+
 .sector-pulse-rank .name {
-  font-size: 0.82rem;
-  font-weight: 650;
+  font-size: 0.84rem;
+  font-weight: 700;
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.sector-pulse-rank .note {
-  grid-column: 1 / -1;
-  font-size: 0.68rem;
+.sector-pulse-rank .sym {
+  font-size: 0.66rem;
+  font-weight: 650;
+  letter-spacing: 0.04em;
+  color: var(--ink-soft);
+}
+
+.sector-pulse-rank .pct-wrap {
+  display: grid;
+  justify-items: end;
+  gap: 0.02rem;
+  flex: 0 0 auto;
+}
+
+.sector-pulse-rank .pct-label {
+  font-size: 0.62rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
   color: var(--ink-soft);
 }
 
 .sector-pulse-rank .pct {
-  font-size: 0.82rem;
-  font-weight: 750;
+  font-size: 0.9rem;
+  font-weight: 780;
   font-variant-numeric: tabular-nums;
+  line-height: 1.1;
+}
+
+.sector-pulse-rank-mid {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 0.45rem;
+  min-width: 0;
+}
+
+.sector-pulse-rank .day {
+  font-size: 0.7rem;
+  font-weight: 650;
+  font-variant-numeric: tabular-nums;
+  color: var(--ink-soft);
+  white-space: nowrap;
+}
+
+.sector-pulse-rank .day.up {
+  color: color-mix(in srgb, var(--tape-up, #d92b2b) 82%, var(--ink-soft));
+}
+
+.sector-pulse-rank .day.down {
+  color: color-mix(in srgb, var(--tape-down, #0f8a6a) 82%, var(--ink-soft));
+}
+
+.sector-pulse-rank .note {
+  font-size: 0.68rem;
+  color: var(--ink-soft);
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  text-align: right;
 }
 
 .sector-pulse-rank .pct.up {
@@ -3373,6 +3434,21 @@ html[data-theme="dark"] .us-futures-card {
 }
 
 .sector-pulse-rank .pct.down {
+  color: var(--tape-down, #0f8a6a);
+}
+
+.sector-pulse-spark {
+  width: 100%;
+  height: 1.05rem;
+  display: block;
+  opacity: 0.9;
+}
+
+.sector-pulse-spark.up {
+  color: var(--tape-up, #d92b2b);
+}
+
+.sector-pulse-spark.down {
   color: var(--tape-down, #0f8a6a);
 }
 
