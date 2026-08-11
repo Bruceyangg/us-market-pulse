@@ -4394,6 +4394,14 @@ html[data-theme="dark"] .sector-stock-suggest {
   font-weight: 600;
 }
 
+.sectors-list-pane.is-search-mode .sectors-pane-head {
+  align-items: flex-start;
+}
+
+.sectors-list-pane.is-search-mode #sector-picks-title {
+  color: color-mix(in srgb, #6aa8d4 70%, var(--ink));
+}
+
 .sector-pick-list {
   flex: 1;
   min-height: 0;

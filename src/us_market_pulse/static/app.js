@@ -55,6 +55,9 @@ const state = {
   sectorsLoadSeq: 0,
   sectorsLoadPending: null,
   sectorPulseHorizon: "2w",
+  sectorSearchMode: false,
+  sectorSearchQuery: "",
+  sectorSearchHits: [],
   sectorMap: null,
   sectorMapTf: "day",
   sectorMapSymbolDesk: {},
@@ -169,7 +172,9 @@ const els = {
   sectorPicksTitle: document.getElementById("sector-picks-title"),
   sectorPicksBlurb: document.getElementById("sector-picks-blurb"),
   sectorPickList: document.getElementById("sector-pick-list"),
+  btnExitSectorSearch: document.getElementById("btn-exit-sector-search"),
   sectorsDesk: document.querySelector(".sectors-desk"),
+  sectorPicksPane: document.getElementById("sector-picks"),
   sectorPickChart: document.getElementById("sector-pick-chart"),
   sectorTfFilters: document.getElementById("sector-tf-filters"),
   sectorNewsList: document.getElementById("sector-news-list"),
@@ -5837,8 +5842,12 @@ function applySectorChartPick(sym, chartPick) {
   }
   state.sectors.picks = picks;
   if (next.value_chain) state.sectors.value_chain = next.value_chain;
-  // Patch list row in place — do not rebuild (avoids scroll jump).
-  if (!els.sectorPickList?.querySelector(`[data-symbol="${want}"]`)) {
+  if (state.sectorSearchMode) {
+    syncSearchHitsFromDesk(state.sectors);
+    renderSectorSearchList();
+    paintSectorSelection();
+  } else if (!els.sectorPickList?.querySelector(`[data-symbol="${want}"]`)) {
+    // Patch list row in place — do not rebuild (avoids scroll jump).
     renderSectorPicks(state.sectors);
   } else {
     refreshActiveRowQuote(els.sectorPickList, next, "data-symbol");
@@ -5925,6 +5934,23 @@ function scheduleSectorChartCatchup(sym, { reason = "" } = {}) {
 
 /** Update session badges / hold tags without rebuilding the list (keeps scroll). */
 function refreshSectorPickListLive() {
+  if (state.sectorSearchMode) {
+    syncSearchHitsFromDesk(state.sectors);
+    const rows = els.sectorPickList?.querySelectorAll(".sector-pick-row[data-symbol]");
+    if (!rows?.length) {
+      renderSectorSearchList();
+      return;
+    }
+    for (const pick of state.sectorSearchHits || []) {
+      refreshActiveRowQuote(els.sectorPickList, applyClockSession(pick), "data-symbol");
+    }
+    markActiveListRow(
+      els.sectorPickList,
+      state.sectors?.selected_symbol || state.sectorSymbol,
+      "data-symbol",
+    );
+    return;
+  }
   const data = state.sectors;
   if (!data?.picks?.length || !els.sectorPickList) return;
   const rows = els.sectorPickList.querySelectorAll(".sector-pick-row[data-symbol]");
@@ -6349,6 +6375,10 @@ function openSectorDesk(id, { scroll = true, symbol = "" } = {}) {
   const sectorId = (id || "").trim().toLowerCase();
   if (!sectorId) return;
   const wantSym = (symbol || "").trim().toUpperCase();
+  // Clicking a sector chip exits search results → back to constituents.
+  if (!wantSym && state.sectorSearchMode) {
+    exitSectorSearchMode({ reload: false });
+  }
   const same = sectorId === state.sectorId;
   state.sectorId = sectorId;
   if (!same) {
@@ -6504,6 +6534,7 @@ function renderSectorEtfs(sectors) {
 
   els.sectorEtfGrid.querySelectorAll("[data-sector]").forEach((btn) => {
     btn.addEventListener("click", () => {
+      if (state.sectorSearchMode) exitSectorSearchMode({ reload: false });
       openSectorDesk(btn.getAttribute("data-sector"), { scroll: true });
     });
     const warm = () => {
@@ -7520,7 +7551,165 @@ async function refreshSectorStockSuggest(query) {
   }
 }
 
-function openSectorStockFromSearch(hitOrSymbol) {
+function syncExitSearchButton() {
+  if (!els.btnExitSectorSearch) return;
+  els.btnExitSectorSearch.hidden = !state.sectorSearchMode;
+}
+
+function exitSectorSearchMode({ reload = true } = {}) {
+  state.sectorSearchMode = false;
+  state.sectorSearchQuery = "";
+  state.sectorSearchHits = [];
+  els.sectorPicksPane?.classList.remove("is-search-mode");
+  syncExitSearchButton();
+  if (els.sectorStockQ) els.sectorStockQ.value = "";
+  if (els.sectorStockSearchHint) {
+    els.sectorStockSearchHint.textContent =
+      "支持板块内外个股 · 搜索后左侧显示结果，并联动走势 / 产业链与情报";
+  }
+  if (reload && state.sectorId) {
+    state.sectorSymbol = "";
+    void loadSectorDesk({ force: false });
+  }
+}
+
+function syncSearchHitsFromDesk(data) {
+  if (!state.sectorSearchMode) return;
+  const selected = data?.selected_pick;
+  const selSym = String(
+    data?.selected_symbol || state.sectorSymbol || "",
+  ).toUpperCase();
+  const hits = (state.sectorSearchHits || []).map((row) => {
+    const sym = String(row.symbol || "").toUpperCase();
+    if (selected && sym === String(selected.symbol || "").toUpperCase()) {
+      return {
+        ...row,
+        ...selected,
+        symbol: sym,
+        is_search: true,
+        name: selected.name || row.name || sym,
+      };
+    }
+    const fromDesk = (data?.picks || []).find(
+      (p) => String(p.symbol || "").toUpperCase() === sym,
+    );
+    return fromDesk
+      ? { ...row, ...fromDesk, symbol: sym, is_search: true }
+      : row;
+  });
+  // Ensure selected search symbol stays first / present.
+  if (selSym && !hits.some((h) => String(h.symbol).toUpperCase() === selSym)) {
+    hits.unshift(
+      selected && String(selected.symbol || "").toUpperCase() === selSym
+        ? { ...selected, is_search: true }
+        : {
+            symbol: selSym,
+            name: selSym,
+            is_search: true,
+            lite: true,
+          },
+    );
+  }
+  state.sectorSearchHits = hits;
+}
+
+function renderSectorSearchList() {
+  const hits = (state.sectorSearchHits || []).map((p) => applyClockSession(p));
+  const selected =
+    state.sectors?.selected_symbol || state.sectorSymbol || hits[0]?.symbol || "";
+  const selectedPick = state.sectors?.selected_pick
+    ? applyClockSession(state.sectors.selected_pick)
+    : null;
+  els.sectorPicksPane?.classList.add("is-search-mode");
+  syncExitSearchButton();
+  if (els.sectorPicksTitle) els.sectorPicksTitle.textContent = "搜索结果";
+  if (els.sectorPicksBlurb) {
+    const q = state.sectorSearchQuery || selected || "";
+    els.sectorPicksBlurb.textContent = hits.length
+      ? `${hits.length} 只结果 · ${q} · 联动中间走势与右侧情报`
+      : "未找到匹配个股";
+  }
+  if (!els.sectorPickList) return;
+  if (!hits.length) {
+    els.sectorPickList.innerHTML =
+      '<p class="empty">暂无搜索结果 · 点「返回板块」看成分股</p>';
+    return;
+  }
+  els.sectorPickList.innerHTML = hits
+    .map((pick) => {
+      const pct = pick.change_pct;
+      const on = String(pick.symbol || "").toUpperCase() === String(selected).toUpperCase();
+      const sparkSrc =
+        on && selectedPick?.series?.intraday?.points?.length >= 2
+          ? selectedPick
+          : pick;
+      const held = isInHoldings(pick.symbol);
+      return `
+        <div class="holding-row sector-pick-row ${on ? "is-active" : ""} ${
+          held ? "in-holding" : ""
+        } ${pctClass(pct)}" data-symbol="${escapeHtml(
+          pick.symbol,
+        )}" role="option" aria-selected="${on ? "true" : "false"}">
+          <button type="button" class="sector-pick-main" data-symbol="${escapeHtml(
+            pick.symbol,
+          )}">
+            <span class="meta">
+              <span class="nm">${escapeHtml(pick.name || pick.symbol)}<span class="hot-tag">搜索</span>${
+                held ? '<span class="hold-tag">持仓</span>' : ""
+              }</span>
+              <span class="sym">${escapeHtml(pick.symbol)} · 搜索结果 · 月 ${escapeHtml(
+                pctText(pick.month_change_pct),
+              )}</span>
+            </span>
+            <span class="spark-wrap">${holdingSparkSvg(sparkSrc, "intraday")}</span>
+            ${listQuoteHtml(pick)}
+          </button>
+          <button
+            type="button"
+            class="sector-hold-btn ${held ? "is-held" : ""}"
+            data-hold-symbol="${escapeHtml(pick.symbol)}"
+            data-hold-name="${escapeHtml(pick.name || "")}"
+            data-hold-action="${held ? "remove" : "add"}"
+            title="${held ? `从持仓移除 ${pick.symbol}` : `加入持仓 ${pick.symbol}`}"
+            aria-label="${held ? `从持仓移除 ${pick.symbol}` : `加入持仓 ${pick.symbol}`}"
+          >${held ? "−" : "+"}</button>
+        </div>
+      `;
+    })
+    .join("");
+  els.sectorPickList.querySelectorAll(".sector-pick-main[data-symbol]").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      const sym = (btn.getAttribute("data-symbol") || "").toUpperCase();
+      if (!sym) return;
+      state.sectorSymbol = sym;
+      if (state.sectors) {
+        const hit = state.sectorSearchHits.find(
+          (h) => String(h.symbol || "").toUpperCase() === sym,
+        );
+        state.sectors.selected_symbol = sym;
+        state.sectors.selected_pick = hit || state.sectors.selected_pick;
+      }
+      paintSectorSelection();
+      scheduleSectorChartCatchup(sym, { reason: "search" });
+      void loadSectorDesk({ force: false });
+    });
+  });
+  els.sectorPickList.querySelectorAll(".sector-hold-btn").forEach((btn) => {
+    btn.addEventListener("click", (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      const sym = btn.getAttribute("data-hold-symbol") || "";
+      const name = btn.getAttribute("data-hold-name") || "";
+      const action = btn.getAttribute("data-hold-action") || "add";
+      if (action === "remove") {
+        if (!confirm(`确定从持仓移除 ${sym}？`)) return;
+      }
+      toggleSectorHolding(sym, name);
+    });
+  });
+}
+
+async function enterSectorSearchMode(hitOrSymbol) {
   const hit =
     typeof hitOrSymbol === "string"
       ? {
@@ -7541,30 +7730,102 @@ function openSectorStockFromSearch(hitOrSymbol) {
     hit.sectorId ||
     findSectorForSymbol(symbol) ||
     state.sectorId ||
-    ""
+    "tech"
   )
     .toString()
     .toLowerCase();
   hideSectorStockSuggest();
   if (els.sectorStockQ) els.sectorStockQ.value = symbol;
-  const hostSector =
-    sectorId ||
-    (state.sectorId || "").toLowerCase() ||
-    String(state.sectors?.sectors?.[0]?.id || "tech").toLowerCase();
-  if (els.sectorStockSearchHint) {
-    const label = hit.name && hit.name !== symbol ? `${hit.name} · ${symbol}` : symbol;
-    const host = sectorLabelById(hostSector) || "当前工作台";
-    els.sectorStockSearchHint.textContent = hit.local
-      ? `已搜索 ${label} · ${host}`
-      : `已搜索 ${label} · 全市场（挂到${host}）`;
-  }
-  setStatus(`搜索 ${symbol} · ${sectorLabelById(hostSector) || hostSector}`);
-  // Reset upgrade lock so search guests don't inherit a stuck "正在加载…".
+
+  const shell = {
+    symbol,
+    name: hit.name || symbol,
+    label: hit.name || symbol,
+    sector_id: sectorId,
+    sector_label: "搜索结果",
+    is_search: true,
+    lite: true,
+    change_pct: hit.change_pct,
+    price: hit.price,
+  };
+  state.sectorSearchMode = true;
+  state.sectorSearchQuery = symbol;
+  state.sectorSearchHits = [shell];
+  state.sectorId = sectorId;
+  state.sectorSymbol = symbol;
   clearSectorChartLoading(state.chartUpgradeSym);
   state.symbolNewsRetrySym = "";
   state.chartUpgradeAttempts = 0;
-  openSectorDesk(hostSector, { scroll: true, symbol });
+
+  if (!state.sectors) {
+    state.sectors = {
+      active_sector_id: sectorId,
+      active_sector: { id: sectorId, label: sectorLabelById(sectorId) || "搜索" },
+      picks: [shell],
+      selected_symbol: symbol,
+      selected_pick: shell,
+      symbol_news: [],
+      sector_news: [],
+      value_chain: null,
+      sectors: [],
+    };
+  } else {
+    state.sectors.selected_symbol = symbol;
+    state.sectors.selected_pick = {
+      ...(state.sectors.selected_pick?.symbol === symbol
+        ? state.sectors.selected_pick
+        : {}),
+      ...shell,
+    };
+    state.sectors.symbol_news = [];
+  }
+
+  const label =
+    hit.name && hit.name !== symbol ? `${hit.name} · ${symbol}` : symbol;
+  if (els.sectorStockSearchHint) {
+    els.sectorStockSearchHint.textContent = `已搜索 ${label} · 仅显示搜索结果（可返回板块）`;
+  }
+  setStatus(`搜索 ${symbol}`);
+  syncSectorQuery();
+  renderSectorSearchList();
+  paintSectorSelection();
+  renderSymbolNewsFeed(state.sectors);
+  renderValueChain(state.sectors?.value_chain || null);
+  els.sectorsDesk?.scrollIntoView({ behavior: "smooth", block: "start" });
+
+  // Chart first (dedicated API), then desk for news / chain / earnings.
+  void upgradeSectorSymbolChart(symbol, { force: true }).then((ok) => {
+    if (!state.sectorSearchMode || state.sectorSymbol !== symbol) return;
+    syncSearchHitsFromDesk(state.sectors);
+    renderSectorSearchList();
+    if (
+      ok &&
+      !pickHasIntraday(state.sectors?.selected_pick) &&
+      pickHasChart(state.sectors?.selected_pick) &&
+      state.sectorTf === "intraday"
+    ) {
+      // Illiquid / no session tape — show day candles instead of empty 分时.
+      state.sectorTf = "day";
+    }
+    paintSectorSelection();
+  });
   scheduleSectorChartCatchup(symbol, { reason: "search" });
+  void loadSectorDesk({ force: false }).then(() => {
+    if (!state.sectorSearchMode || state.sectorSymbol !== symbol) return;
+    syncSearchHitsFromDesk(state.sectors);
+    renderSectorSearchList();
+    paintSectorSelection();
+    renderSymbolNewsFeed(state.sectors);
+    renderValueChain(
+      state.sectors?.value_chain || state.sectors?.selected_pick?.value_chain,
+    );
+    renderEarningsCalendar(state.sectors);
+    renderMoveAnalysis(state.sectors?.selected_pick);
+  });
+}
+
+function openSectorStockFromSearch(hitOrSymbol) {
+  void enterSectorSearchMode(hitOrSymbol);
 }
 
 async function submitSectorStockSearch() {
@@ -7628,6 +7889,10 @@ async function submitSectorStockSearch() {
 els.sectorStockSearchForm?.addEventListener("submit", (event) => {
   event.preventDefault();
   submitSectorStockSearch();
+});
+
+els.btnExitSectorSearch?.addEventListener("click", () => {
+  exitSectorSearchMode({ reload: true });
 });
 
 els.sectorStockQ?.addEventListener("input", () => {
@@ -7769,12 +8034,23 @@ function renderSectorDesk(data) {
   }
 
   state.sectors = data || null;
-  if (data?.active_sector_id) state.sectorId = data.active_sector_id;
+  if (data?.active_sector_id && !state.sectorSearchMode) {
+    state.sectorId = data.active_sector_id;
+  }
   if (data?.selected_symbol) state.sectorSymbol = data.selected_symbol;
   renderSectorPulse(data);
   renderAiDesk(data?.hot_desk || data?.ai_desk);
   renderSectorEtfs(data?.sectors || []);
-  if (sameBoard) {
+  if (state.sectorSearchMode) {
+    syncSearchHitsFromDesk(data);
+    renderSectorSearchList();
+    paintSectorSelection();
+    renderSectorNewsFeed(data);
+    renderSymbolNewsFeed(data);
+    renderEarningsCalendar(data);
+    renderValueChain(data?.value_chain || data?.selected_pick?.value_chain);
+    scheduleSectorsDeskHeightSync();
+  } else if (sameBoard) {
     // Soft poll: patch quotes in place so the list doesn't jump to top.
     state.sectors = data;
     refreshSectorPickListLive();
