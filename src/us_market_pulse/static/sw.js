@@ -1,5 +1,5 @@
 /* Pulse Desk lightweight shell cache — HTML/auth pages always network-first. */
-const CACHE = "pulse-desk-shell-v123";
+const CACHE = "pulse-desk-shell-v124";
 const SHELL = [
   "/static/styles.css?v=20260806e39",
   "/static/app.js?v=20260806e39",

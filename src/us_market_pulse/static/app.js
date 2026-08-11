@@ -57,6 +57,8 @@ const state = {
   sectorPulseHorizon: "2w",
   sectorMap: null,
   sectorMapTf: "day",
+  sectorMapSymbolDesk: {},
+  sectorMapHorizonRetryAt: 0,
   chartUpgradeSym: "",
   symbolNewsRetrySym: "",
   earnings: null,
@@ -5434,12 +5436,28 @@ function fitSectorMapLabels() {
   });
 }
 
+function indexSectorMapSymbolDesks(sectors) {
+  const home = {};
+  for (const sec of sectors || []) {
+    const desk = String(sec.desk_id || sec.id || "").toLowerCase();
+    if (!desk) continue;
+    for (const grp of sec.groups || []) {
+      for (const st of grp.children || []) {
+        const sym = String(st.symbol || "").toUpperCase();
+        if (sym && !home[sym]) home[sym] = desk;
+      }
+    }
+  }
+  state.sectorMapSymbolDesk = home;
+}
+
 function renderSectorMap(map) {
   if (!els.sectorMapCanvas) return;
   if (map) state.sectorMap = map;
   const payload = map || state.sectorMap;
   const sectors = payload?.sectors || [];
   const stats = payload?.stats || {};
+  indexSectorMapSymbolDesks(sectors);
   const tf = ["day", "rt", "1w", "2w", "3w", "4w"].includes(state.sectorMapTf)
     ? state.sectorMapTf
     : "day";
@@ -5449,9 +5467,11 @@ function renderSectorMap(map) {
   let up = 0;
   let down = 0;
   let quotedTf = 0;
+  let totalTiles = 0;
   for (const sec of sectors) {
     for (const grp of sec.groups || []) {
       for (const st of grp.children || []) {
+        totalTiles += 1;
         const pct = mapNodePct(st, tf);
         if (pct == null || Number.isNaN(Number(pct))) continue;
         quotedTf += 1;
@@ -5459,6 +5479,18 @@ function renderSectorMap(map) {
         else if (Number(pct) < -0.05) down += 1;
       }
     }
+  }
+
+  // Week horizons: if coverage is sparse, soft-refresh once to backfill Yahoo/Nasdaq bars.
+  const weekTf = tf === "1w" || tf === "2w" || tf === "3w" || tf === "4w";
+  if (
+    weekTf &&
+    totalTiles > 0 &&
+    quotedTf / totalTiles < 0.55 &&
+    Date.now() - (state.sectorMapHorizonRetryAt || 0) > 12000
+  ) {
+    state.sectorMapHorizonRetryAt = Date.now();
+    void loadSectorMap({ force: true }).catch(() => null);
   }
 
   if (els.sectorMapBlurb) {
@@ -5636,18 +5668,17 @@ function renderSectorMap(map) {
   els.sectorMapCanvas.querySelectorAll(".map-stock[data-symbol]").forEach((btn) => {
     btn.addEventListener("click", () => {
       const sym = (btn.getAttribute("data-symbol") || "").toUpperCase();
-      const desk = btn.getAttribute("data-desk") || "";
+      const desk = (btn.getAttribute("data-desk") || "").toLowerCase();
       if (!sym) return;
-      if (desk && desk !== state.sectorId) {
-        state.sectorId = desk;
-        state.sectorSymbol = sym;
-        loadSectorDesk().finally(() => {
-          els.sectorsDesk?.scrollIntoView({ behavior: "smooth", block: "start" });
-        });
-        return;
-      }
-      selectSectorSymbol(sym);
-      els.sectorsDesk?.scrollIntoView({ behavior: "smooth", block: "start" });
+      const title = btn.getAttribute("title") || "";
+      const name = title.replace(/\s+[+\-−]?[\d.]+%?\s*$/, "").trim() || sym;
+      // Same path as search: open desk, select symbol, charts + chain/news.
+      openSectorStockFromSearch({
+        symbol: sym,
+        name,
+        sectorId: desk || state.sectorMapSymbolDesk?.[sym] || "",
+        local: true,
+      });
     });
   });
 }
@@ -7073,6 +7104,8 @@ function sectorLabelById(id) {
 function findSectorForSymbol(symbol) {
   const sym = (symbol || "").trim().toUpperCase();
   if (!sym) return "";
+  const mapDesk = state.sectorMapSymbolDesk?.[sym];
+  if (mapDesk) return String(mapDesk).toLowerCase();
   const curId = (state.sectorId || "").trim().toLowerCase();
   if (
     curId &&
