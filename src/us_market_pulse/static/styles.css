@@ -3254,7 +3254,8 @@ html[data-theme="dark"] .us-futures-card {
   border-radius: 12px;
   border: 1px solid color-mix(in srgb, var(--line) 70%, transparent);
   background: color-mix(in srgb, #121820 88%, var(--panel));
-  touch-action: none;
+  /* 1-finger: page scroll from mid-screen; 2-finger: map pinch zoom */
+  touch-action: pan-x pan-y pinch-zoom;
   overscroll-behavior: contain;
 }
 
@@ -4100,7 +4101,7 @@ html[data-theme="dark"] .sector-pulse-hz.is-active {
   border: 1px solid color-mix(in srgb, var(--line) 70%, transparent);
 }
 
-/* Bottom-of-page map on wide desktop / tablet */
+/* Map sits directly under futures — keep natural DOM order */
 @media (min-width: 861px) {
   .page-sectors .sectors-board {
     display: flex;
@@ -4108,7 +4109,6 @@ html[data-theme="dark"] .sector-pulse-hz.is-active {
   }
 
   .page-sectors .sectors-board > #sector-map {
-    order: 40;
     margin-top: 0.35rem;
   }
 }
@@ -5149,7 +5149,8 @@ html[data-theme="dark"] .sector-pick-list .sector-hold-btn.is-held:hover {
   position: relative;
   width: 100%;
   outline: none;
-  touch-action: none;
+  /* Allow page scroll with one finger anywhere on the chart; pinch still works */
+  touch-action: pan-x pan-y pinch-zoom;
   overscroll-behavior: contain;
   display: flex;
   flex-direction: column;
@@ -8208,6 +8209,10 @@ html.pulse-native-app .portfolio-desk {
   gap: 0.65rem;
 }
 
+html.pulse-native-app .chart-zoom {
+  touch-action: pan-x pan-y pinch-zoom;
+}
+
 html.pulse-native-app .chart-zoom-shell {
   touch-action: pan-y pinch-zoom;
 }
@@ -8645,15 +8650,14 @@ html.pulse-native-tablet .portfolio-desk {
   }
 }
 
-/* Bottom map column: fixed footprint; internal pinch/buttons zoom only content */
+/* Bottom map column: fixed footprint under futures; 1-finger page scroll OK */
 html.pulse-native-tablet .sectors-board > #sector-map {
-  order: 40;
   margin-top: 0.5rem;
 }
 
 html.pulse-native-tablet .sector-map-viewport {
   height: min(42vh, 26rem);
-  touch-action: none;
+  touch-action: pan-x pan-y pinch-zoom;
 }
 
 html.pulse-native-tablet .sectors-intel-pane {

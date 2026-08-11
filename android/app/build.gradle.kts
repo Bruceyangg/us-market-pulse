@@ -13,8 +13,8 @@ android {
         applicationId = "com.bruceyangg.pulsedesk"
         minSdk = 26
         targetSdk = 35
-        versionCode = 17
-        versionName = "1.2.7"
+        versionCode = 18
+        versionName = "1.2.8"
         buildConfigField(
             "String",
             "API_BASE_URL",

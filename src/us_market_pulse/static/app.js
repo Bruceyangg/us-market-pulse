@@ -1762,9 +1762,9 @@ function bindIntradayCrosshair(zoomRoot, key) {
   let activePointer = null;
 
   const onMove = (event) => {
+    // Touch crosshair only while actively holding; never steal page scroll.
     if (event.pointerType === "touch" && activePointer == null) return;
     if (activePointer != null && event.pointerId !== activePointer) return;
-    // Ignore multi-touch pinch gestures.
     if (event.pointerType === "touch" && zoomRoot._pulsePointers > 1) {
       hideChartCrosshair(key);
       return;
@@ -1775,13 +1775,9 @@ function bindIntradayCrosshair(zoomRoot, key) {
   zoomRoot.addEventListener("pointerdown", (event) => {
     if (event.target.closest("[data-zoom-act]")) return;
     zoomRoot._pulsePointers = (zoomRoot._pulsePointers || 0) + 1;
-    if (event.pointerType === "touch") {
+    // Mouse / pen: show tip. Touch: do not capture — allow mid-screen page scroll.
+    if (event.pointerType !== "touch") {
       activePointer = event.pointerId;
-      try {
-        zoomRoot.setPointerCapture(event.pointerId);
-      } catch {
-        /* ignore */
-      }
       showChartCrosshair(key, event.clientX, event.clientY);
     }
   });
@@ -1801,6 +1797,118 @@ function bindIntradayCrosshair(zoomRoot, key) {
   zoomRoot.addEventListener("pointerleave", () => {
     if (activePointer == null) hideChartCrosshair(key);
   });
+}
+
+/** Touch pinch zoom + 1-finger pan (when zoomed) for day/month/quarter candles. */
+function bindChartTouchZoomPan(zoomRoot, key) {
+  if (!zoomRoot || zoomRoot.dataset.touchZoomBound === "1") return;
+  zoomRoot.dataset.touchZoomBound = "1";
+  let pinch0 = null;
+  let pan0 = null;
+
+  zoomRoot.addEventListener(
+    "touchstart",
+    (event) => {
+      if (event.target.closest("[data-zoom-act]")) return;
+      if (event.touches.length === 2) {
+        pan0 = null;
+        const a = event.touches[0];
+        const b = event.touches[1];
+        const dist = Math.hypot(a.clientX - b.clientX, a.clientY - b.clientY);
+        const z = normalizeChartZoom(
+          state.chartZoom[key],
+          chartZoomData.get(key)?.len || 0,
+        );
+        pinch0 = {
+          dist: Math.max(1, dist),
+          count: z.count,
+          start: z.start,
+          midX: (a.clientX + b.clientX) / 2,
+        };
+      } else if (event.touches.length === 1) {
+        pinch0 = null;
+        const meta = chartZoomData.get(key);
+        const z = normalizeChartZoom(state.chartZoom[key], meta?.len || 0);
+        // Only pan chart window when already zoomed-in; else let page scroll.
+        if (meta && z.count < meta.len) {
+          pan0 = {
+            x: event.touches[0].clientX,
+            y: event.touches[0].clientY,
+            start: z.start,
+            moved: false,
+          };
+        } else {
+          pan0 = null;
+        }
+      }
+    },
+    { passive: true },
+  );
+
+  zoomRoot.addEventListener(
+    "touchmove",
+    (event) => {
+      if (event.touches.length === 2 && pinch0) {
+        event.preventDefault();
+        event.stopPropagation();
+        hideChartCrosshair(key);
+        const a = event.touches[0];
+        const b = event.touches[1];
+        const dist = Math.hypot(a.clientX - b.clientX, a.clientY - b.clientY);
+        const factor = dist / pinch0.dist;
+        const meta = chartZoomData.get(key);
+        if (!meta) return;
+        const rect = zoomRoot.getBoundingClientRect();
+        const midX = (a.clientX + b.clientX) / 2;
+        const pivot =
+          rect.width > 0 ? clamp((midX - rect.left) / rect.width, 0, 1) : 0.5;
+        const nextCount = clamp(
+          Math.round(pinch0.count / Math.max(0.2, factor)),
+          Math.min(CHART_ZOOM_MIN_BARS, meta.len),
+          meta.len,
+        );
+        const pivotIdx = pinch0.start + pivot * pinch0.count;
+        const nextStart = clamp(
+          Math.round(pivotIdx - pivot * nextCount),
+          0,
+          Math.max(0, meta.len - nextCount),
+        );
+        state.chartZoom[key] = { start: nextStart, count: nextCount };
+        paintZoomableChart(key);
+      } else if (event.touches.length === 1 && pan0) {
+        const t = event.touches[0];
+        const dx = t.clientX - pan0.x;
+        const dy = t.clientY - pan0.y;
+        // Prefer vertical page scroll unless horizontal drag dominates.
+        if (!pan0.moved && Math.abs(dy) > Math.abs(dx) && Math.abs(dy) > 8) {
+          pan0 = null;
+          return;
+        }
+        if (Math.abs(dx) < 6 && !pan0.moved) return;
+        event.preventDefault();
+        event.stopPropagation();
+        pan0.moved = true;
+        hideChartCrosshair(key);
+        const meta = chartZoomData.get(key);
+        const z = normalizeChartZoom(state.chartZoom[key], meta?.len || 0);
+        const stepPx = Math.max(8, (zoomRoot.clientWidth || 320) / Math.max(8, z.count));
+        const bars = Math.round((pan0.x - t.clientX) / stepPx);
+        if (bars !== 0) {
+          panChartWindow(key, bars);
+          pan0.x = t.clientX;
+          pan0.y = t.clientY;
+        }
+      }
+    },
+    { passive: false },
+  );
+
+  const clearTouch = () => {
+    pinch0 = null;
+    pan0 = null;
+  };
+  zoomRoot.addEventListener("touchend", clearTouch, { passive: true });
+  zoomRoot.addEventListener("touchcancel", clearTouch, { passive: true });
 }
 
 function bindZoomableChart(
@@ -1845,13 +1953,14 @@ function bindZoomableChart(
   if (sameShell) {
     paintZoomableChart(key);
     bindIntradayCrosshair(canvasEl.querySelector(".chart-zoom"), key);
+    bindChartTouchZoomPan(canvasEl.querySelector(".chart-zoom"), key);
     return;
   }
   const z = state.chartZoom[key];
   const full = defaultChartZoom(len, tf, kind);
   const zoomed = z.count < len || z.start !== full.start;
   canvasEl.innerHTML = `
-    <div class="chart-zoom" data-zoom-key="${escapeHtml(key)}" tabindex="0" aria-label="可缩放图表：触控板捏合或使用上方缩放按钮">
+    <div class="chart-zoom" data-zoom-key="${escapeHtml(key)}" tabindex="0" aria-label="可缩放图表：双指捏合或使用上方缩放按钮">
       ${chartZoomControlsHtml(zoomed, { showLiveRefresh: tf === "intraday" })}
       <div class="chart-zoom-stage"></div>
       <div class="chart-crosshair-tip is-hidden" aria-live="polite"></div>
@@ -1862,6 +1971,7 @@ function bindZoomableChart(
   const zoomRoot = canvasEl.querySelector(".chart-zoom");
   if (!zoomRoot) return;
   bindIntradayCrosshair(zoomRoot, key);
+  bindChartTouchZoomPan(zoomRoot, key);
 
   const onZoomAct = (event) => {
     const btn = event.target.closest("[data-zoom-act]");
@@ -6205,10 +6315,17 @@ function bindSectorMapZoom() {
         const py = (midY - rect.top) / Math.max(1, rect.height);
         setSectorMapZoom(pinch0.scale * (dist / pinch0.dist), px, py);
       } else if (event.touches.length === 1 && pan0) {
-        event.preventDefault();
         const t = event.touches[0];
-        sectorMapZoom.x = pan0.ox + (t.clientX - pan0.x);
-        sectorMapZoom.y = pan0.oy + (t.clientY - pan0.y);
+        const dx = t.clientX - pan0.x;
+        const dy = t.clientY - pan0.y;
+        // Vertical-dominant drag → page scroll; map pan only when clearly panning content.
+        if (Math.abs(dy) > Math.abs(dx) * 1.15 && Math.abs(dy) > 10) {
+          pan0 = null;
+          return;
+        }
+        event.preventDefault();
+        sectorMapZoom.x = pan0.ox + dx;
+        sectorMapZoom.y = pan0.oy + dy;
         paintSectorMapZoom();
       }
     },
