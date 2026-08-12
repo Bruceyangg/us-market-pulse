@@ -6536,7 +6536,7 @@ function markSectorChipActive(sectorId) {
         active.universe?.length ||
         active.picks?.length ||
         0;
-      els.hotSectorsBlurb.textContent = `${active.label} · ${count} 只成分 · 点卡片进入下方走势台`;
+      els.hotSectorsBlurb.textContent = `${active.label} · ${count} 只成分 · 点右侧排名切换板块`;
     }
   }
 }
@@ -7417,10 +7417,10 @@ function renderSectorEtfs(sectors, { force = false } = {}) {
     const active = rows.find((r) => r.id === state.sectorId);
     const count = active?.pick_count || active?.universe?.length || active?.picks?.length || 0;
     els.hotSectorsBlurb.textContent = active
-      ? `${active.label} · ${count} 只成分 · 点卡片进入下方走势台`
+      ? `${active.label} · ${count} 只成分 · 点右侧排名切换板块`
       : hot.length
-        ? `当前热点 ${hot.join(" · ")} · 点选板块查看全部成分股`
-        : "点选板块 → 左侧成分股 → 中间分时 / K 线";
+        ? `当前热点 ${hot.join(" · ")} · 点右侧排名查看成分股`
+        : "点右侧排名选板块 → 左侧成分股 → 中间分时 / K 线";
   }
   els.sectorEtfGrid.innerHTML = rows
     .map((row) => {
