@@ -49,7 +49,7 @@ from us_market_pulse.sectors import (
     fetch_symbol_desk_chart,
     peek_cached_sector_desk,
 )
-from us_market_pulse.us_markets import build_us_markets_desk, peek_cached_us_markets
+from us_market_pulse.us_markets import build_us_markets_desk
 from us_market_pulse.symbol_lookup import (
     resolve_holding_query,
     resolve_market_query,
@@ -407,9 +407,6 @@ async def api_us_markets(
             timeout=16.0,
         )
     except TimeoutError:
-        stale = peek_cached_us_markets()
-        if stale:
-            return stale
         return {
             "strip": [],
             "futures": [],

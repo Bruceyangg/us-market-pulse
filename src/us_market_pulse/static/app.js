@@ -5704,7 +5704,6 @@ function renderSectorPulse(data, { soft = false } = {}) {
         if (state.sectorPulseHorizon === hz) return;
         state.sectorPulseHorizon = hz;
         state.sectorPulseSig = "";
-        persistPageDataCache();
         renderSectorPulse(data || state.sectors);
       });
     });
@@ -6424,12 +6423,8 @@ function scheduleMapHorizonFill() {
   if (PAGE !== "sectors" || isSectorMapCollapsed()) return;
   const kick = () => {
     if (PAGE !== "sectors" || isSectorMapCollapsed()) return;
-    const tf = ["1w", "2w", "3w", "4w"].includes(state.sectorMapTf)
-      ? state.sectorMapTf
-      : "1w";
-    const cov1 = sectorMapHorizonCoverage(state.sectorMap, "1w");
-    const covTf = sectorMapHorizonCoverage(state.sectorMap, tf);
-    if (cov1 >= 0.7 && covTf >= 0.7) return;
+    const cov = sectorMapHorizonCoverage(state.sectorMap, "1w");
+    if (cov >= 0.7) return;
     void loadSectorMap({ fillHorizon: true, quiet: true }).catch(() => null);
   };
   if (typeof requestIdleCallback === "function") {
@@ -6470,32 +6465,18 @@ async function loadSectorMap({
       });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const data = await res.json();
-      // Never let an empty timeout stub wipe a painted / session-restored map.
-      if (isEmptySectorMap(data) && !isEmptySectorMap(state.sectorMap)) {
-        if (els.sectorMapBlurb && (fillHorizon || quiet)) {
-          els.sectorMapBlurb.textContent =
-            (els.sectorMapBlurb.textContent || "").replace(/\s*·\s*补全周涨跌…/, "") ||
-            "全板块涨跌图";
-        }
-        if (!fillHorizon) scheduleMapHorizonFill();
-        return state.sectorMap;
-      }
-      if (isEmptySectorMap(data)) {
-        if (!quiet && !state.sectorMap) {
-          els.sectorMapCanvas.innerHTML =
-            '<p class="empty">全板块涨跌图暂不可用，稍后自动重试。</p>';
-        }
-        scheduleMapHorizonFill();
+      // Keep painted shell if fill returns empty (timeout stub).
+      if (
+        fillHorizon &&
+        !(data?.sectors || []).length &&
+        (state.sectorMap?.sectors || []).length
+      ) {
         return state.sectorMap;
       }
       state.sectorMap = data;
       renderSectorMap(data);
       persistPageDataCache();
-      const covKey =
-        ["1w", "2w", "3w", "4w"].includes(state.sectorMapTf)
-          ? state.sectorMapTf
-          : "1w";
-      if (!fillHorizon && sectorMapHorizonCoverage(data, covKey) < 0.7) {
+      if (!fillHorizon && sectorMapHorizonCoverage(data, "1w") < 0.7) {
         scheduleMapHorizonFill();
       }
       return data;
@@ -6559,25 +6540,6 @@ const SECTOR_CACHE_FRESH_MS = 120_000;
 const SECTOR_CACHE_INSTANT_MS = 45_000;
 const sectorInflight = new Map();
 
-function sectorSoftInflightKey(sectorId) {
-  const id = String(sectorId || "")
-    .trim()
-    .toLowerCase();
-  return id ? `soft:${id}` : "";
-}
-
-function isEmptySectorMap(data) {
-  return !data || !(data.sectors || []).length;
-}
-
-function isEmptySectorDesk(data) {
-  return !data || (!(data.picks || []).length && !(data.sectors || []).length);
-}
-
-function isEmptyUsMarkets(data) {
-  return !data || (!(data.strip || []).length && !(data.futures || []).length);
-}
-
 function sectorCacheAge(id) {
   const row = state.sectorCache?.[id];
   if (!row?.data) return Number.POSITIVE_INFINITY;
@@ -6589,8 +6551,8 @@ function sectorCacheGet(id) {
   if (!row?.data) return null;
   // Keep optimistic sector paint warm across tab switches / hover.
   if (Date.now() - Number(row.at || 0) > SECTOR_CACHE_TTL_MS) return null;
-  // Drop truly empty shells; keep lite desks so switches stay instant.
-  if (!(row.data.picks || []).length && sectorDeskQuoteCoverage(row.data) < 0.15) {
+  // Drop spark-only shells that lost day quotes (shows "—" for the whole list).
+  if (sectorDeskQuoteCoverage(row.data) < 0.4) {
     delete state.sectorCache[id];
     return null;
   }
@@ -6599,19 +6561,7 @@ function sectorCacheGet(id) {
 
 function sectorCachePut(id, data) {
   if (!id || !data) return;
-  const picks = data.picks || [];
-  if (!picks.length) return;
-  const cov = sectorDeskQuoteCoverage(data);
-  const prev = state.sectorCache?.[id];
-  const prevCov = prev?.data ? sectorDeskQuoteCoverage(prev.data) : 0;
-  // Don't let a colder/sparser timeout stub replace a richer warm cache.
-  if (
-    prev?.data &&
-    prevCov > cov + 0.12 &&
-    Date.now() - Number(prev.at || 0) < SECTOR_CACHE_FRESH_MS
-  ) {
-    return;
-  }
+  if (sectorDeskQuoteCoverage(data) < 0.4) return;
   state.sectorCache[id] = { at: Date.now(), data };
 }
 
@@ -6724,10 +6674,7 @@ function runSectorPrefetchQueue() {
     (state.sectorPrefetchQueue || []).length
   ) {
     const id = state.sectorPrefetchQueue.shift();
-    const softKey = sectorSoftInflightKey(id);
-    if (!id || sectorCacheGet(id) || (softKey && sectorInflight.has(softKey))) {
-      continue;
-    }
+    if (!id || sectorCacheGet(id) || sectorInflight.has(id)) continue;
     state.sectorPrefetchActive += 1;
     Promise.resolve(prefetchSectorDesk(id, { queued: true }))
       .catch(() => null)
@@ -6740,12 +6687,7 @@ function runSectorPrefetchQueue() {
 
 function enqueueSectorPrefetch(id) {
   const sectorId = (id || "").trim().toLowerCase();
-  const softKey = sectorSoftInflightKey(sectorId);
-  if (
-    !sectorId ||
-    sectorCacheGet(sectorId) ||
-    (softKey && sectorInflight.has(softKey))
-  ) {
+  if (!sectorId || sectorCacheGet(sectorId) || sectorInflight.has(sectorId)) {
     return;
   }
   if (!state.sectorPrefetchQueue) state.sectorPrefetchQueue = [];
@@ -7466,11 +7408,10 @@ function openSectorDesk(id, { scroll = true, symbol = "" } = {}) {
   }
 
   // Reuse hover/prefetch in-flight request when possible (avoid duplicate /api/sectors).
-  const softKey = sectorSoftInflightKey(sectorId);
-  const pref = softKey ? sectorInflight.get(softKey) : null;
+  const pref = sectorInflight.get(sectorId);
   const load = pref
     ? pref.then((data) => {
-        if (data && !isEmptySectorDesk(data) && state.sectorId === sectorId) {
+        if (data && state.sectorId === sectorId) {
           sectorCachePut(sectorId, data);
           renderSectorDesk(data, { sectorSwitch: true });
           markPulseRankActive(sectorId);
@@ -7493,29 +7434,27 @@ function openSectorDesk(id, { scroll = true, symbol = "" } = {}) {
 
 function prefetchSectorDesk(id, { queued = false } = {}) {
   const sectorId = (id || "").trim().toLowerCase();
-  const softKey = sectorSoftInflightKey(sectorId);
-  if (!sectorId || !softKey || sectorCacheGet(sectorId)) return;
-  if (sectorInflight.has(softKey)) return sectorInflight.get(softKey);
+  if (!sectorId || sectorCacheGet(sectorId)) return;
+  if (sectorInflight.has(sectorId)) return sectorInflight.get(sectorId);
   // Hover/focus: enqueue so we never stampede Yahoo behind the active desk.
   if (!queued) {
     enqueueSectorPrefetch(sectorId);
-    return sectorInflight.get(softKey);
+    return sectorInflight.get(sectorId);
   }
   const params = new URLSearchParams({ sector: sectorId });
   const req = fetch(`/api/sectors?${params.toString()}`, {
-    // Match desk soft-load budget (server ~18s + network headroom).
-    signal: AbortSignal.timeout(20000),
+    signal: AbortSignal.timeout(10000),
   })
     .then((res) => (res.ok ? res.json() : null))
     .then((data) => {
-      if (data && !isEmptySectorDesk(data)) sectorCachePut(sectorId, data);
+      if (data) sectorCachePut(sectorId, data);
       return data;
     })
     .catch(() => null)
     .finally(() => {
-      sectorInflight.delete(softKey);
+      sectorInflight.delete(sectorId);
     });
-  sectorInflight.set(softKey, req);
+  sectorInflight.set(sectorId, req);
   return req;
 }
 
@@ -9183,10 +9122,6 @@ function sectorPickListSignature(picks) {
 
 function renderSectorDesk(data, { sectorSwitch = false } = {}) {
   const prev = state.sectors;
-  // Empty timeout stubs must not blank a painted desk.
-  if (isEmptySectorDesk(data) && !isEmptySectorDesk(prev) && !sectorSwitch) {
-    return;
-  }
   const sameBoard =
     prev &&
     data &&
@@ -9342,16 +9277,14 @@ async function loadSectorDesk({
       ? loadSectorMap({ force: wantMap }).catch(() => null)
       : Promise.resolve(state.sectorMap);
   try {
-    // Reuse in-flight soft prefetch / desk load (shared soft: key).
+    // Reuse in-flight prefetch for the same soft sector request (no symbol / no force).
     let data = null;
-    const softKey =
-      !force && !reqSymbol ? sectorSoftInflightKey(reqSector) : "";
-    if (softKey && sectorInflight.has(softKey)) {
-      data = await sectorInflight.get(softKey);
+    const canReusePrefetch = !force && !reqSymbol && reqSector && sectorInflight.has(reqSector);
+    if (canReusePrefetch) {
+      data = await sectorInflight.get(reqSector);
     }
     if (!data) {
-      const fetchKey =
-        softKey || `${reqSector}|${reqSymbol}|${force ? 1 : 0}`;
+      const fetchKey = `${reqSector}|${reqSymbol}|${force ? 1 : 0}`;
       const shared = sectorInflight.get(fetchKey);
       const req =
         shared ||
@@ -9382,17 +9315,6 @@ async function loadSectorDesk({
       data.active_sector_id !== nowSector
     ) {
       return data;
-    }
-    // Empty timeout stub must not wipe a painted / session-restored desk.
-    if (isEmptySectorDesk(data) && !isEmptySectorDesk(state.sectors)) {
-      setStatus(
-        data?.note || "板块刷新超时，已保留当前台面 · 稍后自动重试",
-      );
-      return state.sectors;
-    }
-    if (isEmptySectorDesk(data)) {
-      setStatus(data?.note || "板块台面暂不可用，稍后重试");
-      return state.sectors;
     }
     if (data?.active_sector_id) sectorCachePut(data.active_sector_id, data);
     // Keep previously upgraded picks / 分时 only within the SAME sector.
@@ -9502,15 +9424,10 @@ async function loadSectorDesk({
       if (transient && !force) {
         window.setTimeout(() => {
           if (PAGE === "sectors" && state.sectorsLoadSeq === seq) {
-            // Soft retry — keep painted UI; don't stampede map+Yahoo with force.
-            void loadSectorDesk({
-              force: false,
-              refreshMap: false,
-              deferMap: true,
-            });
+            void loadSectorDesk({ force: true, refreshMap: true });
           }
-        }, 1600);
-      } else if (isEmptySectorDesk(state.sectors)) {
+        }, 1200);
+      } else {
         paintSectorDeskError(msg);
       }
     }
@@ -9549,10 +9466,7 @@ function usStripTfPoints(row, tf) {
 
 function stripTfReady(tf) {
   const want = tf || state.usStripTf || "day";
-  const rows = state.usMarkets?.strip || [];
-  if (!rows.length) return false;
-  const ready = rows.filter((row) => usStripTfPoints(row, want).length >= 2).length;
-  return ready >= Math.ceil(rows.length * 0.6);
+  return (state.usMarkets?.strip || []).some((row) => usStripTfPoints(row, want).length >= 2);
 }
 
 function usStripSparkHtml(row, tf) {
@@ -9719,47 +9633,20 @@ function renderUsFuturesCharts() {
 }
 
 function renderUsMarketsDesk(data) {
-  // Guard: never paint an empty stub over an already-warm desk.
-  if (isEmptyUsMarkets(data) && !isEmptyUsMarkets(state.usMarkets)) {
-    if (els.usMarketsBlurb && data?.note) {
-      els.usMarketsBlurb.textContent = data.note;
-    }
-    return;
-  }
-  state.usMarkets = data || state.usMarkets || null;
+  state.usMarkets = data || null;
   if (els.usMarketsBlurb) {
-    const n = (state.usMarkets?.futures || []).length;
-    const src = state.usMarkets?.source || "Yahoo";
+    const n = (data?.futures || []).length;
+    const src = data?.source || "Yahoo";
     els.usMarketsBlurb.textContent = `${src}${
-      state.usMarkets?.cached ? " · 缓存" : ""
-    }${n ? ` · ${n} 条期货主连` : ""}${
-      state.usMarkets?.stale ? " · 缓存" : ""
-    }`;
+      data?.cached ? " · 缓存" : ""
+    }${n ? ` · ${n} 条期货主连` : ""}`;
   }
-  renderUsMarketsStrip(state.usMarkets?.strip || []);
+  renderUsMarketsStrip(data?.strip || []);
   renderUsFuturesCharts();
 }
 
 function mergeUsMarketsPayload(prev, next) {
-  // Empty timeout stubs must never replace a painted US markets block.
-  if (isEmptyUsMarkets(next) && !isEmptyUsMarkets(prev)) {
-    return {
-      ...prev,
-      cached: true,
-      stale: true,
-      note: next?.note || prev.note || "美国市场刷新超时，已保留缓存。",
-    };
-  }
-  if (!next) return prev || next;
-  if (!prev?.futures?.length) return next;
-  if (!next?.futures?.length) {
-    // Tape/full stub with strip-only — keep futures charts from prev.
-    const out = { ...prev, ...next, futures: prev.futures };
-    if ((!next.strip || !next.strip.length) && prev.strip?.length) {
-      out.strip = prev.strip;
-    }
-    return out;
-  }
+  if (!prev?.futures?.length || !next?.futures?.length) return next;
   const prevBy = Object.fromEntries(
     prev.futures.map((f) => [String(f.id || f.symbol || "").toLowerCase(), f])
   );
@@ -9782,11 +9669,11 @@ function mergeUsMarketsPayload(prev, next) {
   if ((!next.strip || !next.strip.length) && prev.strip?.length) {
     next.strip = prev.strip;
   } else if (prev.strip?.length && next.strip?.length) {
-    const prevStripBy = Object.fromEntries(
+    const prevBy = Object.fromEntries(
       prev.strip.map((r) => [String(r.symbol || "").toUpperCase(), r]),
     );
     next.strip = next.strip.map((row) => {
-      const old = prevStripBy[String(row.symbol || "").toUpperCase()];
+      const old = prevBy[String(row.symbol || "").toUpperCase()];
       if (!old?.series) return row;
       const series = { ...(old.series || {}) };
       Object.entries(row.series || {}).forEach(([tf, s]) => {
@@ -9800,12 +9687,9 @@ function mergeUsMarketsPayload(prev, next) {
 
 function futuresTfReady(tf) {
   const want = tf || state.usFuturesTf || "intraday";
-  const rows = state.usMarkets?.futures || [];
-  if (!rows.length) return false;
-  const ready = rows.filter(
-    (f) => ((f.series || {})[want]?.points || []).length >= 2,
-  ).length;
-  return ready >= Math.ceil(rows.length * 0.6);
+  return (state.usMarkets?.futures || []).some(
+    (f) => ((f.series || {})[want]?.points || []).length >= 2
+  );
 }
 
 /** Manual futures 分时 refresh — never blocks on the background tape poll lock. */
@@ -10368,7 +10252,6 @@ function persistPageDataCache() {
           usStripTf: state.usStripTf || "day",
           sectorMap: state.sectorMap || null,
           sectorMapTf: state.sectorMapTf || "day",
-          sectorPulseHorizon: state.sectorPulseHorizon || "2w",
         })
       );
     }
@@ -10453,12 +10336,6 @@ function paintFromPageDataCache(page = PAGE) {
   if (page === "sectors" && row.sectors) {
     if (row.sectorCache) state.sectorCache = row.sectorCache;
     if (row.sectorTf) state.sectorTf = row.sectorTf;
-    if (
-      row.sectorPulseHorizon &&
-      ["1w", "2w", "3w", "4w", "2m"].includes(row.sectorPulseHorizon)
-    ) {
-      state.sectorPulseHorizon = row.sectorPulseHorizon;
-    }
     // URL deep-link (?sector=&symbol=) wins over stale localStorage.
     const params = new URLSearchParams(location.search);
     const qSector = (params.get("sector") || "").trim().toLowerCase();
@@ -11253,12 +11130,7 @@ function bootPage() {
           void loadSectorMap({ force: false }).catch(() => null);
           return;
         }
-        const tf = ["1w", "2w", "3w", "4w"].includes(state.sectorMapTf)
-          ? state.sectorMapTf
-          : "1w";
-        const cov1 = sectorMapHorizonCoverage(state.sectorMap, "1w");
-        const covTf = sectorMapHorizonCoverage(state.sectorMap, tf);
-        if (cov1 < 0.7 || covTf < 0.7) {
+        if (sectorMapHorizonCoverage(state.sectorMap, "1w") < 0.7) {
           void loadSectorMap({ fillHorizon: true, quiet: true }).catch(() => null);
         } else {
           void loadSectorMap({ force: false, quiet: true }).catch(() => null);
