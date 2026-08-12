@@ -155,6 +155,13 @@ app.mount("/static", StaticFiles(directory=BASE_DIR / "static"), name="static")
 templates = Jinja2Templates(directory=str(BASE_DIR / "templates"))
 
 
+@app.get("/api/health")
+@app.get("/healthz")
+async def health() -> dict[str, str]:
+    """Liveness for Render (must answer within ~5s). Keep dependency-free."""
+    return {"status": "ok"}
+
+
 def _page(request: Request, template: str, page: str, **extra: Any) -> HTMLResponse:
     ctx = {
         "page": page,
@@ -768,11 +775,6 @@ async def api_portfolio_export(request: Request) -> dict[str, Any]:
     username = require_user(request)
     data = load_portfolio(username)
     return {"ok": True, "portfolio": data, "owner": username}
-
-
-@app.get("/api/health")
-async def health() -> dict[str, str]:
-    return {"status": "ok"}
 
 
 @app.get("/api/access")

@@ -3,9 +3,11 @@ services:
     name: pulse-desk
     runtime: docker
     plan: free
-    healthCheckPath: /api/health
+    healthCheckPath: /healthz
     envVars:
       - key: PULSE_RELOAD
         value: "0"
       - key: PULSE_HOST
         value: "0.0.0.0"
+      - key: PYTHONUNBUFFERED
+        value: "1"

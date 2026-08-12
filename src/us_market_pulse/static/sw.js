@@ -1,13 +1,14 @@
 /* Pulse Desk lightweight shell cache — HTML/auth pages always network-first. */
-const CACHE = "pulse-desk-shell-v147";
+const CACHE = "pulse-desk-shell-v148";
 const SHELL = [
-  "/static/styles.css?v=20260811a25",
-  "/static/app.js?v=20260811a25",
+  "/static/styles.css?v=20260811a26",
+  "/static/app.js?v=20260811a26",
   "/static/manifest.webmanifest",
   "/static/icons/apple-touch-icon.png",
   "/static/icons/icon-192.png",
 ];
-const NAV_TIMEOUT_MS = 12_000;
+/* Render free cold start often needs 30–60s; don't flash offline shell too early. */
+const NAV_TIMEOUT_MS = 45_000;
 
 self.addEventListener("install", (event) => {
   event.waitUntil(
