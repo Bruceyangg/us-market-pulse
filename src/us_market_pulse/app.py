@@ -298,18 +298,36 @@ async def api_sectors(
             asyncio.get_running_loop().create_task(refresh_intel(force=False))
         except RuntimeError:
             pass
-    # Hard budget so Render free / cold Yahoo paths cannot hang the page.
+    # Full desk first; on timeout fall back to lite (quotes + stock_desk) so
+    # rank ↔ 个股强弱 ↔ 成分股 linkage still paints instead of empty/— stubs.
     try:
-        desk = await asyncio.wait_for(
+        return await asyncio.wait_for(
             build_sector_desk(
                 items,
                 force=refresh,
                 selected_sector=sector,
                 selected_symbol=symbol,
+                mode="full",
             ),
-            timeout=18.0,
+            timeout=14.0,
         )
-        return desk
+    except TimeoutError:
+        pass
+    try:
+        lite = await asyncio.wait_for(
+            build_sector_desk(
+                items,
+                force=False,
+                selected_sector=sector,
+                selected_symbol=symbol,
+                mode="lite",
+            ),
+            timeout=12.0,
+        )
+        lite["note"] = lite.get("note") or "快速台面 · 走势与情报后台补全"
+        lite["lite"] = True
+        lite["stale"] = True
+        return lite
     except TimeoutError:
         stale = peek_cached_sector_desk(
             selected_sector=sector, selected_symbol=symbol

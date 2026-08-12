@@ -3659,7 +3659,14 @@ async def build_sector_desk(
     force: bool = False,
     selected_sector: str | None = None,
     selected_symbol: str | None = None,
+    mode: str = "full",
 ) -> dict[str, Any]:
+    """Build sectors desk.
+
+    mode=full: chart/sparks/news/horizon (may be slow on cold Render).
+    mode=lite: day quotes + stock_desk first — keeps rank↔成分股 linkage alive.
+    """
+    lite = (mode or "full").strip().lower() == "lite"
     now = time.time()
     if (
         not force
@@ -3675,7 +3682,7 @@ async def build_sector_desk(
         try:
             etf_quotes = await asyncio.wait_for(
                 fetch_day_quotes(etf_symbols, overnight_priority=[]),
-                timeout=5.0,
+                timeout=3.0 if lite else 5.0,
             )
         except TimeoutError:
             etf_quotes = {}
@@ -4075,52 +4082,54 @@ async def build_sector_desk(
 
         sparks_task = asyncio.create_task(_sparks_job())
 
-    waiters = []
-    if chart_task is not None:
-        waiters.append(asyncio.shield(chart_task))
-    if sparks_task is not None:
-        waiters.append(asyncio.shield(sparks_task))
-    if waiters:
-        try:
-            await asyncio.wait_for(
-                asyncio.gather(*waiters, return_exceptions=True),
-                timeout=8.0,
-            )
-        except asyncio.TimeoutError:
-            pass
-    # If sparks still thin, give them a short extra beat before we freeze the list.
-    if sparks_task is not None and not sparks_task.done():
-        sparked_now = sum(1 for r in pick_rows[:12] if _spark_points_from_row(r))
-        if sparked_now < min(6, len(pick_rows)):
-            try:
-                await asyncio.wait_for(asyncio.shield(sparks_task), timeout=3.5)
-            except asyncio.TimeoutError:
-                pass
-    # Selected chart is more important than a perfect spark fill — wait briefly
-    # if the desk still has no multi-TF / 分时 for the clicked symbol.
-    if chart_task is not None and not chart_task.done():
-        selected_pick = next(
-            (p for p in pick_rows if p.get("symbol") == selected), selected_pick
-        )
-        if not (
-            _pick_has_chart(selected_pick) or _pick_has_intraday(selected_pick)
-        ):
-            # Search/guest symbols often miss the first race — give them longer.
-            extra_wait = (
-                8.0
-                if bool((selected_pick or {}).get("is_search"))
-                or (selected and selected not in universe)
-                else 4.0
-            )
+    # Lite mode: never block the rank↔成分股 paint on chart/sparks.
+    if not lite:
+        waiters = []
+        if chart_task is not None:
+            waiters.append(asyncio.shield(chart_task))
+        if sparks_task is not None:
+            waiters.append(asyncio.shield(sparks_task))
+        if waiters:
             try:
                 await asyncio.wait_for(
-                    asyncio.shield(chart_task), timeout=extra_wait
+                    asyncio.gather(*waiters, return_exceptions=True),
+                    timeout=8.0,
                 )
             except asyncio.TimeoutError:
                 pass
+        # If sparks still thin, give them a short extra beat before we freeze the list.
+        if sparks_task is not None and not sparks_task.done():
+            sparked_now = sum(1 for r in pick_rows[:12] if _spark_points_from_row(r))
+            if sparked_now < min(6, len(pick_rows)):
+                try:
+                    await asyncio.wait_for(asyncio.shield(sparks_task), timeout=3.5)
+                except asyncio.TimeoutError:
+                    pass
+        # Selected chart is more important than a perfect spark fill — wait briefly
+        # if the desk still has no multi-TF / 分时 for the clicked symbol.
+        if chart_task is not None and not chart_task.done():
             selected_pick = next(
                 (p for p in pick_rows if p.get("symbol") == selected), selected_pick
             )
+            if not (
+                _pick_has_chart(selected_pick) or _pick_has_intraday(selected_pick)
+            ):
+                # Search/guest symbols often miss the first race — give them longer.
+                extra_wait = (
+                    8.0
+                    if bool((selected_pick or {}).get("is_search"))
+                    or (selected and selected not in universe)
+                    else 4.0
+                )
+                try:
+                    await asyncio.wait_for(
+                        asyncio.shield(chart_task), timeout=extra_wait
+                    )
+                except asyncio.TimeoutError:
+                    pass
+                selected_pick = next(
+                    (p for p in pick_rows if p.get("symbol") == selected), selected_pick
+                )
     _hydrate_sparks_from_cache(pick_rows)
     # Last-resort list prices from spark endpoints when day quotes timed out.
     for row in pick_rows:
@@ -4371,8 +4380,8 @@ async def build_sector_desk(
                 asyncio.get_running_loop().create_task(_news_bg())
             except RuntimeError:
                 pass
-    elif picks_fresh and not force:
-        # Warm picks board: never stall module switch on Google News.
+    elif lite or (picks_fresh and not force):
+        # Warm picks / lite desk: never stall module switch on Google News.
         try:
             asyncio.get_running_loop().create_task(_news_bg())
         except RuntimeError:
@@ -4515,10 +4524,27 @@ async def build_sector_desk(
         ]
 
     # Real ~10 trading-day returns for pulse rankings (not day tape).
-    try:
-        await _attach_sector_horizon_returns(sectors)
-    except Exception:  # noqa: BLE001
-        pass
+    # Lite: only stamp warm cache — network fill can wait for a soft refresh.
+    if lite:
+        now_hz = time.time()
+        for row in sectors or []:
+            sym = str((row or {}).get("symbol") or "").upper().strip()
+            hit = _PULSE_RET_CACHE.get(sym) if sym else None
+            if not isinstance(hit, dict):
+                continue
+            if now_hz - float(hit.get("at") or 0) >= _PULSE_RET_TTL:
+                continue
+            row["week5_pct"] = hit.get("week5_pct")
+            row["week10_pct"] = hit.get("week10_pct")
+            row["week15_pct"] = hit.get("week15_pct")
+            row["week20_pct"] = hit.get("week20_pct")
+            row["week42_pct"] = hit.get("week42_pct")
+            row["week_spark"] = list(hit.get("spark") or [])
+    else:
+        try:
+            await _attach_sector_horizon_returns(sectors)
+        except Exception:  # noqa: BLE001
+            pass
     sector_pulse = _build_sector_pulse(
         sectors,
         sector_news=sector_news_slim,
@@ -4532,6 +4558,7 @@ async def build_sector_desk(
         **payload,
         "sectors": [_slim_sector_etf(dict(s)) for s in sectors],
         "cached": bool(picks_fresh) and not force,
+        "lite": lite,
         "market_session": session_from_clock()[0],
         "market_session_label": session_from_clock()[1],
         "ai_desk": hot_desk,

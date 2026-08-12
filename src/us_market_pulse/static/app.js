@@ -9696,22 +9696,42 @@ async function loadSectorDesk({
         if (merged) data.selected_pick = merged;
       }
     }
-    renderSectorDesk(data);
+    // Keep rank ↔ stock desk ↔ 成分股 locked when a sector is active.
+    if (data?.active_sector_id) {
+      paintLinkedSectorDesk(data, data.active_sector_id, {
+        wantSym: data.selected_symbol || reqSymbol || "",
+      });
+    } else {
+      renderSectorDesk(data);
+    }
     syncSectorQuery();
     persistPageDataCache();
     warmHotSectorPrefetch(data?.sectors || []);
     const hot = (data.hot_sectors || []).map((s) => s.label).slice(0, 2).join("、");
     const n = (data.picks || []).length;
-    const lite = Boolean(data.selected_pick?.lite);
+    const pickLite = Boolean(data.selected_pick?.lite);
+    const deskLite =
+      Boolean(data.lite) || /快速台面/.test(String(data.note || ""));
     setStatus(
       `板块已更新${data.cached ? "（缓存）" : ""}${
         data.active_sector?.label ? ` · ${data.active_sector.label}` : ""
       }${n ? ` · ${n} 只成分` : ""}${hot ? ` · 热点 ${hot}` : ""}${
-        lite ? " · 走势补全中" : ""
+        deskLite || pickLite ? " · 走势补全中" : ""
       }`
     );
+    // Lite/timeout desks must upgrade to full — restores chart + news linkage.
+    if (deskLite && !force) {
+      window.setTimeout(() => {
+        if (PAGE === "sectors" && !state.sectorsLoadBusy) {
+          void loadSectorDesk({ force: false, deferMap: true });
+        }
+      }, 1800);
+    }
     // Don't await map — paint desk immediately; map fills when ready.
     void mapPromise;
+    if (!isSectorMapCollapsed() && !state.sectorMap) {
+      void loadSectorMap({ force: false, quiet: true }).catch(() => null);
+    }
     // Soft intraday catch-up only when tape is missing (avoid upgrade storms).
     const sel = data.selected_symbol || "";
     const isSearchGuest = Boolean(data.selected_pick?.is_search);

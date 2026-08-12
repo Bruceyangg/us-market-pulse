@@ -1,6 +1,6 @@
 # Pulse Desk — living context (agents must update)
 
-Last updated: 2026-08-12 · tip `11a60c0`
+Last updated: 2026-08-12 · tip pending `a37`
 
 ## Product
 
@@ -10,8 +10,8 @@ Last updated: 2026-08-12 · tip `11a60c0`
 
 ## Current shipped FE/SW
 
-- Static `?v=20260811a36`
-- SW cache `pulse-desk-shell-v158` · reset key `pulse_sw_reset_v158`
+- Static `?v=20260811a37` (shipping)
+- SW cache `pulse-desk-shell-v159` · reset key `pulse_sw_reset_v159`
 
 ## Design linkages that must work
 
@@ -28,18 +28,19 @@ Also: map tile → desk; pulse stock card → `selectSectorSymbol`; map TF 一�
 
 | Capability | Status |
 |---|---|
-| Map 1w–4w `fill_horizon` + cache merge | Keep (`f98b0a2` lineage) |
+| Map 1w–4w `fill_horizon` + cache merge | Keep |
 | Empty stub must not wipe painted UI | Keep |
 | Rank ↔ desk linkage | Keep (`paintLinkedSectorDesk`) |
 | Unquoted shells not warm-cached | Keep |
 | Soft prefetch key `soft:<sectorId>` | Keep |
+| `/api/sectors` lite fallback after full timeout | Keep (`mode=lite`) |
 
 **Incident:** User asked to “go back to map-only version”; three linkage commits were reverted and broke the desk. Restored via cherry-pick + rule. **Never repeat.**
 
 ## Known ops issues
 
 - Render cold start / 502 during deploy
-- `/api/sectors` can return timeout cache with 0 quotes → 成分股 show `—` (quote budget raised to 7s)
+- Full desk can exceed 14s → API falls back to `mode=lite` (quotes + stock_desk), client upgrades after ~1.8s
 - Sticky old SW → hard refresh / site data clear
 
 ## Key files
@@ -51,5 +52,5 @@ Also: map tile → desk; pulse stock card → `selectSectorSymbol`; map TF 一�
 
 ## Open / watch
 
-- Verify after deploy: rank click links left desk + 成分股 with real % not all `—`
-- Map week tabs fill without blanking day treemap
+- After deploy: `/api/sectors?sector=semis` should return quoted picks (not 0) via lite if full times out
+- Rank click links left desk + 成分股; map week tabs quiet fill
