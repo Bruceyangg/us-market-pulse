@@ -79,7 +79,7 @@
         document.head.appendChild(fonts);
       })();
     </script>
-    <link rel="stylesheet" href="/static/styles.css?v=20260811a24" />
+    <link rel="stylesheet" href="/static/styles.css?v=20260811a25" />
     {% block head %}{% endblock %}
   </head>
   <body class="page-{{ page }}" data-page="{{ page }}">
@@ -189,18 +189,34 @@
     </div>
     {% endblock %}
 
-    <script src="/static/app.js?v=20260811a24" type="module"></script>
+    <script src="/static/app.js?v=20260811a25" type="module"></script>
     <script>
       window.addEventListener("load", function () {
         // Soft wake: ping health so cold Render instances start while shell paints.
         try {
           fetch("/api/health", {
             cache: "no-store",
-            signal: AbortSignal.timeout(20000),
+            signal: AbortSignal.timeout(45000),
           }).catch(function () {});
         } catch (e) {}
         if ("serviceWorker" in navigator) {
-          navigator.serviceWorker.register("/sw.js").catch(function () {});
+          navigator.serviceWorker
+            .register("/sw.js")
+            .then(function (reg) {
+              // Drop legacy API cache that could return fake 504s during cold start.
+              if (reg && caches && caches.keys) {
+                caches.keys().then(function (keys) {
+                  keys
+                    .filter(function (k) {
+                      return String(k).indexOf("pulse-desk-api") === 0;
+                    })
+                    .forEach(function (k) {
+                      caches.delete(k);
+                    });
+                });
+              }
+            })
+            .catch(function () {});
         }
       });
     </script>

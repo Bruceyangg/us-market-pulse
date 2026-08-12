@@ -1,17 +1,13 @@
 /* Pulse Desk lightweight shell cache — HTML/auth pages always network-first. */
-const CACHE = "pulse-desk-shell-v146";
-const API_CACHE = "pulse-desk-api-v2";
+const CACHE = "pulse-desk-shell-v147";
 const SHELL = [
-  "/static/styles.css?v=20260811a24",
-  "/static/app.js?v=20260811a24",
+  "/static/styles.css?v=20260811a25",
+  "/static/app.js?v=20260811a25",
   "/static/manifest.webmanifest",
   "/static/icons/apple-touch-icon.png",
   "/static/icons/icon-192.png",
 ];
-/** Soft sector desks: stale-while-revalidate window (ms). */
-const API_SECTORS_MAX_AGE_MS = 90_000;
-const NAV_TIMEOUT_MS = 10_000;
-const API_TIMEOUT_MS = 12_000;
+const NAV_TIMEOUT_MS = 12_000;
 
 self.addEventListener("install", (event) => {
   event.waitUntil(
@@ -25,7 +21,7 @@ self.addEventListener("activate", (event) => {
     caches.keys().then((keys) =>
       Promise.all(
         keys
-          .filter((k) => k !== CACHE && k !== API_CACHE)
+          .filter((k) => k !== CACHE)
           .map((k) => caches.delete(k)),
       ),
     ),
@@ -45,14 +41,6 @@ function isHtmlRequest(req, url) {
 
 function isVersionedStatic(url) {
   return url.pathname.startsWith("/static/") && url.searchParams.has("v");
-}
-
-function isSoftSectorsApi(url) {
-  return (
-    url.pathname === "/api/sectors" &&
-    !url.searchParams.has("refresh") &&
-    url.searchParams.has("sector")
-  );
 }
 
 function offlineShell() {
@@ -76,63 +64,15 @@ async function fetchWithTimeout(req, ms) {
   }
 }
 
-async function staleWhileRevalidateSectors(req) {
-  const cache = await caches.open(API_CACHE);
-  const cached = await cache.match(req);
-  const networkPromise = fetchWithTimeout(req, API_TIMEOUT_MS)
-    .then(async (res) => {
-      if (res && res.ok) {
-        try {
-          const body = await res.clone().arrayBuffer();
-          const headers = new Headers(res.headers);
-          headers.set("x-pulse-cached-at", String(Date.now()));
-          await cache.put(
-            req,
-            new Response(body, {
-              status: res.status,
-              statusText: res.statusText,
-              headers,
-            }),
-          );
-        } catch (_) {
-          /* ignore cache races */
-        }
-      }
-      return res;
-    })
-    .catch(() => null);
-
-  if (cached) {
-    const cachedAt = Number(cached.headers.get("x-pulse-cached-at") || 0);
-    const age = cachedAt ? Date.now() - cachedAt : 0;
-    void networkPromise;
-    if (!cachedAt || age < API_SECTORS_MAX_AGE_MS) {
-      return cached;
-    }
-  }
-
-  const fresh = await networkPromise;
-  if (fresh && fresh.ok) return fresh;
-  if (cached) return cached;
-  return new Response(JSON.stringify({ ok: false, error: "timeout" }), {
-    status: 504,
-    headers: { "Content-Type": "application/json", "Cache-Control": "no-store" },
-  });
-}
-
 self.addEventListener("fetch", (event) => {
   const req = event.request;
   if (req.method !== "GET") return;
   const url = new URL(req.url);
   if (url.origin !== self.location.origin) return;
 
-  // Health / non-sector APIs: never intercept (avoid hanging the worker).
-  if (url.pathname.startsWith("/api/")) {
-    if (isSoftSectorsApi(url)) {
-      event.respondWith(staleWhileRevalidateSectors(req));
-    }
-    return;
-  }
+  // Never intercept APIs — client memory/session cache + server budgets handle fluency.
+  // Intercepting /api/sectors caused false 504s while Render was still waking.
+  if (url.pathname.startsWith("/api/")) return;
 
   if (isHtmlRequest(req, url)) {
     event.respondWith(
