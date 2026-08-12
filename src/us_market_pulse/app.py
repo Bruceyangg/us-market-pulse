@@ -317,7 +317,15 @@ async def api_sectors(
         if stale:
             stale["note"] = "行情刷新超时，已返回缓存台面。"
             return stale
-        raise HTTPException(status_code=504, detail="板块台面加载超时，请稍后重试")
+        return {
+            "sectors": [],
+            "picks": [],
+            "active_sector_id": (sector or "").strip().lower(),
+            "selected_symbol": (symbol or "").strip().upper(),
+            "cached": False,
+            "stale": True,
+            "note": "板块台面加载超时，请点击刷新重试。",
+        }
 
 
 @app.get("/api/quote/intraday")
@@ -350,7 +358,14 @@ async def api_sectors_map(refresh: bool = Query(default=False)) -> dict[str, Any
         if stale:
             stale["note"] = "地图刷新超时，已返回缓存。"
             return stale
-        raise HTTPException(status_code=504, detail="板块地图加载超时，请稍后重试")
+        # Never 504 the page — empty shell lets the desk finish painting.
+        return {
+            "sectors": [],
+            "stats": {"quoted": 0, "total": 0},
+            "cached": False,
+            "stale": True,
+            "note": "板块地图加载超时，稍后自动重试。",
+        }
 
 
 @app.get("/api/us-markets")
@@ -366,7 +381,19 @@ async def api_us_markets(
     m = (mode or "full").strip().lower()
     if m not in {"full", "tape"}:
         m = "full"
-    return await build_us_markets_desk(force=refresh, mode=m)
+    try:
+        return await asyncio.wait_for(
+            build_us_markets_desk(force=refresh, mode=m),
+            timeout=16.0,
+        )
+    except TimeoutError:
+        return {
+            "strip": [],
+            "futures": [],
+            "cached": False,
+            "stale": True,
+            "note": "美国市场加载超时，稍后自动重试。",
+        }
 
 
 @app.get("/api/earnings")

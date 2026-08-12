@@ -6408,7 +6408,9 @@ async function loadSectorMap({ force = false } = {}) {
   }
   try {
     const params = force ? "?refresh=true" : "";
-    const res = await fetch(`/api/sectors/map${params}`);
+    const res = await fetch(`/api/sectors/map${params}`, {
+      signal: AbortSignal.timeout(16000),
+    });
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     const data = await res.json();
     state.sectorMap = data;
