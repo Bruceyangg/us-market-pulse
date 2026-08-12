@@ -654,6 +654,25 @@ def peek_cached_sector_desk(
             if cached_picks.get("stock_desk"):
                 pulse["stock_desk"] = cached_picks.get("stock_desk")
             out["sector_pulse"] = pulse
+        elif active and not out.get("picks"):
+            # Timeout fallback: at least return universe tickers so FE can link.
+            universe = list(active.get("universe") or active.get("picks") or [])
+            label = str(active.get("label") or sid)
+            out["picks"] = [
+                {
+                    "symbol": str(sym).upper(),
+                    "name": str(sym).upper(),
+                    "sector_label": label,
+                    "change_pct": None,
+                    "month_change_pct": None,
+                    "points": [],
+                    "series": {},
+                    "lite": True,
+                }
+                for sym in universe
+                if str(sym or "").strip()
+            ]
+            out["active_sector"] = active
     sym = (selected_symbol or "").strip().upper()
     if sym:
         out["selected_symbol"] = sym
