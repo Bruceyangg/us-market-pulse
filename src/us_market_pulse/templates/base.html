@@ -79,7 +79,7 @@
         document.head.appendChild(fonts);
       })();
     </script>
-    <link rel="stylesheet" href="/static/styles.css?v=20260811a26" />
+    <link rel="stylesheet" href="/static/styles.css?v=20260811a27" />
     {% block head %}{% endblock %}
   </head>
   <body class="page-{{ page }}" data-page="{{ page }}">
@@ -189,7 +189,7 @@
     </div>
     {% endblock %}
 
-    <script src="/static/app.js?v=20260811a26" type="module"></script>
+    <script src="/static/app.js?v=20260811a27" type="module"></script>
     <script>
       window.addEventListener("load", function () {
         // Soft wake: ping health so cold Render instances start while shell paints.
@@ -199,24 +199,46 @@
             signal: AbortSignal.timeout(45000),
           }).catch(function () {});
         } catch (e) {}
-        if ("serviceWorker" in navigator) {
-          navigator.serviceWorker
-            .register("/sw.js")
-            .then(function (reg) {
-              // Drop legacy API cache that could return fake 504s during cold start.
-              if (reg && caches && caches.keys) {
-                caches.keys().then(function (keys) {
-                  keys
-                    .filter(function (k) {
-                      return String(k).indexOf("pulse-desk-api") === 0;
-                    })
-                    .forEach(function (k) {
-                      caches.delete(k);
-                    });
-                });
+        if (!("serviceWorker" in navigator)) return;
+        var RESET_KEY = "pulse_sw_reset_v148";
+        var bootSw = function () {
+          navigator.serviceWorker.register("/sw.js").catch(function () {});
+        };
+        // One-time purge: older SW builds intercepted /api/sectors and returned fake 504s.
+        try {
+          if (localStorage.getItem(RESET_KEY) === "1") {
+            bootSw();
+            return;
+          }
+          Promise.all([
+            navigator.serviceWorker.getRegistrations().then(function (regs) {
+              return Promise.all(
+                regs.map(function (r) {
+                  return r.unregister();
+                }),
+              );
+            }),
+            caches.keys().then(function (keys) {
+              return Promise.all(
+                keys.map(function (k) {
+                  return caches.delete(k);
+                }),
+              );
+            }),
+          ])
+            .catch(function () {})
+            .then(function () {
+              try {
+                localStorage.setItem(RESET_KEY, "1");
+              } catch (e) {}
+              bootSw();
+              // Ensure the page runs without the stale controller.
+              if (navigator.serviceWorker.controller) {
+                location.reload();
               }
-            })
-            .catch(function () {});
+            });
+        } catch (e) {
+          bootSw();
         }
       });
     </script>

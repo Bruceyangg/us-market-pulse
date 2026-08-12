@@ -9148,7 +9148,7 @@ async function loadSectorDesk({ force = false, refreshMap = false } = {}) {
       const req =
         shared ||
         fetch(`/api/sectors?${params.toString()}`, {
-          signal: AbortSignal.timeout(22000),
+          signal: AbortSignal.timeout(30000),
         })
           .then((res) => {
             if (!res.ok) throw new Error(`HTTP ${res.status}`);
