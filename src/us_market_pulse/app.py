@@ -334,7 +334,13 @@ async def api_quote_intraday(
     refresh: bool = Query(default=False),
 ) -> dict[str, Any]:
     """Shared Yahoo-first 分时 snapshot for holdings + sectors auto-refresh."""
-    snap = await fetch_intraday_snapshot(symbol, force=refresh)
+    try:
+        snap = await asyncio.wait_for(
+            fetch_intraday_snapshot(symbol, force=refresh),
+            timeout=6.0,
+        )
+    except TimeoutError as exc:
+        raise HTTPException(status_code=504, detail="分时加载超时") from exc
     if not snap:
         raise HTTPException(status_code=404, detail="暂无分时数据")
     return snap
@@ -346,7 +352,13 @@ async def api_quote_chart(
     refresh: bool = Query(default=False),
 ) -> dict[str, Any]:
     """Standalone multi-TF + 分时 upgrade for desk search / guest symbols."""
-    return await fetch_symbol_desk_chart(symbol, force=refresh)
+    try:
+        return await asyncio.wait_for(
+            fetch_symbol_desk_chart(symbol, force=refresh),
+            timeout=18.0,
+        )
+    except TimeoutError as exc:
+        raise HTTPException(status_code=504, detail="走势加载超时") from exc
 
 
 @app.get("/api/sectors/map")
@@ -423,10 +435,31 @@ async def api_portfolio_intel(
 ) -> dict[str, Any]:
     """Intel stories linked to current portfolio holdings."""
     username = require_user(request)
-    data = await refresh_intel(force=refresh)
     portfolio = load_portfolio(username)
+    items = peek_intel_items() or []
+    meta: dict[str, Any] = {"fetched_at": None, "cached": True, "errors": []}
+    if refresh or not items:
+        try:
+            data = await asyncio.wait_for(refresh_intel(force=refresh), timeout=12.0)
+            items = data.get("items") or items
+            meta = {
+                "fetched_at": data.get("fetched_at"),
+                "cached": data.get("cached"),
+                "errors": data.get("errors") or [],
+            }
+        except TimeoutError:
+            meta = {
+                "fetched_at": None,
+                "cached": True,
+                "errors": ["情报刷新超时"],
+            }
+    else:
+        try:
+            asyncio.get_running_loop().create_task(refresh_intel(force=False))
+        except RuntimeError:
+            pass
     summary = summarize_holding_intel(
-        data.get("items") or [],
+        items,
         portfolio.get("holdings") or [],
         symbol=symbol,
         limit=limit,
@@ -436,9 +469,9 @@ async def api_portfolio_intel(
         "holdings": portfolio.get("holdings") or [],
         "portfolio_selected": portfolio.get("selected") or "",
         "owner": username,
-        "fetched_at": data.get("fetched_at"),
-        "cached": data.get("cached"),
-        "errors": data.get("errors") or [],
+        "fetched_at": meta.get("fetched_at"),
+        "cached": meta.get("cached"),
+        "errors": meta.get("errors") or [],
         **summary,
     }
 
@@ -647,7 +680,7 @@ async def api_portfolio(
     try:
         view = await asyncio.wait_for(
             build_portfolio_view(username, force_refresh=refresh),
-            timeout=45.0,
+            timeout=18.0,
         )
     except Exception as exc:  # noqa: BLE001
         view = _portfolio_stub_view(username)

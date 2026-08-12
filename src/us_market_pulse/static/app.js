@@ -59,6 +59,8 @@ const state = {
   sectorEtfSig: "",
   sectorSoftRefreshTimer: null,
   sectorsHeightSyncTimer: 0,
+  sectorPrefetchActive: 0,
+  sectorPrefetchQueue: [],
   sectorSearchMode: false,
   sectorSearchQuery: "",
   sectorSearchHits: [],
@@ -2848,6 +2850,7 @@ async function loadPortfolio({ refresh = false } = {}) {
   try {
     const res = await fetch(`/api/portfolio${refresh ? "?refresh=true" : ""}`, {
       credentials: "same-origin",
+      signal: AbortSignal.timeout(22000),
     });
     if (res.status === 401) {
       if (PAGE === "desk") {
@@ -6586,6 +6589,47 @@ function scheduleSoftSectorRefresh() {
   }, 420);
 }
 
+const SECTOR_PREFETCH_MAX = 2;
+
+function runSectorPrefetchQueue() {
+  while (
+    state.sectorPrefetchActive < SECTOR_PREFETCH_MAX &&
+    (state.sectorPrefetchQueue || []).length
+  ) {
+    const id = state.sectorPrefetchQueue.shift();
+    if (!id || sectorCacheGet(id) || sectorInflight.has(id)) continue;
+    state.sectorPrefetchActive += 1;
+    Promise.resolve(prefetchSectorDesk(id, { queued: true }))
+      .catch(() => null)
+      .finally(() => {
+        state.sectorPrefetchActive = Math.max(0, state.sectorPrefetchActive - 1);
+        runSectorPrefetchQueue();
+      });
+  }
+}
+
+function enqueueSectorPrefetch(id) {
+  const sectorId = (id || "").trim().toLowerCase();
+  if (!sectorId || sectorCacheGet(sectorId) || sectorInflight.has(sectorId)) {
+    return;
+  }
+  if (!state.sectorPrefetchQueue) state.sectorPrefetchQueue = [];
+  if (state.sectorPrefetchQueue.includes(sectorId)) return;
+  state.sectorPrefetchQueue.push(sectorId);
+  runSectorPrefetchQueue();
+}
+
+function scheduleIdleSectorPrefetch(ids) {
+  const list = [...new Set((ids || []).filter(Boolean))];
+  if (!list.length) return;
+  const kick = () => list.forEach((id) => enqueueSectorPrefetch(id));
+  if (typeof requestIdleCallback === "function") {
+    requestIdleCallback(kick, { timeout: 1800 });
+  } else {
+    window.setTimeout(kick, 700);
+  }
+}
+
 function warmPulseRankPrefetch(data) {
   const pulse = data?.sector_pulse || {};
   const hz = state.sectorPulseHorizon || pulse.default_horizon || "2w";
@@ -6595,6 +6639,7 @@ function warmPulseRankPrefetch(data) {
   const activeIdx = ranking.findIndex(
     (r) => String(r?.id || "").toLowerCase() === active,
   );
+  // Neighbors first (highest switch likelihood), then top ranks — keep queue short.
   if (activeIdx >= 0) {
     for (const off of [-1, 1, -2, 2]) {
       const row = ranking[activeIdx + off];
@@ -6604,15 +6649,13 @@ function warmPulseRankPrefetch(data) {
       if (id && id !== active) ids.push(id);
     }
   }
-  ranking.slice(0, 8).forEach((row) => {
+  ranking.slice(0, 4).forEach((row) => {
     const id = String(row?.id || "")
       .trim()
       .toLowerCase();
     if (id && id !== active) ids.push(id);
   });
-  [...new Set(ids)].slice(0, 8).forEach((id, i) => {
-    window.setTimeout(() => prefetchSectorDesk(id), 60 + i * 90);
-  });
+  scheduleIdleSectorPrefetch(ids.slice(0, 4));
 }
 
 function pickHasChart(pick) {
@@ -7312,13 +7355,18 @@ function openSectorDesk(id, { scroll = true, symbol = "" } = {}) {
     .finally(finishScroll);
 }
 
-function prefetchSectorDesk(id) {
+function prefetchSectorDesk(id, { queued = false } = {}) {
   const sectorId = (id || "").trim().toLowerCase();
   if (!sectorId || sectorCacheGet(sectorId)) return;
   if (sectorInflight.has(sectorId)) return sectorInflight.get(sectorId);
+  // Hover/focus: enqueue so we never stampede Yahoo behind the active desk.
+  if (!queued) {
+    enqueueSectorPrefetch(sectorId);
+    return sectorInflight.get(sectorId);
+  }
   const params = new URLSearchParams({ sector: sectorId });
   const req = fetch(`/api/sectors?${params.toString()}`, {
-    signal: AbortSignal.timeout(12000),
+    signal: AbortSignal.timeout(10000),
   })
     .then((res) => (res.ok ? res.json() : null))
     .then((data) => {
@@ -7335,12 +7383,12 @@ function prefetchSectorDesk(id) {
 
 function warmHotSectorPrefetch(sectors) {
   const rows = (sectors || []).filter((r) => r?.id);
-  const hot = rows.filter((r) => r.is_hot).slice(0, 3);
-  const rest = rows.filter((r) => !r.is_hot).slice(0, 2);
-  [...hot, ...rest].forEach((row, i) => {
-    if (!row.id || row.id === state.sectorId) return;
-    window.setTimeout(() => prefetchSectorDesk(row.id), 120 + i * 160);
-  });
+  const hot = rows.filter((r) => r.is_hot).slice(0, 2);
+  const rest = rows.filter((r) => !r.is_hot).slice(0, 1);
+  const ids = [...hot, ...rest]
+    .map((row) => String(row?.id || "").toLowerCase())
+    .filter((id) => id && id !== state.sectorId);
+  scheduleIdleSectorPrefetch(ids);
   warmPulseRankPrefetch(state.sectors);
 }
 
@@ -8959,6 +9007,10 @@ function selectSectorSymbol(sym) {
   setStatus(`已切换 ${pick.name || symbol} · ${pick.sector_label || ""}`);
   persistPageDataCache();
   const chartReady = already || deskChartReady(data.selected_pick);
+  const cacheAge = sectorCacheAge(
+    data.active_sector_id || state.sectorId || "",
+  );
+  const deskFresh = cacheAge < SECTOR_CACHE_FRESH_MS;
   if (chartReady) {
     clearSectorChartLoading(symbol);
     if (state.sectorTf === "intraday") refreshActiveIntraday({ force: false });
@@ -8968,7 +9020,10 @@ function selectSectorSymbol(sym) {
       !(data.symbol_news || []).length ||
       !data.value_chain ||
       !data.selected_earnings;
-    if (needDesk) void loadSectorDesk({ force: false });
+    if (needDesk) {
+      if (deskFresh) scheduleSoftSectorRefresh();
+      else void loadSectorDesk({ force: false });
+    }
     return;
   }
   // Soft upgrade — force=true wiped picks cache and also force-refreshed the map.
@@ -8977,7 +9032,8 @@ function selectSectorSymbol(sym) {
     refreshActiveIntraday({ force: needForceIntra });
   }
   // Desk load schedules chart catchup when needed — avoid duplicate fan-out.
-  void loadSectorDesk({ force: false });
+  if (deskFresh) scheduleSoftSectorRefresh();
+  else void loadSectorDesk({ force: false });
 }
 
 function sectorPickListSignature(picks) {
@@ -9107,13 +9163,18 @@ function paintSectorDeskError(message) {
   }
 }
 
-async function loadSectorDesk({ force = false, refreshMap = false } = {}) {
+async function loadSectorDesk({
+  force = false,
+  refreshMap = false,
+  deferMap = false,
+} = {}) {
   if (PAGE !== "sectors") return null;
   if (state.sectorsLoadBusy) {
     // Soft sector/symbol switches must not inherit a sticky force from 刷新.
     state.sectorsLoadPending = {
       force: Boolean(force),
       refreshMap: Boolean(refreshMap || (force && state.sectorsLoadPending?.refreshMap)),
+      deferMap: Boolean(deferMap && state.sectorsLoadPending?.deferMap !== false),
       sectorId: state.sectorId,
       sectorSymbol: state.sectorSymbol,
     };
@@ -9131,10 +9192,11 @@ async function loadSectorDesk({ force = false, refreshMap = false } = {}) {
   setStatus(force ? "强制刷新板块…" : "同步板块行情与情报…");
   if (els.sectorsRefresh) els.sectorsRefresh.disabled = true;
   // Map is independent — soft desk polls skip map unless empty / explicit refresh.
+  // Boot path sets deferMap so the desk wins Yahoo bandwidth first.
   const wantMap = Boolean(refreshMap || force);
   const mapMissing = !state.sectorMap && !isSectorMapCollapsed();
   const mapPromise =
-    wantMap || mapMissing
+    !deferMap && (wantMap || mapMissing)
       ? loadSectorMap({ force: wantMap }).catch(() => null)
       : Promise.resolve(state.sectorMap);
   try {
@@ -9150,7 +9212,8 @@ async function loadSectorDesk({ force = false, refreshMap = false } = {}) {
       const req =
         shared ||
         fetch(`/api/sectors?${params.toString()}`, {
-          signal: AbortSignal.timeout(30000),
+          // Align with server 18s budget (+ small network headroom).
+          signal: AbortSignal.timeout(20000),
         })
           .then((res) => {
             if (!res.ok) throw new Error(`HTTP ${res.status}`);
@@ -9304,6 +9367,7 @@ async function loadSectorDesk({ force = false, refreshMap = false } = {}) {
       void loadSectorDesk({
         force: Boolean(pending.force),
         refreshMap: Boolean(pending.refreshMap),
+        deferMap: Boolean(pending.deferMap),
       });
     }
   }
@@ -9606,8 +9670,8 @@ async function loadUsMarketsDesk({ force = false, mode = "full" } = {}) {
     params.set("mode", want);
     if (force) params.set("refresh", "true");
     const res = await fetch(`/api/us-markets?${params.toString()}`, {
-      // Backend hard-caps ~9s tape / ~14s full; leave FE headroom + retry.
-      signal: AbortSignal.timeout(want === "tape" ? 16000 : 28000),
+      // Align with server ~11s tape / ~16s full budgets.
+      signal: AbortSignal.timeout(want === "tape" ? 14000 : 18000),
     });
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     let data = await res.json();
@@ -10891,18 +10955,17 @@ function bootPage() {
       setStatus("已恢复板块缓存 · 后台刷新中…");
     }
     bindSectorDesk();
-    // Tape first (quotes + 分时), then upgrade 日/月/季 in background.
-    void loadUsMarketsDesk({ mode: "tape", force: true }).then(() => {
-      persistPageDataCache();
-      void loadUsMarketsDesk({ mode: "full", force: false });
-    });
+    // Critical path: desk first. US markets / map follow so they don't contend on cold start.
+    const hasUsCache = Boolean(
+      (state.usMarkets?.strip || []).length ||
+        (state.usMarkets?.futures || []).length,
+    );
     void refreshHoldingSymbols().then(() => {
       if (state.sectors?.picks?.length) refreshSectorPickListLive();
     });
-    void loadSectorDesk().then(() => {
+    void loadSectorDesk({ deferMap: true }).then(() => {
       // Lite list returns first; chart/news catch up without blocking 成分股.
       if (state.sectorTf === "intraday") {
-        // Soft when tape already present; force only on empty first paint.
         refreshActiveIntraday({
           force: !pickHasIntraday(state.sectors?.selected_pick),
         });
@@ -10914,7 +10977,26 @@ function bootPage() {
         });
       }
       persistPageDataCache();
+      // After desk paints: soft tape (skip force if cache already shown), then full + map.
+      void loadUsMarketsDesk({
+        mode: "tape",
+        force: !hasUsCache,
+      }).then(() => {
+        persistPageDataCache();
+        void loadUsMarketsDesk({ mode: "full", force: false });
+      });
+      if (!isSectorMapCollapsed()) {
+        window.setTimeout(() => {
+          if (PAGE === "sectors" && !state.sectorMap) {
+            void loadSectorMap({ force: false }).catch(() => null);
+          }
+        }, 450);
+      }
     });
+    // If desk is slow, still warm a soft tape in parallel without force-refresh.
+    if (hasUsCache) {
+      void loadUsMarketsDesk({ mode: "tape", force: false });
+    }
     const whenVisible = (fn) => () => {
       if (typeof document !== "undefined" && document.visibilityState === "hidden") {
         return;
