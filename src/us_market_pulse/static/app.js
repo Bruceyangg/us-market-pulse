@@ -56,9 +56,6 @@ const state = {
   sectorsLoadPending: null,
   sectorPulseHorizon: "2w",
   sectorPulseSig: "",
-  sectorPulseSwitchAt: 0,
-  sectorPulseSwitchId: "",
-  sectorPulseSwitchTimer: 0,
   sectorEtfSig: "",
   sectorSoftRefreshTimer: null,
   sectorsHeightSyncTimer: 0,
@@ -5722,8 +5719,8 @@ function renderSectorPulse(data, { soft = false } = {}) {
         const id = btn.getAttribute("data-pulse-sector");
         if (!id) return;
         markPulseRankActive(id);
+        paintPulseSwitchHint(id);
         // Rank → left pulse + stock desk stay in the研判区 (no jump to bottom desk).
-        // openSectorDesk paints cache or a local stock-desk fallback — no sticky hint.
         openSectorDesk(id, { scroll: false });
       });
     });
@@ -6577,148 +6574,8 @@ function isEmptySectorDesk(data) {
   return !data || (!(data.picks || []).length && !(data.sectors || []).length);
 }
 
-/** Optimistic switch stub (lite / unpriced picks) — not a real desk paint. */
-function isSectorSwitchPlaceholder(data) {
-  if (!data) return false;
-  const picks = data.picks || [];
-  if (!picks.length) return false;
-  const allLite = picks.every((p) => p?.lite);
-  const noQuotes = picks.every(
-    (p) => p?.change_pct == null && p?.price == null,
-  );
-  const desk = data.sector_pulse?.stock_desk || {};
-  const hasDesk = ["strong", "bearish", "watch", "weak"].some(
-    (k) => (desk[k] || []).length,
-  );
-  return (allLite || noQuotes) && !hasDesk;
-}
-
 function isEmptyUsMarkets(data) {
   return !data || (!(data.strip || []).length && !(data.futures || []).length);
-}
-
-function stockDeskHasRows(desk) {
-  return ["strong", "bearish", "watch", "weak"].some(
-    (k) => ((desk || {})[k] || []).length,
-  );
-}
-
-/** Client fallback when server stock_desk is missing/slow. */
-function synthesizePulseStockDesk(data) {
-  const picks = (data?.picks || []).filter((p) => p?.symbol);
-  const label =
-    data?.active_sector?.label ||
-    data?.sector_pulse?.stock_desk?.sector_label ||
-    "当前板块";
-  const sid = data?.active_sector_id || "";
-  if (!picks.length) {
-    return {
-      sector_id: sid,
-      sector_label: label,
-      summary: `「${label}」暂无成分强弱，稍后自动重试`,
-      strong: [],
-      bearish: [],
-      watch: [],
-      weak: [],
-    };
-  }
-  const scored = picks.map((p) => {
-    const day = typeof p.change_pct === "number" ? p.change_pct : null;
-    const month =
-      typeof p.month_change_pct === "number" ? p.month_change_pct : null;
-    let score = 0;
-    if (month != null) score += month * 0.55;
-    if (day != null) score += day * 0.35;
-    let stance = "watch";
-    let stance_zh = "观察等待";
-    if (score >= 1.2) {
-      stance = "accumulate";
-      stance_zh = "偏多跟踪";
-    } else if (score <= -1.2) {
-      stance = "avoid";
-      stance_zh = "谨慎回避";
-    } else if (score <= -0.3) {
-      stance = "reduce";
-      stance_zh = "偏空跟踪";
-    }
-    return {
-      symbol: String(p.symbol || "").toUpperCase(),
-      name: p.name || p.symbol,
-      change_pct: day,
-      month_change_pct: month,
-      score: Math.round(score * 100) / 100,
-      stance,
-      stance_zh,
-      industries: p.industries || [],
-      reason:
-        day != null || month != null
-          ? [
-              month != null ? `近月 ${pctText(month)}` : "",
-              day != null ? `今日 ${pctText(day)}` : "",
-            ]
-              .filter(Boolean)
-              .join(" · ")
-          : "行情补全中",
-      action: "点击查看分时 / 产业链",
-    };
-  });
-  scored.sort((a, b) => (b.score || 0) - (a.score || 0));
-  const strong = scored.filter((r) => r.stance === "accumulate").slice(0, 8);
-  const bearish = scored
-    .filter((r) => r.stance === "reduce" || r.stance === "avoid")
-    .slice(0, 8);
-  const watch = scored.filter((r) => r.stance === "watch").slice(0, 8);
-  return {
-    sector_id: sid,
-    sector_label: label,
-    summary: `「${label}」成分强弱（本地速览 · 行情补全中）`,
-    strong,
-    bearish,
-    watch,
-    weak: [],
-  };
-}
-
-function ensurePulseStockDesk(data) {
-  if (!data || typeof data !== "object") return data;
-  const pulse = data.sector_pulse || {};
-  if (stockDeskHasRows(pulse.stock_desk)) return data;
-  const desk = synthesizePulseStockDesk(data);
-  data.sector_pulse = { ...pulse, stock_desk: desk };
-  return data;
-}
-
-function clearPulseSwitchWatchdog() {
-  if (state.sectorPulseSwitchTimer) {
-    clearTimeout(state.sectorPulseSwitchTimer);
-    state.sectorPulseSwitchTimer = 0;
-  }
-  state.sectorPulseSwitchAt = 0;
-  state.sectorPulseSwitchId = "";
-}
-
-function armPulseSwitchWatchdog(sectorId) {
-  clearPulseSwitchWatchdog();
-  const id = String(sectorId || "")
-    .trim()
-    .toLowerCase();
-  if (!id) return;
-  state.sectorPulseSwitchId = id;
-  state.sectorPulseSwitchAt = Date.now();
-  state.sectorPulseSwitchTimer = window.setTimeout(() => {
-    state.sectorPulseSwitchTimer = 0;
-    if (PAGE !== "sectors") return;
-    if (state.sectorPulseSwitchId !== id) return;
-    if ((state.sectorId || "") !== id) return;
-    // Still stuck on switch hint / placeholder — force paint + reload.
-    const data = ensurePulseStockDesk(state.sectors);
-    if (data?.active_sector_id === id || state.sectorId === id) {
-      paintPulseStockDesk(data?.sector_pulse?.stock_desk || synthesizePulseStockDesk(data));
-      if (isSectorSwitchPlaceholder(state.sectors) || !stockDeskHasRows(data?.sector_pulse?.stock_desk)) {
-        void loadSectorDesk({ force: true, deferMap: true }).catch(() => null);
-      }
-    }
-  }, 5500);
 }
 
 function sectorCacheAge(id) {
@@ -6846,7 +6703,6 @@ function paintPulseSwitchHint(sectorId) {
     watch: [],
     weak: [],
   });
-  armPulseSwitchWatchdog(id);
 }
 
 function scheduleSoftSectorRefresh() {
@@ -7530,10 +7386,7 @@ function paintSectorSwitchPlaceholder(sectorId) {
   state.sectors = stub;
   state.sectorSymbol = "";
   markSectorChipActive(sectorId);
-  // Immediate local stock desk (ticker cards) — never leave "正在切换…" stuck.
-  ensurePulseStockDesk(stub);
-  paintPulseStockDesk(stub.sector_pulse.stock_desk);
-  armPulseSwitchWatchdog(sectorId);
+  paintPulseSwitchHint(sectorId);
   // Defer bottom desk stub so left pulse paints first.
   requestAnimationFrame(() => {
     if (state.sectorId !== sectorId) return;
@@ -7599,15 +7452,9 @@ function openSectorDesk(id, { scroll = true, symbol = "" } = {}) {
     renderSectorDesk(cached, { sectorSwitch: true });
     markPulseRankActive(sectorId);
     markSectorChipActive(sectorId);
-    clearPulseSwitchWatchdog();
     // Fresh cache: show immediately; skip or defer soft-refresh for snappy switches.
     if (cacheAge < SECTOR_CACHE_FRESH_MS) {
-      const sym =
-        wantSym ||
-        cached.selected_symbol ||
-        cached.picks?.[0]?.symbol ||
-        "";
-      if (sym) selectSectorSymbol(sym);
+      if (wantSym) selectSectorSymbol(wantSym);
       if (cacheAge >= SECTOR_CACHE_INSTANT_MS) {
         scheduleSoftSectorRefresh();
       }
@@ -7624,7 +7471,6 @@ function openSectorDesk(id, { scroll = true, symbol = "" } = {}) {
   const load = pref
     ? pref.then((data) => {
         if (data && !isEmptySectorDesk(data) && state.sectorId === sectorId) {
-          ensurePulseStockDesk(data);
           sectorCachePut(sectorId, data);
           renderSectorDesk(data, { sectorSwitch: true });
           markPulseRankActive(sectorId);
@@ -7633,22 +7479,13 @@ function openSectorDesk(id, { scroll = true, symbol = "" } = {}) {
           persistPageDataCache();
           return data;
         }
-        return loadSectorDesk({ force: false, deferMap: true });
+        return loadSectorDesk({ force: false });
       })
-    : loadSectorDesk({ force: false, deferMap: true });
+    : loadSectorDesk({ force: false });
   Promise.resolve(load)
-    .then((data) => {
-      if (state.sectorId !== sectorId) return;
-      const desk = data && !isEmptySectorDesk(data) ? data : state.sectors;
-      const sym =
-        wantSym ||
-        desk?.selected_symbol ||
-        desk?.picks?.[0]?.symbol ||
-        "";
-      if (sym) selectSectorSymbol(sym);
-      // If still on switch placeholder, force one recovery load.
-      if (isSectorSwitchPlaceholder(state.sectors)) {
-        void loadSectorDesk({ force: true, deferMap: true });
+    .then(() => {
+      if (wantSym && state.sectorId === sectorId) {
+        selectSectorSymbol(wantSym);
       }
     })
     .finally(finishScroll);
@@ -9347,16 +9184,8 @@ function sectorPickListSignature(picks) {
 function renderSectorDesk(data, { sectorSwitch = false } = {}) {
   const prev = state.sectors;
   // Empty timeout stubs must not blank a painted desk.
-  if (
-    isEmptySectorDesk(data) &&
-    !isEmptySectorDesk(prev) &&
-    !isSectorSwitchPlaceholder(prev) &&
-    !sectorSwitch
-  ) {
+  if (isEmptySectorDesk(data) && !isEmptySectorDesk(prev) && !sectorSwitch) {
     return;
-  }
-  if (data && !isEmptySectorDesk(data)) {
-    ensurePulseStockDesk(data);
   }
   const sameBoard =
     prev &&
@@ -9410,16 +9239,12 @@ function renderSectorDesk(data, { sectorSwitch = false } = {}) {
   );
   if (hasPulseGrid && rotatePaint) {
     markPulseRankActive(data?.active_sector_id || state.sectorId);
-    const desk =
-      data?.sector_pulse?.stock_desk || synthesizePulseStockDesk(data);
-    paintPulseStockDesk(desk);
+    paintPulseStockDesk(data?.sector_pulse?.stock_desk || {});
     state.sectorPulseSig = sectorPulseSignature(data);
-    clearPulseSwitchWatchdog();
   } else {
     renderSectorPulse(data, {
       soft: Boolean(sameBoard) && !rotatePaint,
     });
-    clearPulseSwitchWatchdog();
   }
   if (!sameBoard || rotatePaint) {
     renderAiDesk(data?.hot_desk || data?.ai_desk);
@@ -9491,27 +9316,10 @@ async function loadSectorDesk({
     state.sectorsLoadPending = {
       force: Boolean(force),
       refreshMap: Boolean(refreshMap || (force && state.sectorsLoadPending?.refreshMap)),
-      // Prefer not deferring map forever when user is actively switching.
-      deferMap: Boolean(deferMap),
+      deferMap: Boolean(deferMap && state.sectorsLoadPending?.deferMap !== false),
       sectorId: state.sectorId,
       sectorSymbol: state.sectorSymbol,
     };
-    // Wait briefly for the in-flight load to finish instead of pretending we're done.
-    const waited = await Promise.race([
-      new Promise((r) => setTimeout(r, 1200)),
-      new Promise((r) => {
-        const t = setInterval(() => {
-          if (!state.sectorsLoadBusy) {
-            clearInterval(t);
-            r();
-          }
-        }, 80);
-      }),
-    ]);
-    void waited;
-    if (!state.sectorsLoadBusy && state.sectorId) {
-      return loadSectorDesk({ force, refreshMap, deferMap });
-    }
     return state.sectors;
   }
   const seq = ++state.sectorsLoadSeq;
@@ -9575,34 +9383,17 @@ async function loadSectorDesk({
     ) {
       return data;
     }
-    // Empty timeout stub must not wipe a real painted desk — but switch
-    // placeholders are NOT real desks (they leave "正在切换…" stuck).
-    if (isEmptySectorDesk(data)) {
-      const placeholder = isSectorSwitchPlaceholder(state.sectors);
-      if (!placeholder && !isEmptySectorDesk(state.sectors)) {
-        setStatus(
-          data?.note || "板块刷新超时，已保留当前台面 · 稍后自动重试",
-        );
-        return state.sectors;
-      }
-      // Escape stuck switch UI: paint local fallback + hard retry once.
-      ensurePulseStockDesk(state.sectors);
-      paintPulseStockDesk(
-        state.sectors?.sector_pulse?.stock_desk ||
-          synthesizePulseStockDesk(state.sectors),
+    // Empty timeout stub must not wipe a painted / session-restored desk.
+    if (isEmptySectorDesk(data) && !isEmptySectorDesk(state.sectors)) {
+      setStatus(
+        data?.note || "板块刷新超时，已保留当前台面 · 稍后自动重试",
       );
-      clearPulseSwitchWatchdog();
-      setStatus(data?.note || "板块台面暂不可用，正在重试…");
-      if (!force) {
-        window.setTimeout(() => {
-          if (PAGE === "sectors" && state.sectorId === reqSector) {
-            void loadSectorDesk({ force: true, deferMap: true });
-          }
-        }, 900);
-      }
       return state.sectors;
     }
-    ensurePulseStockDesk(data);
+    if (isEmptySectorDesk(data)) {
+      setStatus(data?.note || "板块台面暂不可用，稍后重试");
+      return state.sectors;
+    }
     if (data?.active_sector_id) sectorCachePut(data.active_sector_id, data);
     // Keep previously upgraded picks / 分时 only within the SAME sector.
     const prevSector =
