@@ -1,0 +1,31 @@
+---
+description: Force agents to load and update durable project memory each session
+alwaysApply: true
+---
+
+# Agent memory protocol (this repo)
+
+Cross-chat memory is **not automatic**. Use the files below as the source of truth.
+
+## At the start of every non-trivial task
+
+1. Read `.cursor/CONTEXT.md` (living project memory).
+2. Read `.cursor/rules/pulse-desk-linkage.mdc` before any sectors/map/load change.
+3. Prefer fixing regressions over “simplifying away” prior fixes (especially after user asks to revert one feature).
+
+## Before finishing (or when user asks to ship / push)
+
+Update `.cursor/CONTEXT.md` with:
+
+- What changed and **why**
+- Current live URL + asset/SW version if bumped
+- Open bugs / known traps
+- Explicit **Do not regress** bullets for this session’s work
+
+Keep CONTEXT.md short (aim ≤120 lines). Oldest resolved noise can be deleted; keep active constraints.
+
+## Hard bans
+
+- Never revert linkage/stub/map-week fixes in isolation — keep coexisting capabilities (see linkage rule).
+- Never claim “remembered” something that is not written into CONTEXT.md or a rule.
+- If unsure about prior intent, read CONTEXT.md + recent `git log` before editing.
