@@ -417,6 +417,7 @@ def peek_cached_market_map() -> dict[str, Any] | None:
 _MAP_RET_CACHE: dict[str, dict[str, Any]] = {}
 _MAP_RET_TTL = 1800.0
 _HORIZON_FILL_BUSY = False
+_HORIZON_FILL_PENDING: list[str] | None = None
 
 
 def _pct_from_closes(closes: list[float], sessions: int) -> float | None:
@@ -490,14 +491,21 @@ async def _yahoo_daily_closes(
     return []
 
 
-def _horizon_row_fresh(hit: dict[str, Any] | None, *, now: float | None = None) -> bool:
+def _horizon_row_usable(hit: dict[str, Any] | None, *, now: float | None = None) -> bool:
+    """Partial week row is OK to paint (at least 1w)."""
     if not isinstance(hit, dict):
         return False
     ts = now if now is not None else time.time()
     if ts - float(hit.get("at") or 0) >= _MAP_RET_TTL:
         return False
-    # Require 1w+4w so week tabs don't look empty after a partial fill.
-    return hit.get("week5_pct") is not None and hit.get("week20_pct") is not None
+    return hit.get("week5_pct") is not None
+
+
+def _horizon_row_complete(hit: dict[str, Any] | None, *, now: float | None = None) -> bool:
+    """Full 1w–4w row — stop refetching until TTL expires."""
+    if not _horizon_row_usable(hit, now=now):
+        return False
+    return hit.get("week20_pct") is not None  # type: ignore[union-attr]
 
 
 def _cached_horizon_rets(symbols: list[str]) -> dict[str, dict[str, Any]]:
@@ -505,12 +513,8 @@ def _cached_horizon_rets(symbols: list[str]) -> dict[str, dict[str, Any]]:
     out: dict[str, dict[str, Any]] = {}
     for sym in symbols:
         hit = _MAP_RET_CACHE.get(str(sym or "").upper())
-        if (
-            isinstance(hit, dict)
-            and now - float(hit.get("at") or 0) < _MAP_RET_TTL
-            and hit.get("week5_pct") is not None
-        ):
-            out[str(sym).upper()] = hit
+        if _horizon_row_usable(hit, now=now):
+            out[str(sym).upper()] = hit  # type: ignore[assignment]
     return out
 
 
@@ -528,9 +532,10 @@ async def _fetch_map_horizon_returns(
         if not key:
             continue
         hit = _MAP_RET_CACHE.get(key)
-        if _horizon_row_fresh(hit, now=now):
+        if _horizon_row_usable(hit, now=now):
             out[key] = hit  # type: ignore[assignment]
-        else:
+        # Keep fetching until 4w lands (or TTL expires).
+        if not _horizon_row_complete(hit, now=now):
             need.append(key)
     if not need:
         return out
@@ -584,24 +589,33 @@ async def _fetch_map_horizon_returns(
 
 async def _background_horizon_fill(symbols: list[str]) -> None:
     """Continue filling week returns after the map response is already out."""
-    global _HORIZON_FILL_BUSY
+    global _HORIZON_FILL_BUSY, _HORIZON_FILL_PENDING
     if _HORIZON_FILL_BUSY:
+        _HORIZON_FILL_PENDING = list(symbols or [])
         return
     _HORIZON_FILL_BUSY = True
+    batch = list(symbols or [])
     try:
-        await _fetch_map_horizon_returns(symbols, concurrency=18)
-        cached = _MAP_CACHE.get("payload")
-        if isinstance(cached, dict) and cached.get("sectors"):
-            payload = copy.deepcopy(cached)
-            stamped = _stamp_returns_on_payload(
-                payload, _cached_horizon_rets(symbols)
-            )
-            if stamped:
-                _MAP_CACHE["payload"] = payload
+        while batch:
+            await _fetch_map_horizon_returns(batch, concurrency=18)
+            cached = _MAP_CACHE.get("payload")
+            if isinstance(cached, dict) and cached.get("sectors"):
+                payload = copy.deepcopy(cached)
+                stamped = _stamp_returns_on_payload(
+                    payload, _cached_horizon_rets(batch)
+                )
+                if stamped:
+                    _MAP_CACHE["payload"] = payload
+            batch = list(_HORIZON_FILL_PENDING or [])
+            _HORIZON_FILL_PENDING = None
     except Exception:  # noqa: BLE001
         pass
     finally:
         _HORIZON_FILL_BUSY = False
+        pending = _HORIZON_FILL_PENDING
+        _HORIZON_FILL_PENDING = None
+        if pending:
+            _schedule_horizon_fill(pending)
 
 
 def _horizon_coverage(payload: dict[str, Any], key: str = "1w") -> float:
