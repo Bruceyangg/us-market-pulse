@@ -68,6 +68,7 @@ const state = {
   sectorMapTf: "day",
   sectorMapSymbolDesk: {},
   sectorMapHorizonRetryAt: 0,
+  sectorMapInflight: null,
   chartUpgradeSym: "",
   chartLoadingUntil: 0,
   chartUpgradeAttempts: 0,
@@ -6005,16 +6006,16 @@ function renderSectorMap(map) {
     }
   }
 
-  // Week horizons: if coverage is sparse, soft-refresh once to backfill Yahoo/Nasdaq bars.
+  // Week horizons: quiet fill — never wipe the day shell with force-refresh.
   const weekTf = tf === "1w" || tf === "2w" || tf === "3w" || tf === "4w";
   if (
     weekTf &&
     totalTiles > 0 &&
     quotedTf / totalTiles < 0.55 &&
-    Date.now() - (state.sectorMapHorizonRetryAt || 0) > 12000
+    Date.now() - (state.sectorMapHorizonRetryAt || 0) > 8000
   ) {
     state.sectorMapHorizonRetryAt = Date.now();
-    void loadSectorMap({ force: true }).catch(() => null);
+    void loadSectorMap({ fillHorizon: true, quiet: true }).catch(() => null);
   }
 
   if (els.sectorMapBlurb) {
@@ -6402,30 +6403,106 @@ function bindSectorMapZoom() {
   paintSectorMapZoom();
 }
 
-async function loadSectorMap({ force = false } = {}) {
+function sectorMapHorizonCoverage(payload, key = "1w") {
+  const sectors = payload?.sectors || [];
+  let total = 0;
+  let hit = 0;
+  for (const sec of sectors) {
+    for (const grp of sec.groups || []) {
+      for (const st of grp.children || []) {
+        total += 1;
+        const pct = mapNodePct(st, key);
+        if (pct != null && !Number.isNaN(Number(pct))) hit += 1;
+      }
+    }
+  }
+  return total > 0 ? hit / total : 0;
+}
+
+function scheduleMapHorizonFill() {
+  if (PAGE !== "sectors" || isSectorMapCollapsed()) return;
+  const kick = () => {
+    if (PAGE !== "sectors" || isSectorMapCollapsed()) return;
+    const cov = sectorMapHorizonCoverage(state.sectorMap, "1w");
+    if (cov >= 0.7) return;
+    void loadSectorMap({ fillHorizon: true, quiet: true }).catch(() => null);
+  };
+  if (typeof requestIdleCallback === "function") {
+    requestIdleCallback(kick, { timeout: 2200 });
+  } else {
+    window.setTimeout(kick, 700);
+  }
+}
+
+async function loadSectorMap({
+  force = false,
+  fillHorizon = false,
+  quiet = false,
+} = {}) {
   if (PAGE !== "sectors" || !els.sectorMapCanvas) return null;
   // Phone collapses the map by default — skip the heavy map API until opened.
-  if (isSectorMapCollapsed() && !force) return null;
-  if (force) {
-    els.sectorMapCanvas.innerHTML = '<p class="empty">刷新全板块涨跌图…</p>';
+  if (isSectorMapCollapsed() && !force && !fillHorizon) return null;
+  // Coalesce concurrent soft/fill requests; force always starts fresh.
+  if (state.sectorMapInflight && !force) {
+    return state.sectorMapInflight;
   }
-  try {
-    const params = force ? "?refresh=true" : "";
-    const res = await fetch(`/api/sectors/map${params}`, {
-      signal: AbortSignal.timeout(16000),
-    });
-    if (!res.ok) throw new Error(`HTTP ${res.status}`);
-    const data = await res.json();
-    state.sectorMap = data;
-    renderSectorMap(data);
-    return data;
-  } catch (err) {
-    if (els.sectorMapBlurb) {
-      els.sectorMapBlurb.textContent = `涨跌图加载失败：${err.message || err}`;
+  if (force && !quiet && !state.sectorMap) {
+    els.sectorMapCanvas.innerHTML = '<p class="empty">刷新全板块涨跌图…</p>';
+  } else if (fillHorizon && els.sectorMapBlurb && state.sectorMap) {
+    const prev = els.sectorMapBlurb.textContent || "";
+    if (!prev.includes("补全周涨跌")) {
+      els.sectorMapBlurb.textContent = `${prev} · 补全周涨跌…`;
     }
-    els.sectorMapCanvas.innerHTML =
-      '<p class="empty">全板块涨跌图加载失败，请稍后刷新。</p>';
-    return null;
+  }
+  const run = (async () => {
+    try {
+      const params = new URLSearchParams();
+      if (force) params.set("refresh", "true");
+      if (fillHorizon) params.set("fill_horizon", "true");
+      const qs = params.toString();
+      const res = await fetch(`/api/sectors/map${qs ? `?${qs}` : ""}`, {
+        signal: AbortSignal.timeout(fillHorizon ? 22000 : 16000),
+      });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const data = await res.json();
+      // Keep painted shell if fill returns empty (timeout stub).
+      if (
+        fillHorizon &&
+        !(data?.sectors || []).length &&
+        (state.sectorMap?.sectors || []).length
+      ) {
+        return state.sectorMap;
+      }
+      state.sectorMap = data;
+      renderSectorMap(data);
+      persistPageDataCache();
+      if (!fillHorizon && sectorMapHorizonCoverage(data, "1w") < 0.7) {
+        scheduleMapHorizonFill();
+      }
+      return data;
+    } catch (err) {
+      // Quiet fill / soft reload must not blank an already-painted map.
+      if (quiet || fillHorizon || state.sectorMap) {
+        if (els.sectorMapBlurb && fillHorizon) {
+          els.sectorMapBlurb.textContent =
+            (els.sectorMapBlurb.textContent || "").replace(/\s*·\s*补全周涨跌…/, "") ||
+            "全板块涨跌图";
+        }
+        return state.sectorMap;
+      }
+      if (els.sectorMapBlurb) {
+        els.sectorMapBlurb.textContent = `涨跌图加载失败：${err.message || err}`;
+      }
+      els.sectorMapCanvas.innerHTML =
+        '<p class="empty">全板块涨跌图加载失败，请稍后刷新。</p>';
+      return null;
+    }
+  })();
+  state.sectorMapInflight = run;
+  try {
+    return await run;
+  } finally {
+    if (state.sectorMapInflight === run) state.sectorMapInflight = null;
   }
 }
 
@@ -10173,6 +10250,8 @@ function persistPageDataCache() {
           usMarkets: state.usMarkets || null,
           usFuturesTf: state.usFuturesTf || "intraday",
           usStripTf: state.usStripTf || "day",
+          sectorMap: state.sectorMap || null,
+          sectorMapTf: state.sectorMapTf || "day",
         })
       );
     }
@@ -10296,6 +10375,18 @@ function paintFromPageDataCache(page = PAGE) {
         state.usStripTf = row.usStripTf;
       }
       renderUsMarketsDesk(row.usMarkets);
+    }
+    if (row.sectorMap?.sectors?.length) {
+      state.sectorMap = row.sectorMap;
+      if (
+        row.sectorMapTf &&
+        ["day", "rt", "1w", "2w", "3w", "4w"].includes(row.sectorMapTf)
+      ) {
+        state.sectorMapTf = row.sectorMapTf;
+      }
+      if (!isSectorMapCollapsed()) {
+        renderSectorMap(row.sectorMap);
+      }
     }
     return true;
   }
@@ -10987,9 +11078,14 @@ function bootPage() {
       });
       if (!isSectorMapCollapsed()) {
         window.setTimeout(() => {
-          if (PAGE === "sectors" && !state.sectorMap) {
-            void loadSectorMap({ force: false }).catch(() => null);
+          if (PAGE !== "sectors") return;
+          if (state.sectorMap) {
+            scheduleMapHorizonFill();
+            return;
           }
+          void loadSectorMap({ force: false })
+            .then(() => scheduleMapHorizonFill())
+            .catch(() => null);
         }, 450);
       }
     });
@@ -11025,6 +11121,22 @@ function bootPage() {
         loadUsMarketsDesk({ force: false, mode: "full" });
       }),
       90 * 1000,
+    );
+    // Keep map week returns warm without wiping the treemap shell.
+    trackPageInterval(
+      whenVisible(() => {
+        if (isSectorMapCollapsed()) return;
+        if (!state.sectorMap) {
+          void loadSectorMap({ force: false }).catch(() => null);
+          return;
+        }
+        if (sectorMapHorizonCoverage(state.sectorMap, "1w") < 0.7) {
+          void loadSectorMap({ fillHorizon: true, quiet: true }).catch(() => null);
+        } else {
+          void loadSectorMap({ force: false, quiet: true }).catch(() => null);
+        }
+      }),
+      180 * 1000,
     );
     trackPageInterval(
       whenVisible(() => refreshHoldingSymbols({ force: true })),
@@ -11484,10 +11596,18 @@ function bindSectorsDepthToggles() {
       if (tf === state.sectorMapTf) return;
       state.sectorMapTf = tf;
       syncSectorMapTfFilters();
+      persistPageDataCache();
       if (state.sectorMap) {
         renderSectorMap(state.sectorMap);
+        const weekTf = tf === "1w" || tf === "2w" || tf === "3w" || tf === "4w";
+        if (weekTf && sectorMapHorizonCoverage(state.sectorMap, tf) < 0.55) {
+          void loadSectorMap({ fillHorizon: true, quiet: true }).catch(() => null);
+        }
       } else {
-        void loadSectorMap({ force: false });
+        void loadSectorMap({ force: false }).then(() => {
+          const weekTf = tf === "1w" || tf === "2w" || tf === "3w" || tf === "4w";
+          if (weekTf) scheduleMapHorizonFill();
+        });
       }
     });
   });

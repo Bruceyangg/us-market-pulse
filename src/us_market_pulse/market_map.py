@@ -399,7 +399,7 @@ MARKET_MAP: list[dict[str, Any]] = [
 ]
 
 _MAP_CACHE: dict[str, Any] = {"fetched_at": 0.0, "payload": None}
-_MAP_TTL = 120.0
+_MAP_TTL = 180.0
 
 
 def peek_cached_market_map() -> dict[str, Any] | None:
@@ -411,9 +411,12 @@ def peek_cached_market_map() -> dict[str, Any] | None:
     out["cached"] = True
     out["stale"] = True
     return out
+
+
 # Multi-week stock returns (Nasdaq daily bars) — longer TTL; day quotes refresh separately.
 _MAP_RET_CACHE: dict[str, dict[str, Any]] = {}
-_MAP_RET_TTL = 900.0
+_MAP_RET_TTL = 1800.0
+_HORIZON_FILL_BUSY = False
 
 
 def _pct_from_closes(closes: list[float], sessions: int) -> float | None:
@@ -465,7 +468,7 @@ async def _yahoo_daily_closes(
             f"?range=3mo&interval=1d&includePrePost=false"
         )
         try:
-            resp = await client.get(url, timeout=8.0, headers=headers)
+            resp = await client.get(url, timeout=3.5, headers=headers)
             if resp.status_code >= 400:
                 continue
             result = ((resp.json().get("chart") or {}).get("result") or [None])[0]
@@ -487,21 +490,48 @@ async def _yahoo_daily_closes(
     return []
 
 
-async def _fetch_map_horizon_returns(symbols: list[str]) -> dict[str, dict[str, Any]]:
-    """Batch ~1–4 week % returns (Yahoo daily first, Nasdaq fallback)."""
+def _horizon_row_fresh(hit: dict[str, Any] | None, *, now: float | None = None) -> bool:
+    if not isinstance(hit, dict):
+        return False
+    ts = now if now is not None else time.time()
+    if ts - float(hit.get("at") or 0) >= _MAP_RET_TTL:
+        return False
+    # Require 1w+4w so week tabs don't look empty after a partial fill.
+    return hit.get("week5_pct") is not None and hit.get("week20_pct") is not None
+
+
+def _cached_horizon_rets(symbols: list[str]) -> dict[str, dict[str, Any]]:
     now = time.time()
     out: dict[str, dict[str, Any]] = {}
-    need: list[str] = []
     for sym in symbols:
-        hit = _MAP_RET_CACHE.get(sym)
+        hit = _MAP_RET_CACHE.get(str(sym or "").upper())
         if (
             isinstance(hit, dict)
             and now - float(hit.get("at") or 0) < _MAP_RET_TTL
             and hit.get("week5_pct") is not None
         ):
-            out[sym] = hit
+            out[str(sym).upper()] = hit
+    return out
+
+
+async def _fetch_map_horizon_returns(
+    symbols: list[str],
+    *,
+    concurrency: int = 20,
+) -> dict[str, dict[str, Any]]:
+    """Batch ~1–4 week % returns (Yahoo daily first, Nasdaq fallback)."""
+    now = time.time()
+    out: dict[str, dict[str, Any]] = {}
+    need: list[str] = []
+    for sym in symbols:
+        key = str(sym or "").upper()
+        if not key:
+            continue
+        hit = _MAP_RET_CACHE.get(key)
+        if _horizon_row_fresh(hit, now=now):
+            out[key] = hit  # type: ignore[assignment]
         else:
-            need.append(sym)
+            need.append(key)
     if not need:
         return out
 
@@ -539,10 +569,10 @@ async def _fetch_map_horizon_returns(symbols: list[str]) -> dict[str, dict[str, 
         async with httpx.AsyncClient(
             follow_redirects=True,
             trust_env=False,
-            timeout=httpx.Timeout(12.0, connect=3.0),
+            timeout=httpx.Timeout(6.0, connect=2.5),
         ) as client:
-            # No global wait_for cancel — finished symbols stay in _MAP_RET_CACHE.
-            sem = asyncio.Semaphore(16)
+            # Finished symbols stay in _MAP_RET_CACHE even if the caller times out.
+            sem = asyncio.Semaphore(max(4, int(concurrency)))
             await asyncio.gather(
                 *[_one(client, s, sem) for s in uniq],
                 return_exceptions=True,
@@ -550,6 +580,28 @@ async def _fetch_map_horizon_returns(symbols: list[str]) -> dict[str, dict[str, 
     except Exception:  # noqa: BLE001
         pass
     return out
+
+
+async def _background_horizon_fill(symbols: list[str]) -> None:
+    """Continue filling week returns after the map response is already out."""
+    global _HORIZON_FILL_BUSY
+    if _HORIZON_FILL_BUSY:
+        return
+    _HORIZON_FILL_BUSY = True
+    try:
+        await _fetch_map_horizon_returns(symbols, concurrency=18)
+        cached = _MAP_CACHE.get("payload")
+        if isinstance(cached, dict) and cached.get("sectors"):
+            payload = copy.deepcopy(cached)
+            stamped = _stamp_returns_on_payload(
+                payload, _cached_horizon_rets(symbols)
+            )
+            if stamped:
+                _MAP_CACHE["payload"] = payload
+    except Exception:  # noqa: BLE001
+        pass
+    finally:
+        _HORIZON_FILL_BUSY = False
 
 
 def _horizon_coverage(payload: dict[str, Any], key: str = "1w") -> float:
@@ -592,14 +644,23 @@ def _stamp_returns_on_payload(
                 rets = dict(st.get("returns") or {})
                 day = rets.get("day", st.get("change_pct"))
                 rt = rets.get("rt", st.get("rt_change_pct", day))
+
+                def _keep(new: Any, *olds: Any) -> float | None:
+                    if isinstance(new, (int, float)):
+                        return float(new)
+                    for old in olds:
+                        if isinstance(old, (int, float)):
+                            return float(old)
+                    return None
+
                 if hr:
                     rets = {
                         "day": day if isinstance(day, (int, float)) else None,
                         "rt": rt if isinstance(rt, (int, float)) else None,
-                        "1w": hr.get("week5_pct"),
-                        "2w": hr.get("week10_pct"),
-                        "3w": hr.get("week15_pct"),
-                        "4w": hr.get("week20_pct"),
+                        "1w": _keep(hr.get("week5_pct"), rets.get("1w"), st.get("week5_pct")),
+                        "2w": _keep(hr.get("week10_pct"), rets.get("2w"), st.get("week10_pct")),
+                        "3w": _keep(hr.get("week15_pct"), rets.get("3w"), st.get("week15_pct")),
+                        "4w": _keep(hr.get("week20_pct"), rets.get("4w"), st.get("week20_pct")),
                     }
                     st["returns"] = rets
                     st["week5_pct"] = rets["1w"]
@@ -611,10 +672,10 @@ def _stamp_returns_on_payload(
                     rets = {
                         "day": day if isinstance(day, (int, float)) else None,
                         "rt": rt if isinstance(rt, (int, float)) else None,
-                        "1w": st.get("week5_pct"),
-                        "2w": st.get("week10_pct"),
-                        "3w": st.get("week15_pct"),
-                        "4w": st.get("week20_pct"),
+                        "1w": _keep(rets.get("1w"), st.get("week5_pct")),
+                        "2w": _keep(rets.get("2w"), st.get("week10_pct")),
+                        "3w": _keep(rets.get("3w"), st.get("week15_pct")),
+                        "4w": _keep(rets.get("4w"), st.get("week20_pct")),
                     }
                     st["returns"] = rets
                 for key in ("day", "rt", "1w", "2w", "3w", "4w"):
@@ -680,7 +741,19 @@ def symbols_for_desk(desk_id: str) -> list[str]:
     return out
 
 
-async def build_market_map(*, force: bool = False) -> dict[str, Any]:
+def _schedule_horizon_fill(symbols: list[str]) -> None:
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        return
+    if _HORIZON_FILL_BUSY:
+        return
+    loop.create_task(_background_horizon_fill(symbols))
+
+
+async def build_market_map(
+    *, force: bool = False, fill_horizon: bool = False
+) -> dict[str, Any]:
     now = time.time()
     symbols = _map_symbols()
     cached_payload = _MAP_CACHE.get("payload")
@@ -692,14 +765,35 @@ async def build_market_map(*, force: bool = False) -> dict[str, Any]:
         and now - float(_MAP_CACHE["fetched_at"]) < _MAP_TTL
     )
 
+    # Week-tab path: keep day shell, spend the budget filling 1w–4w returns.
+    if fill_horizon and cached_payload and cached_quoted > 0:
+        try:
+            horizon_rets = await asyncio.wait_for(
+                _fetch_map_horizon_returns(symbols, concurrency=22),
+                timeout=14.0,
+            )
+        except TimeoutError:
+            horizon_rets = {}
+        horizon_rets = {**_cached_horizon_rets(symbols), **horizon_rets}
+        payload = copy.deepcopy(cached_payload)
+        _stamp_returns_on_payload(payload, horizon_rets)
+        payload["cached"] = True
+        payload["horizon_fill"] = True
+        payload["fetched_at"] = cached_payload.get("fetched_at") or now
+        _MAP_CACHE["payload"] = copy.deepcopy(payload)
+        _schedule_horizon_fill(symbols)
+        return payload
+
     # Horizon fills are best-effort — never block the map paint on a full gather.
     try:
         horizon_rets = await asyncio.wait_for(
-            _fetch_map_horizon_returns(symbols),
-            timeout=4.0 if cache_fresh else 6.0,
+            _fetch_map_horizon_returns(symbols, concurrency=18),
+            timeout=5.0 if cache_fresh else 8.0,
         )
     except TimeoutError:
         horizon_rets = {}
+    # Always merge warm cache — timeout must not drop already-fetched weeks.
+    horizon_rets = {**_cached_horizon_rets(symbols), **horizon_rets}
 
     if cache_fresh:
         payload = copy.deepcopy(cached_payload)
@@ -709,8 +803,9 @@ async def build_market_map(*, force: bool = False) -> dict[str, Any]:
         payload["cached"] = True
         payload["fetched_at"] = cached_payload.get("fetched_at") or now
         # Persist improved week coverage so next clients see denser heatmaps.
-        if after > before + 0.05 or after >= 0.7:
+        if after > before + 0.02 or after >= 0.55:
             _MAP_CACHE["payload"] = copy.deepcopy(payload)
+        _schedule_horizon_fill(symbols)
         return payload
 
     # Map has dozens of tickers — never block on Yahoo Overnight HTML scrapes.
@@ -841,4 +936,5 @@ async def build_market_map(*, force: bool = False) -> dict[str, Any]:
     if quotes:
         _MAP_CACHE["payload"] = payload
         _MAP_CACHE["fetched_at"] = now
+    _schedule_horizon_fill(symbols)
     return dict(payload)

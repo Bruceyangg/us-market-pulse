@@ -362,9 +362,17 @@ async def api_quote_chart(
 
 
 @app.get("/api/sectors/map")
-async def api_sectors_map(refresh: bool = Query(default=False)) -> dict[str, Any]:
+async def api_sectors_map(
+    refresh: bool = Query(default=False),
+    fill_horizon: bool = Query(default=False),
+) -> dict[str, Any]:
+    # Week fill spends longer on Yahoo/Nasdaq daily bars; day paint stays short.
+    budget = 18.0 if fill_horizon else 12.0
     try:
-        return await asyncio.wait_for(build_market_map(force=refresh), timeout=12.0)
+        return await asyncio.wait_for(
+            build_market_map(force=refresh, fill_horizon=fill_horizon),
+            timeout=budget,
+        )
     except TimeoutError:
         stale = peek_cached_market_map()
         if stale:
