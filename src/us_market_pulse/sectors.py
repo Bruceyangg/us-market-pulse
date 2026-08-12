@@ -623,6 +623,51 @@ _PICKS_CACHE: dict[str, Any] = {}
 _PICKS_TTL = 180.0
 # Serve slightly stale pick boards with a soft quote refresh (SWR).
 _PICKS_STALE_TTL = 900.0
+
+
+def peek_cached_sector_desk(
+    *,
+    selected_sector: str | None = None,
+    selected_symbol: str | None = None,
+) -> dict[str, Any] | None:
+    """Return last warm desk payload (any age) for timeout / cold-start fallbacks."""
+    payload = _CACHE.get("payload")
+    if not isinstance(payload, dict) or not payload:
+        return None
+    out = dict(payload)
+    out["cached"] = True
+    out["stale"] = True
+    sid = (selected_sector or "").strip().lower()
+    if sid:
+        out["active_sector_id"] = sid
+        sectors = out.get("sectors") or []
+        active = next(
+            (s for s in sectors if str(s.get("id") or "").lower() == sid),
+            None,
+        )
+        if active:
+            out["active_sector"] = active
+        cached_picks = _PICKS_CACHE.get(sid) or {}
+        if cached_picks.get("picks"):
+            out["picks"] = list(cached_picks.get("picks") or [])
+            pulse = dict(out.get("sector_pulse") or {})
+            if cached_picks.get("stock_desk"):
+                pulse["stock_desk"] = cached_picks.get("stock_desk")
+            out["sector_pulse"] = pulse
+    sym = (selected_symbol or "").strip().upper()
+    if sym:
+        out["selected_symbol"] = sym
+        pick = next(
+            (
+                p
+                for p in (out.get("picks") or [])
+                if str(p.get("symbol") or "").upper() == sym
+            ),
+            None,
+        )
+        if pick:
+            out["selected_pick"] = pick
+    return out
 # Per-symbol Yahoo quote/earnings snippets shared across sectors
 _SYM_CACHE: dict[str, Any] = {}
 _SYM_TTL = 180.0
@@ -3608,7 +3653,13 @@ async def build_sector_desk(
         errors: list[str] = []
         etf_symbols = [row["symbol"] for row in SECTOR_ETFS]
         # ETF strip: skip Yahoo Overnight page scrapes (keep desk cold-start fast).
-        etf_quotes = await fetch_day_quotes(etf_symbols, overnight_priority=[])
+        try:
+            etf_quotes = await asyncio.wait_for(
+                fetch_day_quotes(etf_symbols, overnight_priority=[]),
+                timeout=5.0,
+            )
+        except TimeoutError:
+            etf_quotes = {}
         sectors: list[dict[str, Any]] = []
         for spec in SECTOR_ETFS:
             quote = etf_quotes.get(str(spec["symbol"]).upper())

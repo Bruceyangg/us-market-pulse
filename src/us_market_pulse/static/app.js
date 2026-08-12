@@ -7315,7 +7315,9 @@ function prefetchSectorDesk(id) {
   if (!sectorId || sectorCacheGet(sectorId)) return;
   if (sectorInflight.has(sectorId)) return sectorInflight.get(sectorId);
   const params = new URLSearchParams({ sector: sectorId });
-  const req = fetch(`/api/sectors?${params.toString()}`)
+  const req = fetch(`/api/sectors?${params.toString()}`, {
+    signal: AbortSignal.timeout(12000),
+  })
     .then((res) => (res.ok ? res.json() : null))
     .then((data) => {
       if (data) sectorCachePut(sectorId, data);
@@ -9146,7 +9148,7 @@ async function loadSectorDesk({ force = false, refreshMap = false } = {}) {
       const req =
         shared ||
         fetch(`/api/sectors?${params.toString()}`, {
-          signal: AbortSignal.timeout(40000),
+          signal: AbortSignal.timeout(22000),
         })
           .then((res) => {
             if (!res.ok) throw new Error(`HTTP ${res.status}`);

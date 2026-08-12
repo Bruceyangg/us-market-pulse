@@ -79,7 +79,7 @@
         document.head.appendChild(fonts);
       })();
     </script>
-    <link rel="stylesheet" href="/static/styles.css?v=20260811a23" />
+    <link rel="stylesheet" href="/static/styles.css?v=20260811a24" />
     {% block head %}{% endblock %}
   </head>
   <body class="page-{{ page }}" data-page="{{ page }}">
@@ -189,13 +189,20 @@
     </div>
     {% endblock %}
 
-    <script src="/static/app.js?v=20260811a23" type="module"></script>
+    <script src="/static/app.js?v=20260811a24" type="module"></script>
     <script>
-      if ("serviceWorker" in navigator) {
-        window.addEventListener("load", function () {
+      window.addEventListener("load", function () {
+        // Soft wake: ping health so cold Render instances start while shell paints.
+        try {
+          fetch("/api/health", {
+            cache: "no-store",
+            signal: AbortSignal.timeout(20000),
+          }).catch(function () {});
+        } catch (e) {}
+        if ("serviceWorker" in navigator) {
           navigator.serviceWorker.register("/sw.js").catch(function () {});
-        });
-      }
+        }
+      });
     </script>
     {% block scripts %}{% endblock %}
   </body>

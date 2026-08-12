@@ -41,12 +41,13 @@ from us_market_pulse.earnings_calendar import (
     build_earnings_calendar,
     parse_day_param,
 )
-from us_market_pulse.market_map import build_market_map
+from us_market_pulse.market_map import build_market_map, peek_cached_market_map
 from us_market_pulse.chains import build_chains_desk
 from us_market_pulse.sectors import (
     build_sector_desk,
     fetch_intraday_snapshot,
     fetch_symbol_desk_chart,
+    peek_cached_sector_desk,
 )
 from us_market_pulse.us_markets import build_us_markets_desk
 from us_market_pulse.symbol_lookup import (
@@ -122,7 +123,11 @@ async def lifespan(_app: FastAPI):
         yield
     finally:
         stop.set()
-        await task
+        task.cancel()
+        try:
+            await asyncio.wait_for(task, timeout=2.0)
+        except (TimeoutError, asyncio.CancelledError):
+            pass
 
 
 app = FastAPI(
@@ -286,13 +291,26 @@ async def api_sectors(
             asyncio.get_running_loop().create_task(refresh_intel(force=False))
         except RuntimeError:
             pass
-    desk = await build_sector_desk(
-        items,
-        force=refresh,
-        selected_sector=sector,
-        selected_symbol=symbol,
-    )
-    return desk
+    # Hard budget so Render free / cold Yahoo paths cannot hang the page.
+    try:
+        desk = await asyncio.wait_for(
+            build_sector_desk(
+                items,
+                force=refresh,
+                selected_sector=sector,
+                selected_symbol=symbol,
+            ),
+            timeout=18.0,
+        )
+        return desk
+    except TimeoutError:
+        stale = peek_cached_sector_desk(
+            selected_sector=sector, selected_symbol=symbol
+        )
+        if stale:
+            stale["note"] = "行情刷新超时，已返回缓存台面。"
+            return stale
+        raise HTTPException(status_code=504, detail="板块台面加载超时，请稍后重试")
 
 
 @app.get("/api/quote/intraday")
@@ -318,7 +336,14 @@ async def api_quote_chart(
 
 @app.get("/api/sectors/map")
 async def api_sectors_map(refresh: bool = Query(default=False)) -> dict[str, Any]:
-    return await build_market_map(force=refresh)
+    try:
+        return await asyncio.wait_for(build_market_map(force=refresh), timeout=12.0)
+    except TimeoutError:
+        stale = peek_cached_market_map()
+        if stale:
+            stale["note"] = "地图刷新超时，已返回缓存。"
+            return stale
+        raise HTTPException(status_code=504, detail="板块地图加载超时，请稍后重试")
 
 
 @app.get("/api/us-markets")

@@ -400,6 +400,17 @@ MARKET_MAP: list[dict[str, Any]] = [
 
 _MAP_CACHE: dict[str, Any] = {"fetched_at": 0.0, "payload": None}
 _MAP_TTL = 120.0
+
+
+def peek_cached_market_map() -> dict[str, Any] | None:
+    """Return last warm map payload for timeout / cold-start fallbacks."""
+    payload = _MAP_CACHE.get("payload")
+    if not isinstance(payload, dict) or not payload:
+        return None
+    out = copy.deepcopy(payload)
+    out["cached"] = True
+    out["stale"] = True
+    return out
 # Multi-week stock returns (Nasdaq daily bars) — longer TTL; day quotes refresh separately.
 _MAP_RET_CACHE: dict[str, dict[str, Any]] = {}
 _MAP_RET_TTL = 900.0
@@ -681,8 +692,14 @@ async def build_market_map(*, force: bool = False) -> dict[str, Any]:
         and now - float(_MAP_CACHE["fetched_at"]) < _MAP_TTL
     )
 
-    # Always try to fill/refresh week returns (warm cache is nearly free).
-    horizon_rets = await _fetch_map_horizon_returns(symbols)
+    # Horizon fills are best-effort — never block the map paint on a full gather.
+    try:
+        horizon_rets = await asyncio.wait_for(
+            _fetch_map_horizon_returns(symbols),
+            timeout=4.0 if cache_fresh else 6.0,
+        )
+    except TimeoutError:
+        horizon_rets = {}
 
     if cache_fresh:
         payload = copy.deepcopy(cached_payload)
@@ -697,7 +714,19 @@ async def build_market_map(*, force: bool = False) -> dict[str, Any]:
         return payload
 
     # Map has dozens of tickers — never block on Yahoo Overnight HTML scrapes.
-    quotes = await fetch_day_quotes(symbols, overnight_priority=[])
+    try:
+        quotes = await asyncio.wait_for(
+            fetch_day_quotes(symbols, overnight_priority=[]),
+            timeout=8.0,
+        )
+    except TimeoutError:
+        if cached_payload and cached_quoted > 0:
+            payload = copy.deepcopy(cached_payload)
+            payload["cached"] = True
+            payload["stale"] = True
+            payload["note"] = "地图报价超时，已返回缓存。"
+            return payload
+        quotes = {}
     errors = [f"{sym}: quote failed" for sym in symbols if sym not in quotes]
 
     sectors_out: list[dict[str, Any]] = []

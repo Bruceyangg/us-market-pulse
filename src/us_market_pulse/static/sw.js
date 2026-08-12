@@ -1,15 +1,17 @@
 /* Pulse Desk lightweight shell cache — HTML/auth pages always network-first. */
-const CACHE = "pulse-desk-shell-v145";
-const API_CACHE = "pulse-desk-api-v1";
+const CACHE = "pulse-desk-shell-v146";
+const API_CACHE = "pulse-desk-api-v2";
 const SHELL = [
-  "/static/styles.css?v=20260811a23",
-  "/static/app.js?v=20260811a23",
+  "/static/styles.css?v=20260811a24",
+  "/static/app.js?v=20260811a24",
   "/static/manifest.webmanifest",
   "/static/icons/apple-touch-icon.png",
   "/static/icons/icon-192.png",
 ];
 /** Soft sector desks: stale-while-revalidate window (ms). */
 const API_SECTORS_MAX_AGE_MS = 90_000;
+const NAV_TIMEOUT_MS = 10_000;
+const API_TIMEOUT_MS = 12_000;
 
 self.addEventListener("install", (event) => {
   event.waitUntil(
@@ -35,7 +37,6 @@ function isHtmlRequest(req, url) {
   if (req.mode === "navigate") return true;
   const accept = req.headers.get("accept") || "";
   if (accept.includes("text/html")) return true;
-  // App routes (no file extension) are auth-sensitive documents
   if (!url.pathname.startsWith("/static/") && !url.pathname.includes(".")) {
     return true;
   }
@@ -54,14 +55,48 @@ function isSoftSectorsApi(url) {
   );
 }
 
+function offlineShell() {
+  const body = `<!doctype html><html lang="zh-CN"><meta charset="utf-8"/><meta name="viewport" content="width=device-width,initial-scale=1"/><title>Pulse Desk</title><body style="margin:0;font:16px/1.5 system-ui,sans-serif;background:#102033;color:#e8eef6;display:grid;place-items:center;min-height:100vh;padding:2rem"><main style="max-width:28rem;text-align:center"><h1 style="margin:0 0 .5rem;font-size:1.4rem">Pulse Desk 正在唤醒</h1><p style="margin:0 0 1rem;opacity:.85">免费实例冷启动约需 30–60 秒，请稍后刷新。</p><button onclick="location.reload()" style="appearance:none;border:0;border-radius:10px;padding:.7rem 1.1rem;font:inherit;font-weight:700;background:#6aa8d4;color:#102033;cursor:pointer">重试</button></main></body></html>`;
+  return new Response(body, {
+    status: 503,
+    headers: {
+      "Content-Type": "text/html; charset=utf-8",
+      "Cache-Control": "no-store",
+    },
+  });
+}
+
+async function fetchWithTimeout(req, ms) {
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), ms);
+  try {
+    return await fetch(req, { signal: ctrl.signal });
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 async function staleWhileRevalidateSectors(req) {
   const cache = await caches.open(API_CACHE);
   const cached = await cache.match(req);
-  const network = fetch(req)
-    .then((res) => {
+  const networkPromise = fetchWithTimeout(req, API_TIMEOUT_MS)
+    .then(async (res) => {
       if (res && res.ok) {
-        const copy = res.clone();
-        cache.put(req, copy);
+        try {
+          const body = await res.clone().arrayBuffer();
+          const headers = new Headers(res.headers);
+          headers.set("x-pulse-cached-at", String(Date.now()));
+          await cache.put(
+            req,
+            new Response(body, {
+              status: res.status,
+              statusText: res.statusText,
+              headers,
+            }),
+          );
+        } catch (_) {
+          /* ignore cache races */
+        }
       }
       return res;
     })
@@ -70,50 +105,19 @@ async function staleWhileRevalidateSectors(req) {
   if (cached) {
     const cachedAt = Number(cached.headers.get("x-pulse-cached-at") || 0);
     const age = cachedAt ? Date.now() - cachedAt : 0;
-    // Kick network refresh; serve cache immediately when still warm.
-    void network.then(async (res) => {
-      if (!res || !res.ok) return;
-      try {
-        const body = await res.clone().arrayBuffer();
-        const headers = new Headers(res.headers);
-        headers.set("x-pulse-cached-at", String(Date.now()));
-        await cache.put(
-          req,
-          new Response(body, {
-            status: res.status,
-            statusText: res.statusText,
-            headers,
-          }),
-        );
-      } catch (_) {
-        /* ignore cache write races */
-      }
-    });
+    void networkPromise;
     if (!cachedAt || age < API_SECTORS_MAX_AGE_MS) {
       return cached;
     }
   }
 
-  const fresh = await network;
-  if (fresh && fresh.ok) {
-    try {
-      const body = await fresh.clone().arrayBuffer();
-      const headers = new Headers(fresh.headers);
-      headers.set("x-pulse-cached-at", String(Date.now()));
-      await cache.put(
-        req,
-        new Response(body, {
-          status: fresh.status,
-          statusText: fresh.statusText,
-          headers,
-        }),
-      );
-    } catch (_) {
-      /* ignore */
-    }
-    return fresh;
-  }
-  return cached || Response.error();
+  const fresh = await networkPromise;
+  if (fresh && fresh.ok) return fresh;
+  if (cached) return cached;
+  return new Response(JSON.stringify({ ok: false, error: "timeout" }), {
+    status: 504,
+    headers: { "Content-Type": "application/json", "Cache-Control": "no-store" },
+  });
 }
 
 self.addEventListener("fetch", (event) => {
@@ -122,32 +126,29 @@ self.addEventListener("fetch", (event) => {
   const url = new URL(req.url);
   if (url.origin !== self.location.origin) return;
 
-  // Soft sector desks: stale-while-revalidate for snappy rank/chip switches.
-  if (isSoftSectorsApi(url)) {
-    event.respondWith(staleWhileRevalidateSectors(req));
+  // Health / non-sector APIs: never intercept (avoid hanging the worker).
+  if (url.pathname.startsWith("/api/")) {
+    if (isSoftSectorsApi(url)) {
+      event.respondWith(staleWhileRevalidateSectors(req));
+    }
     return;
   }
 
-  // Other APIs stay network-only (quotes / auth-sensitive).
-  if (url.pathname.startsWith("/api/")) return;
-
-  // Never serve cached HTML for / /login /settings etc. — session state changes
   if (isHtmlRequest(req, url)) {
     event.respondWith(
-      fetch(req)
+      fetchWithTimeout(req, NAV_TIMEOUT_MS)
         .then((res) => res)
         .catch(async () => {
           const cached = await caches.match(req);
-          return cached || Response.error();
+          return cached || offlineShell();
         }),
     );
     return;
   }
 
-  // Versioned static (?v=): network-first so bumps apply immediately.
   if (isVersionedStatic(url)) {
     event.respondWith(
-      fetch(req)
+      fetchWithTimeout(req, NAV_TIMEOUT_MS)
         .then((res) => {
           if (res && res.ok) {
             const copy = res.clone();
@@ -160,7 +161,6 @@ self.addEventListener("fetch", (event) => {
     return;
   }
 
-  // Other static assets: prefer cache, refresh in background
   event.respondWith(
     caches.match(req).then((cached) => {
       const network = fetch(req)
