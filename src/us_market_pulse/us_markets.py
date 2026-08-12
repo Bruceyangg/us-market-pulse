@@ -592,6 +592,17 @@ def _stale_payload(extra_errors: list[str] | None = None) -> dict[str, Any] | No
     return out
 
 
+def peek_cached_us_markets() -> dict[str, Any] | None:
+    """Return last warm US markets payload for outer timeout fallbacks."""
+    stale = _stale_payload(["us-markets: outer timeout"])
+    if not stale:
+        return None
+    if not (stale.get("strip") or stale.get("futures")):
+        return None
+    stale["note"] = "美国市场刷新超时，已返回缓存。"
+    return stale
+
+
 async def build_us_markets_desk(
     *, force: bool = False, mode: str = "full"
 ) -> dict[str, Any]:
