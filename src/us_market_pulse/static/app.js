@@ -6577,13 +6577,20 @@ function isEmptySectorDesk(data) {
   return !data || (!(data.picks || []).length && !(data.sectors || []).length);
 }
 
-/** Optimistic / unquoted shell — not a finished desk (quotes still missing). */
+/** Optimistic switch stub (lite / unpriced picks) — not a real desk paint. */
 function isSectorSwitchPlaceholder(data) {
-  if (!data) return true;
+  if (!data) return false;
   const picks = data.picks || [];
-  if (!picks.length) return true;
-  // Synthesized stock_desk must NOT hide missing quotes.
-  return sectorDeskQuoteCoverage(data) < 0.2;
+  if (!picks.length) return false;
+  const allLite = picks.every((p) => p?.lite);
+  const noQuotes = picks.every(
+    (p) => p?.change_pct == null && p?.price == null,
+  );
+  const desk = data.sector_pulse?.stock_desk || {};
+  const hasDesk = ["strong", "bearish", "watch", "weak"].some(
+    (k) => (desk[k] || []).length,
+  );
+  return (allLite || noQuotes) && !hasDesk;
 }
 
 function isEmptyUsMarkets(data) {
@@ -6725,8 +6732,8 @@ function sectorCacheGet(id) {
   if (!row?.data) return null;
   // Keep optimistic sector paint warm across tab switches / hover.
   if (Date.now() - Number(row.at || 0) > SECTOR_CACHE_TTL_MS) return null;
-  // Never reuse unquoted shells as "warm cache" — they break rank linkage.
-  if (!(row.data.picks || []).length || sectorDeskQuoteCoverage(row.data) < 0.2) {
+  // Drop truly empty shells; keep lite desks so switches stay instant.
+  if (!(row.data.picks || []).length && sectorDeskQuoteCoverage(row.data) < 0.15) {
     delete state.sectorCache[id];
     return null;
   }
@@ -6738,8 +6745,6 @@ function sectorCachePut(id, data) {
   const picks = data.picks || [];
   if (!picks.length) return;
   const cov = sectorDeskQuoteCoverage(data);
-  // Do not persist lite/unquoted placeholders — next click must hit network.
-  if (cov < 0.2) return;
   const prev = state.sectorCache?.[id];
   const prevCov = prev?.data ? sectorDeskQuoteCoverage(prev.data) : 0;
   // Don't let a colder/sparser timeout stub replace a richer warm cache.
@@ -7525,58 +7530,20 @@ function paintSectorSwitchPlaceholder(sectorId) {
   state.sectors = stub;
   state.sectorSymbol = "";
   markSectorChipActive(sectorId);
-  // Immediate local stock desk + 成分股 — keep rank linkage even while quotes load.
+  // Immediate local stock desk (ticker cards) — never leave "正在切换…" stuck.
   ensurePulseStockDesk(stub);
   paintPulseStockDesk(stub.sector_pulse.stock_desk);
-  renderSectorPicks(stub);
   armPulseSwitchWatchdog(sectorId);
+  // Defer bottom desk stub so left pulse paints first.
+  requestAnimationFrame(() => {
+    if (state.sectorId !== sectorId) return;
+    renderSectorPicks(stub);
+  });
   if (els.sectorPicksBlurb) {
     els.sectorPicksBlurb.textContent = picks.length
       ? `${picks.length} 只成分 · 行情刷新中…`
       : "加载成分股…";
   }
-}
-
-function paintLinkedSectorDesk(data, sectorId, { wantSym = "" } = {}) {
-  if (!data || isEmptySectorDesk(data)) return false;
-  // Always keep left pulse stock desk + right rank + bottom picks in lockstep.
-  const payload = { ...data };
-  if (payload.active_sector_id && payload.active_sector_id !== sectorId) {
-    // Guard against stale payloads overwriting the clicked rank target.
-    return false;
-  }
-  payload.active_sector_id = sectorId || payload.active_sector_id;
-  if (
-    payload.active_sector &&
-    payload.active_sector.id &&
-    payload.active_sector.id !== payload.active_sector_id
-  ) {
-    const meta = (payload.sectors || []).find(
-      (s) => s.id === payload.active_sector_id,
-    );
-    if (meta) payload.active_sector = meta;
-  }
-  ensurePulseStockDesk(payload);
-  state.sectorId = sectorId || payload.active_sector_id || state.sectorId;
-  renderSectorDesk(payload, { sectorSwitch: true });
-  // Immediate picks/chart/news — do not wait on rAF (avoids skipped linkage paints).
-  renderSectorPicks(payload);
-  markPulseRankActive(state.sectorId);
-  markSectorChipActive(state.sectorId);
-  clearPulseSwitchWatchdog();
-  const sym =
-    wantSym ||
-    payload.selected_symbol ||
-    payload.picks?.[0]?.symbol ||
-    "";
-  if (sym) selectSectorSymbol(String(sym).toUpperCase());
-  syncSectorQuery();
-  persistPageDataCache();
-  // Keep map warm in background so 全板块 doesn't stay empty after rank switches.
-  if (!isSectorMapCollapsed() && !state.sectorMap) {
-    void loadSectorMap({ force: false, quiet: true }).catch(() => null);
-  }
-  return true;
 }
 
 function openSectorDesk(id, { scroll = true, symbol = "" } = {}) {
@@ -7588,13 +7555,6 @@ function openSectorDesk(id, { scroll = true, symbol = "" } = {}) {
     exitSectorSearchMode({ reload: false });
   }
   const same = sectorId === state.sectorId;
-  const deskReady =
-    same &&
-    state.sectors?.active_sector_id === sectorId &&
-    !isSectorSwitchPlaceholder(state.sectors) &&
-    stockDeskHasRows(state.sectors?.sector_pulse?.stock_desk) &&
-    (els.sectorPickList?.querySelectorAll(".sector-pick-row[data-symbol]") || [])
-      .length > 0;
   state.sectorId = sectorId;
   // Instant rank / chip highlight — don't wait on network / full pulse rebuild.
   markPulseRankActive(sectorId);
@@ -7609,7 +7569,6 @@ function openSectorDesk(id, { scroll = true, symbol = "" } = {}) {
       force: false,
       sectorId,
       sectorSymbol: wantSym,
-      deferMap: true,
     };
   } else if (wantSym) {
     state.sectorSymbol = wantSym;
@@ -7623,14 +7582,12 @@ function openSectorDesk(id, { scroll = true, symbol = "" } = {}) {
   };
 
   // Same desk + explicit symbol: paint selection without a full sector reload.
-  if (same && wantSym && state.sectors?.picks?.length && deskReady) {
+  if (same && wantSym && state.sectors?.picks?.length) {
     selectSectorSymbol(wantSym);
     finishScroll();
     return;
   }
-  // Same sector only short-circuits when left desk + picks are already linked.
-  if (same && !wantSym && deskReady) {
-    paintLinkedSectorDesk(state.sectors, sectorId, { wantSym });
+  if (same && !wantSym) {
     finishScroll();
     return;
   }
@@ -7639,9 +7596,18 @@ function openSectorDesk(id, { scroll = true, symbol = "" } = {}) {
   const cached = sectorCacheGet(sectorId);
   const cacheAge = sectorCacheAge(sectorId);
   if (cached) {
-    paintLinkedSectorDesk(cached, sectorId, { wantSym });
+    renderSectorDesk(cached, { sectorSwitch: true });
+    markPulseRankActive(sectorId);
+    markSectorChipActive(sectorId);
+    clearPulseSwitchWatchdog();
     // Fresh cache: show immediately; skip or defer soft-refresh for snappy switches.
     if (cacheAge < SECTOR_CACHE_FRESH_MS) {
+      const sym =
+        wantSym ||
+        cached.selected_symbol ||
+        cached.picks?.[0]?.symbol ||
+        "";
+      if (sym) selectSectorSymbol(sym);
       if (cacheAge >= SECTOR_CACHE_INSTANT_MS) {
         scheduleSoftSectorRefresh();
       }
@@ -7657,14 +7623,14 @@ function openSectorDesk(id, { scroll = true, symbol = "" } = {}) {
   const pref = softKey ? sectorInflight.get(softKey) : null;
   const load = pref
     ? pref.then((data) => {
-        if (
-          data &&
-          !isEmptySectorDesk(data) &&
-          state.sectorId === sectorId &&
-          (!data.active_sector_id || data.active_sector_id === sectorId)
-        ) {
+        if (data && !isEmptySectorDesk(data) && state.sectorId === sectorId) {
+          ensurePulseStockDesk(data);
           sectorCachePut(sectorId, data);
-          paintLinkedSectorDesk(data, sectorId, { wantSym });
+          renderSectorDesk(data, { sectorSwitch: true });
+          markPulseRankActive(sectorId);
+          markSectorChipActive(sectorId);
+          syncSectorQuery();
+          persistPageDataCache();
           return data;
         }
         return loadSectorDesk({ force: false, deferMap: true });
@@ -7673,16 +7639,14 @@ function openSectorDesk(id, { scroll = true, symbol = "" } = {}) {
   Promise.resolve(load)
     .then((data) => {
       if (state.sectorId !== sectorId) return;
-      if (
-        data &&
-        !isEmptySectorDesk(data) &&
-        (!data.active_sector_id || data.active_sector_id === sectorId)
-      ) {
-        paintLinkedSectorDesk(data, sectorId, { wantSym });
-      } else if (state.sectors?.active_sector_id === sectorId) {
-        paintLinkedSectorDesk(state.sectors, sectorId, { wantSym });
-      }
-      // If still unquoted, force one recovery load (quotes + stock desk).
+      const desk = data && !isEmptySectorDesk(data) ? data : state.sectors;
+      const sym =
+        wantSym ||
+        desk?.selected_symbol ||
+        desk?.picks?.[0]?.symbol ||
+        "";
+      if (sym) selectSectorSymbol(sym);
+      // If still on switch placeholder, force one recovery load.
       if (isSectorSwitchPlaceholder(state.sectors)) {
         void loadSectorDesk({ force: true, deferMap: true });
       }
@@ -9473,23 +9437,24 @@ function renderSectorDesk(data, { sectorSwitch = false } = {}) {
   } else if (sameBoard && !rotatePaint) {
     // Soft poll: patch quotes in place so the list doesn't jump to top.
     state.sectors = data;
-    if (!els.sectorPickList?.querySelector(".sector-pick-row[data-symbol]")) {
-      renderSectorPicks(data);
-    } else {
-      refreshSectorPickListLive();
-      paintSectorSelection();
-      renderSectorNewsFeed(data);
-      renderSymbolNewsFeed(data);
-      renderEarningsCalendar(data);
-      renderValueChain(data?.value_chain || data?.selected_pick?.value_chain);
-      scheduleSectorsDeskHeightSync();
-    }
+    refreshSectorPickListLive();
+    paintSectorSelection();
+    renderSectorNewsFeed(data);
+    renderSymbolNewsFeed(data);
+    renderEarningsCalendar(data);
+    renderValueChain(data?.value_chain || data?.selected_pick?.value_chain);
+    scheduleSectorsDeskHeightSync();
   } else {
-    // Keep rank ↔ stock desk ↔ 成分股 linked on the same tick (no rAF skip races).
+    // Paint pulse stocks first; bottom desk follows on next frame for snappier switches.
+    const deskData = data;
     const sid = data?.active_sector_id || state.sectorId;
-    if ((state.sectorId || "") === (sid || "") || sectorSwitch) {
-      renderSectorPicks(data);
-    }
+    requestAnimationFrame(() => {
+      if ((state.sectorId || "") !== (sid || "")) return;
+      if (state.sectors !== deskData && state.sectors?.active_sector_id !== sid) {
+        return;
+      }
+      renderSectorPicks(deskData);
+    });
   }
 }
 
@@ -9638,15 +9603,6 @@ async function loadSectorDesk({
       return state.sectors;
     }
     ensurePulseStockDesk(data);
-    // Reject mismatched payloads so a slow response can't unlink the clicked rank.
-    if (
-      reqSector &&
-      data?.active_sector_id &&
-      data.active_sector_id !== reqSector &&
-      data.active_sector_id !== nowSector
-    ) {
-      return data;
-    }
     if (data?.active_sector_id) sectorCachePut(data.active_sector_id, data);
     // Keep previously upgraded picks / 分时 only within the SAME sector.
     const prevSector =
