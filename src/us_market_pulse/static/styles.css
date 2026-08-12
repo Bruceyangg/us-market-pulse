@@ -3776,6 +3776,8 @@ html[data-theme="dark"] .us-futures-card {
   padding: 0.1rem 0.25rem 0.35rem 0;
   scrollbar-gutter: stable;
   -webkit-overflow-scrolling: touch;
+  contain: layout style;
+  content-visibility: auto;
 }
 
 .sector-pulse-stock-list::-webkit-scrollbar {
@@ -3804,6 +3806,7 @@ html[data-theme="dark"] .us-futures-card {
   overflow: hidden;
   background: color-mix(in srgb, var(--panel) 72%, transparent);
   transition: border-color 0.15s ease, background 0.15s ease;
+  contain: layout style paint;
 }
 
 .sector-pulse-stock-row:hover {

@@ -56,6 +56,9 @@ const state = {
   sectorsLoadPending: null,
   sectorPulseHorizon: "2w",
   sectorPulseSig: "",
+  sectorEtfSig: "",
+  sectorSoftRefreshTimer: null,
+  sectorsHeightSyncTimer: 0,
   sectorSearchMode: false,
   sectorSearchQuery: "",
   sectorSearchHits: [],
@@ -5115,6 +5118,254 @@ function sectorPulseSignature(data) {
   ].join("~");
 }
 
+function stockDeskSignature(desk) {
+  const d = desk || {};
+  const pack = (list) =>
+    (list || [])
+      .map((x) => `${x?.symbol || ""}:${x?.stance || ""}:${x?.score ?? ""}`)
+      .join(",");
+  return [
+    d.sector_id || d.sector_label || "",
+    String(d.summary || "").slice(0, 40),
+    pack(d.strong),
+    pack(d.bearish),
+    pack(d.watch),
+    pack(d.weak),
+  ].join("~");
+}
+
+function buildPulseStockCardHtml(row, tone) {
+  const day = row?.change_pct;
+  const month = row?.month_change_pct;
+  const dayCls =
+    typeof day === "number" ? (day < 0 ? "down" : day > 0 ? "up" : "") : "";
+  const monthCls =
+    typeof month === "number"
+      ? month < 0
+        ? "down"
+        : month > 0
+          ? "up"
+          : ""
+      : "";
+  const industries = (Array.isArray(row?.industries) ? row.industries : [])
+    .map((x) => String(x || "").trim())
+    .filter(Boolean)
+    .slice(0, 2);
+  const industryHtml = `<span class="stock-industries" aria-label="细分行业">${industries
+    .map(
+      (tag, i) =>
+        `<span class="ind${i === 0 ? " is-core" : ""}">${escapeHtml(
+          tag,
+        )}</span>`,
+    )
+    .join("")}</span>`;
+  const clipText = (text, max = 52) => {
+    const s = String(text || "").trim();
+    if (s.length <= max) return s;
+    return `${s.slice(0, max - 1)}…`;
+  };
+  const reason = clipText(row.reason || "", 48);
+  const action = clipText(row.action || "", 40);
+  const sym = String(row.symbol || "").toUpperCase();
+  const held = isInHoldings(sym);
+  return `
+      <div class="sector-pulse-stock-row ${held ? "in-holding" : ""}" data-symbol="${escapeHtml(
+        sym,
+      )}">
+        <button type="button" class="sector-pulse-stock ${tone}" data-pulse-symbol="${escapeHtml(
+          sym,
+        )}" title="查看 ${escapeHtml(sym)}">
+          <span class="stock-top">
+            <span class="stock-id">
+              <span class="sym">${escapeHtml(sym)}</span>
+              <span class="name">${escapeHtml(row.name || "")}</span>
+              ${held ? '<span class="hold-tag">持仓</span>' : ""}
+            </span>
+            <span class="stance">${escapeHtml(row.stance_zh || "")}</span>
+          </span>
+          ${industryHtml}
+          <span class="stock-metrics">
+            <span class="${monthCls}">近月 ${
+              month == null
+                ? "—"
+                : `<span class="pulse-pct ${monthCls}">${escapeHtml(
+                    pctText(month),
+                  )}</span>`
+            }</span>
+            <span class="${dayCls}">今日 ${
+              day == null
+                ? "—"
+                : `<span class="pulse-pct ${dayCls}">${escapeHtml(
+                    pctText(day),
+                  )}</span>`
+            }</span>
+          </span>
+          <span class="stock-reason">${colorizePctHtml(reason)}</span>
+          <span class="stock-action">${colorizePctHtml(action)}</span>
+        </button>
+        <button
+          type="button"
+          class="sector-hold-btn ${held ? "is-held" : ""}"
+          data-hold-symbol="${escapeHtml(sym)}"
+          data-hold-name="${escapeHtml(row.name || "")}"
+          data-hold-action="${held ? "remove" : "add"}"
+          title="${held ? `从持仓移除 ${sym}` : `加入持仓 ${sym}`}"
+          aria-label="${held ? `从持仓移除 ${sym}` : `加入持仓 ${sym}`}"
+        >${held ? "−" : "+"}</button>
+      </div>
+    `;
+}
+
+function buildPulseStockDeskHtml(stockDesk) {
+  const desk = stockDesk || {};
+  const stockStrong = (desk.strong || []).slice(0, 8);
+  const stockBearish = (desk.bearish || []).slice(0, 8);
+  const stockWatch = (desk.watch || []).slice(0, 8);
+  const stockWeak = (desk.weak || []).slice(0, 5);
+  if (
+    !stockStrong.length &&
+    !stockBearish.length &&
+    !stockWatch.length &&
+    !stockWeak.length
+  ) {
+    return `<div class="sector-pulse-stocks">
+        <div class="sector-pulse-stocks-title">
+          <span class="title-main">个股强弱与推荐</span>
+          ${
+            desk.sector_label
+              ? `<span class="title-sector">${escapeHtml(desk.sector_label)}</span>`
+              : ""
+          }
+        </div>
+        <p class="empty">${colorizePctHtml(
+          desk.summary || "选择板块后显示成分股强弱与推荐",
+        )}</p>
+      </div>`;
+  }
+  return `
+      <div class="sector-pulse-stocks">
+        <div class="sector-pulse-stocks-head">
+          <div class="sector-pulse-stocks-title">
+            <span class="title-main">个股强弱与推荐</span>
+            <span class="title-sector">${escapeHtml(
+              desk.sector_label || "当前板块",
+            )}</span>
+          </div>
+          <p class="sector-pulse-stocks-summary">${colorizePctHtml(
+            desk.summary || "",
+          )}</p>
+        </div>
+        <div class="sector-pulse-stock-cols">
+          <div class="sector-pulse-stock-col">
+            <p class="sector-pulse-rank-label">偏多跟踪</p>
+            <div class="sector-pulse-stock-list">
+              ${
+                stockStrong.length
+                  ? stockStrong
+                      .map((r) => buildPulseStockCardHtml(r, "is-strong"))
+                      .join("")
+                  : '<p class="empty">暂无</p>'
+              }
+            </div>
+          </div>
+          <div class="sector-pulse-stock-col">
+            <p class="sector-pulse-rank-label">偏空跟踪</p>
+            <div class="sector-pulse-stock-list">
+              ${
+                stockBearish.length
+                  ? stockBearish
+                      .map((r) => buildPulseStockCardHtml(r, "is-bearish"))
+                      .join("")
+                  : '<p class="empty">暂无</p>'
+              }
+            </div>
+          </div>
+          <div class="sector-pulse-stock-col">
+            <p class="sector-pulse-rank-label">观察 / 谨慎</p>
+            <div class="sector-pulse-stock-list">
+              ${
+                [...stockWatch, ...stockWeak].length
+                  ? [...stockWatch, ...stockWeak]
+                      .slice(0, 10)
+                      .map((r) =>
+                        buildPulseStockCardHtml(
+                          r,
+                          r.stance === "avoid" ? "is-weak" : "is-watch",
+                        ),
+                      )
+                      .join("")
+                  : '<p class="empty">暂无</p>'
+              }
+            </div>
+          </div>
+        </div>
+      </div>
+    `;
+}
+
+function bindPulseStockDeskHandlers(root, { keepScroll = [] } = {}) {
+  const scope = root || els.sectorPulseBody;
+  if (!scope) return;
+  scope.querySelectorAll("[data-pulse-symbol]").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      const sym = btn.getAttribute("data-pulse-symbol");
+      if (sym) selectSectorSymbol(sym);
+    });
+  });
+  scope.querySelectorAll(".sector-hold-btn").forEach((btn) => {
+    btn.addEventListener("click", (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      const sym = btn.getAttribute("data-hold-symbol") || "";
+      const name = btn.getAttribute("data-hold-name") || "";
+      const action = btn.getAttribute("data-hold-action") || "add";
+      if (action === "remove") {
+        if (!confirm(`确定从持仓移除 ${sym}？`)) return;
+      }
+      toggleSectorHolding(sym, name);
+    });
+  });
+  const lists = scope.querySelectorAll(".sector-pulse-stock-list");
+  lists.forEach((list, idx) => {
+    if (keepScroll[idx] != null) list.scrollTop = keepScroll[idx];
+    list.addEventListener(
+      "wheel",
+      (event) => {
+        if (list.scrollHeight <= list.clientHeight + 1) return;
+        const dy = event.deltaY;
+        const top = list.scrollTop;
+        const max = list.scrollHeight - list.clientHeight;
+        const atTop = top <= 0 && dy < 0;
+        const atBottom = top >= max - 1 && dy > 0;
+        if (!atTop && !atBottom) event.stopPropagation();
+      },
+      { passive: true },
+    );
+  });
+}
+
+/** Fast path: swap only 个股强弱与推荐 without rebuilding ranking / analysis. */
+function paintPulseStockDesk(stockDesk) {
+  if (!els.sectorPulseBody) return false;
+  const html = buildPulseStockDeskHtml(stockDesk || {});
+  const existing = els.sectorPulseBody.querySelector(".sector-pulse-stocks");
+  const wrap = document.createElement("div");
+  wrap.innerHTML = html.trim();
+  const next = wrap.firstElementChild;
+  if (!next) return false;
+  if (existing) {
+    existing.replaceWith(next);
+  } else {
+    const main = els.sectorPulseBody.querySelector(".sector-pulse-main");
+    const intel = main?.querySelector(".sector-pulse-intel");
+    if (main && intel) main.insertBefore(next, intel);
+    else if (main) main.appendChild(next);
+    else return false;
+  }
+  bindPulseStockDeskHandlers(next);
+  return true;
+}
+
 function renderSectorPulse(data, { soft = false } = {}) {
   if (!els.sectorPulseBody) return;
   const nextSig = sectorPulseSignature(data);
@@ -5359,10 +5610,6 @@ function renderSectorPulse(data, { soft = false } = {}) {
   const playbook = String(view.playbook || pulse.playbook || "").trim();
   const detail = String(view.detail || pulse.detail || "").trim();
   const stockDesk = pulse.stock_desk || {};
-  const stockStrong = (stockDesk.strong || []).slice(0, 8);
-  const stockBearish = (stockDesk.bearish || []).slice(0, 8);
-  const stockWatch = (stockDesk.watch || []).slice(0, 8);
-  const stockWeak = (stockDesk.weak || []).slice(0, 5);
   const pulseHzButtons = [
     ["1w", "一周"],
     ["2w", "两周"],
@@ -5370,164 +5617,6 @@ function renderSectorPulse(data, { soft = false } = {}) {
     ["4w", "四周"],
     ["2m", "两月"],
   ];
-
-  const stockCard = (row, tone) => {
-    const day = row?.change_pct;
-    const month = row?.month_change_pct;
-    const dayCls =
-      typeof day === "number" ? (day < 0 ? "down" : day > 0 ? "up" : "") : "";
-    const monthCls =
-      typeof month === "number"
-        ? month < 0
-          ? "down"
-          : month > 0
-            ? "up"
-            : ""
-        : "";
-    const industries = (Array.isArray(row?.industries) ? row.industries : [])
-      .map((x) => String(x || "").trim())
-      .filter(Boolean)
-      .slice(0, 2);
-    // Always render the industries row so card grid rows stay aligned across sectors.
-    const industryHtml = `<span class="stock-industries" aria-label="细分行业">${industries
-      .map(
-        (tag, i) =>
-          `<span class="ind${i === 0 ? " is-core" : ""}">${escapeHtml(
-            tag,
-          )}</span>`,
-      )
-      .join("")}</span>`;
-    const clipText = (text, max = 52) => {
-      const s = String(text || "").trim();
-      if (s.length <= max) return s;
-      return `${s.slice(0, max - 1)}…`;
-    };
-    const reason = clipText(row.reason || "", 48);
-    const action = clipText(row.action || "", 40);
-    const sym = String(row.symbol || "").toUpperCase();
-    const held = isInHoldings(sym);
-    return `
-      <div class="sector-pulse-stock-row ${held ? "in-holding" : ""}" data-symbol="${escapeHtml(
-        sym,
-      )}">
-        <button type="button" class="sector-pulse-stock ${tone}" data-pulse-symbol="${escapeHtml(
-          sym,
-        )}" title="查看 ${escapeHtml(sym)}">
-          <span class="stock-top">
-            <span class="stock-id">
-              <span class="sym">${escapeHtml(sym)}</span>
-              <span class="name">${escapeHtml(row.name || "")}</span>
-              ${held ? '<span class="hold-tag">持仓</span>' : ""}
-            </span>
-            <span class="stance">${escapeHtml(row.stance_zh || "")}</span>
-          </span>
-          ${industryHtml}
-          <span class="stock-metrics">
-            <span class="${monthCls}">近月 ${
-              month == null
-                ? "—"
-                : `<span class="pulse-pct ${monthCls}">${escapeHtml(
-                    pctText(month),
-                  )}</span>`
-            }</span>
-            <span class="${dayCls}">今日 ${
-              day == null
-                ? "—"
-                : `<span class="pulse-pct ${dayCls}">${escapeHtml(
-                    pctText(day),
-                  )}</span>`
-            }</span>
-          </span>
-          <span class="stock-reason">${colorizePctHtml(reason)}</span>
-          <span class="stock-action">${colorizePctHtml(action)}</span>
-        </button>
-        <button
-          type="button"
-          class="sector-hold-btn ${held ? "is-held" : ""}"
-          data-hold-symbol="${escapeHtml(sym)}"
-          data-hold-name="${escapeHtml(row.name || "")}"
-          data-hold-action="${held ? "remove" : "add"}"
-          title="${held ? `从持仓移除 ${sym}` : `加入持仓 ${sym}`}"
-          aria-label="${held ? `从持仓移除 ${sym}` : `加入持仓 ${sym}`}"
-        >${held ? "−" : "+"}</button>
-      </div>
-    `;
-  };
-
-  const stockBlock = () => {
-    if (
-      !stockStrong.length &&
-      !stockBearish.length &&
-      !stockWatch.length &&
-      !stockWeak.length
-    ) {
-      return `<div class="sector-pulse-stocks">
-        <div class="sector-pulse-stocks-title">
-          <span class="title-main">个股强弱与推荐</span>
-        </div>
-        <p class="empty">${colorizePctHtml(
-          stockDesk.summary || "选择板块后显示成分股强弱与推荐",
-        )}</p>
-      </div>`;
-    }
-    return `
-      <div class="sector-pulse-stocks">
-        <div class="sector-pulse-stocks-head">
-          <div class="sector-pulse-stocks-title">
-            <span class="title-main">个股强弱与推荐</span>
-            <span class="title-sector">${escapeHtml(
-              stockDesk.sector_label || "当前板块",
-            )}</span>
-          </div>
-          <p class="sector-pulse-stocks-summary">${colorizePctHtml(
-            stockDesk.summary || "",
-          )}</p>
-        </div>
-        <div class="sector-pulse-stock-cols">
-          <div class="sector-pulse-stock-col">
-            <p class="sector-pulse-rank-label">偏多跟踪</p>
-            <div class="sector-pulse-stock-list">
-              ${
-                stockStrong.length
-                  ? stockStrong.map((r) => stockCard(r, "is-strong")).join("")
-                  : '<p class="empty">暂无</p>'
-              }
-            </div>
-          </div>
-          <div class="sector-pulse-stock-col">
-            <p class="sector-pulse-rank-label">偏空跟踪</p>
-            <div class="sector-pulse-stock-list">
-              ${
-                stockBearish.length
-                  ? stockBearish
-                      .map((r) => stockCard(r, "is-bearish"))
-                      .join("")
-                  : '<p class="empty">暂无</p>'
-              }
-            </div>
-          </div>
-          <div class="sector-pulse-stock-col">
-            <p class="sector-pulse-rank-label">观察 / 谨慎</p>
-            <div class="sector-pulse-stock-list">
-              ${
-                [...stockWatch, ...stockWeak].length
-                  ? [...stockWatch, ...stockWeak]
-                      .slice(0, 10)
-                      .map((r) =>
-                        stockCard(
-                          r,
-                          r.stance === "avoid" ? "is-weak" : "is-watch",
-                        ),
-                      )
-                      .join("")
-                  : '<p class="empty">暂无</p>'
-              }
-            </div>
-          </div>
-        </div>
-      </div>
-    `;
-  };
 
   els.sectorPulseBody.innerHTML = `
     <div class="sector-pulse-grid">
@@ -5566,7 +5655,7 @@ function renderSectorPulse(data, { soft = false } = {}) {
               : ""
           }
         </div>
-        ${stockBlock()}
+        ${buildPulseStockDeskHtml(stockDesk)}
         <div class="sector-pulse-intel">
           <p class="sector-pulse-rank-label">情报交叉</p>
           <div class="spotlight-list compact sector-pulse-intel-grid">
@@ -5631,47 +5720,7 @@ function renderSectorPulse(data, { soft = false } = {}) {
       });
     });
   warmPulseRankPrefetch(data || state.sectors);
-  els.sectorPulseBody
-    .querySelectorAll("[data-pulse-symbol]")
-    .forEach((btn) => {
-      btn.addEventListener("click", () => {
-        const sym = btn.getAttribute("data-pulse-symbol");
-        if (sym) selectSectorSymbol(sym);
-      });
-    });
-  els.sectorPulseBody.querySelectorAll(".sector-hold-btn").forEach((btn) => {
-    btn.addEventListener("click", (event) => {
-      event.preventDefault();
-      event.stopPropagation();
-      const sym = btn.getAttribute("data-hold-symbol") || "";
-      const name = btn.getAttribute("data-hold-name") || "";
-      const action = btn.getAttribute("data-hold-action") || "add";
-      if (action === "remove") {
-        if (!confirm(`确定从持仓移除 ${sym}？`)) return;
-      }
-      toggleSectorHolding(sym, name);
-    });
-  });
-  // Keep list wheel scroll inside the column (more picks than viewport).
-  const lists = els.sectorPulseBody.querySelectorAll(
-    ".sector-pulse-stock-list",
-  );
-  lists.forEach((list, idx) => {
-    if (keepScroll[idx] != null) list.scrollTop = keepScroll[idx];
-    list.addEventListener(
-      "wheel",
-      (event) => {
-        if (list.scrollHeight <= list.clientHeight + 1) return;
-        const dy = event.deltaY;
-        const top = list.scrollTop;
-        const max = list.scrollHeight - list.clientHeight;
-        const atTop = top <= 0 && dy < 0;
-        const atBottom = top >= max - 1 && dy > 0;
-        if (!atTop && !atBottom) event.stopPropagation();
-      },
-      { passive: true },
-    );
-  });
+  bindPulseStockDeskHandlers(els.sectorPulseBody, { keepScroll });
   state.sectorPulseSig = nextSig;
 }
 
@@ -6402,9 +6451,11 @@ function sectorDeskQuoteCoverage(data) {
 }
 
 /** Align with server _PICKS_TTL (180s) + a little headroom for soft switches. */
-const SECTOR_CACHE_TTL_MS = 240_000;
+const SECTOR_CACHE_TTL_MS = 300_000;
 /** Fresh enough to paint instantly and refresh in background only. */
-const SECTOR_CACHE_FRESH_MS = 90_000;
+const SECTOR_CACHE_FRESH_MS = 120_000;
+/** Super-fresh: skip background /api/sectors to keep switches snappy. */
+const SECTOR_CACHE_INSTANT_MS = 45_000;
 const sectorInflight = new Map();
 
 function sectorCacheAge(id) {
@@ -6458,6 +6509,44 @@ function markPulseRankActive(sectorId) {
   });
 }
 
+function markSectorChipActive(sectorId) {
+  const id = String(sectorId || "")
+    .trim()
+    .toLowerCase();
+  if (!els.sectorEtfGrid || !id) return;
+  els.sectorEtfGrid.querySelectorAll("[data-sector]").forEach((btn) => {
+    const bid = String(btn.getAttribute("data-sector") || "")
+      .trim()
+      .toLowerCase();
+    const on = bid === id;
+    btn.classList.toggle("is-active", on);
+    btn.setAttribute("aria-pressed", on ? "true" : "false");
+  });
+  if (els.hotSectorsBlurb) {
+    const rows = state.sectors?.sectors || [];
+    const active = rows.find((r) => String(r.id || "").toLowerCase() === id);
+    if (active) {
+      const count =
+        active.pick_count ||
+        active.universe?.length ||
+        active.picks?.length ||
+        0;
+      els.hotSectorsBlurb.textContent = `${active.label} · ${count} 只成分 · 点卡片进入下方走势台`;
+    }
+  }
+}
+
+function sectorEtfListSignature(sectors) {
+  return (sectors || [])
+    .map(
+      (r) =>
+        `${r?.id || ""}:${Number(r?.change_pct ?? 0).toFixed(2)}:${
+          r?.is_hot ? 1 : 0
+        }:${r?.pick_count || 0}`,
+    )
+    .join("|");
+}
+
 function paintPulseSwitchHint(sectorId) {
   const id = String(sectorId || "")
     .trim()
@@ -6473,28 +6562,54 @@ function paintPulseSwitchHint(sectorId) {
       (s) => String(s?.id || "").toLowerCase() === id,
     );
   const label = String(row?.label || id);
-  const titleSector = els.sectorPulseBody.querySelector(
-    ".sector-pulse-stocks-title .title-sector",
-  );
-  if (titleSector) titleSector.textContent = label;
-  const summary = els.sectorPulseBody.querySelector(
-    ".sector-pulse-stocks-summary",
-  );
-  if (summary) {
-    summary.textContent = `正在切换「${label}」个股强弱与推荐…`;
+  // Prefer in-place stock desk swap so cards never show the previous sector.
+  paintPulseStockDesk({
+    sector_label: label,
+    summary: `正在切换「${label}」个股强弱与推荐…`,
+    strong: [],
+    bearish: [],
+    watch: [],
+    weak: [],
+  });
+}
+
+function scheduleSoftSectorRefresh() {
+  if (state.sectorSoftRefreshTimer) {
+    clearTimeout(state.sectorSoftRefreshTimer);
   }
+  state.sectorSoftRefreshTimer = window.setTimeout(() => {
+    state.sectorSoftRefreshTimer = null;
+    if (PAGE !== "sectors" || state.sectorsLoadBusy) return;
+    void loadSectorDesk({ force: false });
+  }, 420);
 }
 
 function warmPulseRankPrefetch(data) {
   const pulse = data?.sector_pulse || {};
   const hz = state.sectorPulseHorizon || pulse.default_horizon || "2w";
   const ranking = pulse.horizons?.[hz]?.ranking || pulse.ranking || [];
-  ranking.slice(0, 5).forEach((row, i) => {
+  const ids = [];
+  const active = String(state.sectorId || "").toLowerCase();
+  const activeIdx = ranking.findIndex(
+    (r) => String(r?.id || "").toLowerCase() === active,
+  );
+  if (activeIdx >= 0) {
+    for (const off of [-1, 1, -2, 2]) {
+      const row = ranking[activeIdx + off];
+      const id = String(row?.id || "")
+        .trim()
+        .toLowerCase();
+      if (id && id !== active) ids.push(id);
+    }
+  }
+  ranking.slice(0, 8).forEach((row) => {
     const id = String(row?.id || "")
       .trim()
       .toLowerCase();
-    if (!id || id === state.sectorId) return;
-    window.setTimeout(() => prefetchSectorDesk(id), 100 + i * 140);
+    if (id && id !== active) ids.push(id);
+  });
+  [...new Set(ids)].slice(0, 8).forEach((id, i) => {
+    window.setTimeout(() => prefetchSectorDesk(id), 60 + i * 90);
   });
 }
 
@@ -7090,9 +7205,13 @@ function paintSectorSwitchPlaceholder(sectorId) {
   };
   state.sectors = stub;
   state.sectorSymbol = "";
-  renderSectorEtfs(sectors);
-  renderSectorPicks(stub);
+  markSectorChipActive(sectorId);
   paintPulseSwitchHint(sectorId);
+  // Defer bottom desk stub so left pulse paints first.
+  requestAnimationFrame(() => {
+    if (state.sectorId !== sectorId) return;
+    renderSectorPicks(stub);
+  });
   if (els.sectorPicksBlurb) {
     els.sectorPicksBlurb.textContent = picks.length
       ? `${picks.length} 只成分 · 行情刷新中…`
@@ -7110,13 +7229,14 @@ function openSectorDesk(id, { scroll = true, symbol = "" } = {}) {
   }
   const same = sectorId === state.sectorId;
   state.sectorId = sectorId;
-  // Instant rank highlight — don't wait on network / full pulse rebuild.
+  // Instant rank / chip highlight — don't wait on network / full pulse rebuild.
   markPulseRankActive(sectorId);
+  markSectorChipActive(sectorId);
   if (!same) {
     state.sectorSymbol = wantSym;
     state.chartUpgradeSym = "";
     state.symbolNewsRetrySym = "";
-    state.sectorPulseSig = "";
+    // Keep pulse ranking DOM; stock desk patches in place.
     // Keep any in-flight request from painting the previous sector.
     state.sectorsLoadPending = {
       force: false,
@@ -7149,13 +7269,15 @@ function openSectorDesk(id, { scroll = true, symbol = "" } = {}) {
   const cached = sectorCacheGet(sectorId);
   const cacheAge = sectorCacheAge(sectorId);
   if (cached) {
-    state.sectorPulseSig = "";
-    renderSectorDesk(cached);
+    renderSectorDesk(cached, { sectorSwitch: true });
     markPulseRankActive(sectorId);
-    // Fresh cache: show immediately, soft-refresh in background (fast path).
+    markSectorChipActive(sectorId);
+    // Fresh cache: show immediately; skip or defer soft-refresh for snappy switches.
     if (cacheAge < SECTOR_CACHE_FRESH_MS) {
       if (wantSym) selectSectorSymbol(wantSym);
-      void loadSectorDesk({ force: false });
+      if (cacheAge >= SECTOR_CACHE_INSTANT_MS) {
+        scheduleSoftSectorRefresh();
+      }
       finishScroll();
       return;
     }
@@ -7169,9 +7291,9 @@ function openSectorDesk(id, { scroll = true, symbol = "" } = {}) {
     ? pref.then((data) => {
         if (data && state.sectorId === sectorId) {
           sectorCachePut(sectorId, data);
-          state.sectorPulseSig = "";
-          renderSectorDesk(data);
+          renderSectorDesk(data, { sectorSwitch: true });
           markPulseRankActive(sectorId);
+          markSectorChipActive(sectorId);
           syncSectorQuery();
           persistPageDataCache();
           return data;
@@ -7218,13 +7340,26 @@ function warmHotSectorPrefetch(sectors) {
   warmPulseRankPrefetch(state.sectors);
 }
 
-function renderSectorEtfs(sectors) {
+function renderSectorEtfs(sectors, { force = false } = {}) {
   if (!els.sectorEtfGrid) return;
   const rows = sectors || [];
   if (!rows.length) {
     els.sectorEtfGrid.innerHTML = '<p class="empty">暂无板块行情。</p>';
+    state.sectorEtfSig = "";
     return;
   }
+  const nextSig = sectorEtfListSignature(rows);
+  // Soft sector switches / polls: only toggle active chip when the board list is unchanged.
+  if (
+    !force &&
+    nextSig &&
+    nextSig === state.sectorEtfSig &&
+    els.sectorEtfGrid.querySelector("[data-sector]")
+  ) {
+    markSectorChipActive(state.sectorId);
+    return;
+  }
+  state.sectorEtfSig = nextSig;
   if (els.hotSectorsBlurb) {
     const hot = rows.filter((r) => r.is_hot).map((r) => r.label).slice(0, 3);
     const active = rows.find((r) => r.id === state.sectorId);
@@ -8124,9 +8259,10 @@ function syncSectorsDeskHeights() {
 
 function scheduleSectorsDeskHeightSync() {
   if (PAGE !== "sectors") return;
-  requestAnimationFrame(() => {
+  if (state.sectorsHeightSyncTimer) return;
+  state.sectorsHeightSyncTimer = requestAnimationFrame(() => {
+    state.sectorsHeightSyncTimer = 0;
     syncSectorsDeskHeights();
-    requestAnimationFrame(syncSectorsDeskHeights);
   });
 }
 
@@ -8847,7 +8983,7 @@ function sectorPickListSignature(picks) {
     .join("|");
 }
 
-function renderSectorDesk(data) {
+function renderSectorDesk(data, { sectorSwitch = false } = {}) {
   const prev = state.sectors;
   const sameBoard =
     prev &&
@@ -8883,13 +9019,35 @@ function renderSectorDesk(data) {
   }
   if (data?.selected_symbol) state.sectorSymbol = data.selected_symbol;
   const sectorChanged =
-    Boolean(prev?.active_sector_id) &&
+    Boolean(sectorSwitch) ||
+    (Boolean(prev?.active_sector_id) &&
+      Boolean(data?.active_sector_id) &&
+      prev.active_sector_id !== data.active_sector_id);
+  // Placeholder stub already set active_sector_id — still treat network fill as a switch.
+  const recoveringStub =
+    Boolean(prev?.picks?.length) &&
+    prev.picks.some((p) => p?.lite) &&
     Boolean(data?.active_sector_id) &&
-    prev.active_sector_id !== data.active_sector_id;
-  if (sectorChanged) state.sectorPulseSig = "";
-  renderSectorPulse(data, { soft: Boolean(sameBoard) && !sectorChanged });
-  renderAiDesk(data?.hot_desk || data?.ai_desk);
-  renderSectorEtfs(data?.sectors || []);
+    prev.active_sector_id === data.active_sector_id;
+  const rotatePaint = sectorChanged || recoveringStub || Boolean(sectorSwitch);
+
+  // Sector rotation fast path: patch stock desk + active rank; keep ranking DOM.
+  const hasPulseGrid = Boolean(
+    els.sectorPulseBody?.querySelector(".sector-pulse-grid"),
+  );
+  if (hasPulseGrid && rotatePaint) {
+    markPulseRankActive(data?.active_sector_id || state.sectorId);
+    paintPulseStockDesk(data?.sector_pulse?.stock_desk || {});
+    state.sectorPulseSig = sectorPulseSignature(data);
+  } else {
+    renderSectorPulse(data, {
+      soft: Boolean(sameBoard) && !rotatePaint,
+    });
+  }
+  if (!sameBoard || rotatePaint) {
+    renderAiDesk(data?.hot_desk || data?.ai_desk);
+  }
+  renderSectorEtfs(data?.sectors || [], { force: false });
   if (state.sectorSearchMode) {
     syncSearchHitsFromDesk(data);
     renderSectorSearchList();
@@ -8899,7 +9057,7 @@ function renderSectorDesk(data) {
     renderEarningsCalendar(data);
     renderValueChain(data?.value_chain || data?.selected_pick?.value_chain);
     scheduleSectorsDeskHeightSync();
-  } else if (sameBoard) {
+  } else if (sameBoard && !rotatePaint) {
     // Soft poll: patch quotes in place so the list doesn't jump to top.
     state.sectors = data;
     refreshSectorPickListLive();
@@ -8910,7 +9068,16 @@ function renderSectorDesk(data) {
     renderValueChain(data?.value_chain || data?.selected_pick?.value_chain);
     scheduleSectorsDeskHeightSync();
   } else {
-    renderSectorPicks(data);
+    // Paint pulse stocks first; bottom desk follows on next frame for snappier switches.
+    const deskData = data;
+    const sid = data?.active_sector_id || state.sectorId;
+    requestAnimationFrame(() => {
+      if ((state.sectorId || "") !== (sid || "")) return;
+      if (state.sectors !== deskData && state.sectors?.active_sector_id !== sid) {
+        return;
+      }
+      renderSectorPicks(deskData);
+    });
   }
 }
 
@@ -9888,11 +10055,16 @@ function slimSectorsForCache(data) {
 
 function slimSectorCacheForPersist(cache) {
   const src = cache || {};
+  const pulse = state.sectors?.sector_pulse || {};
+  const hz = state.sectorPulseHorizon || pulse.default_horizon || "2w";
+  const ranking = pulse.horizons?.[hz]?.ranking || pulse.ranking || [];
   const prefer = [
     state.sectorId,
     ...(state.sectors?.hot_sectors || []).map((s) => s.id),
+    ...ranking.slice(0, 6).map((r) => r?.id),
   ].filter(Boolean);
-  const ids = [...new Set([...prefer, ...Object.keys(src)])].slice(0, 4);
+  // Keep more warm desks across reloads so rank clicks stay instant.
+  const ids = [...new Set([...prefer, ...Object.keys(src)])].slice(0, 8);
   const out = {};
   for (const id of ids) {
     const row = src[id];
