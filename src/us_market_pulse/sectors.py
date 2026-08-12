@@ -3837,7 +3837,8 @@ async def build_sector_desk(
                     overnight_priority=night_pri,
                     bypass_cache=force,
                 ),
-                timeout=3.5,
+                # Cold Render + Yahoo often needs >3.5s; empty tape breaks 成分股 linkage.
+                timeout=7.0,
             )
         except asyncio.TimeoutError:
             day_quotes = {}

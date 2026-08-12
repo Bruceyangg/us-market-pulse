@@ -1,0 +1,51 @@
+---
+description: Pulse Desk sectors page linkage, loading, and regression guardrails
+alwaysApply: true
+---
+
+# Pulse Desk — sectors linkage & load rules
+
+Live URL: `https://us-market-pulse-6sqa.onrender.com/sectors`
+
+## Required linkages (do not break)
+
+Clicking the **right pulse ranking** (`[data-pulse-sector]`) must synchronously update:
+
+1. Rank active state (聚焦)
+2. Left **个股强弱与推荐** (`sector_pulse.stock_desk`)
+3. Bottom **成分股** list + first/selected symbol chart / news / chain
+4. URL `?sector=&symbol=`
+
+Other links that must stay wired:
+
+- Map tile / sector label → `openSectorDesk`
+- Pulse stock card → `selectSectorSymbol` (bottom desk)
+- Horizon tabs (一周～四周) → re-render ranking for that horizon; keep active sector stock desk linked
+- US markets strip/futures TF switches must not blank a painted block
+
+## Map 1w–4w (keep)
+
+- Server: `fill_horizon`, merge `_MAP_RET_CACHE` on timeout, background horizon fill
+- Client: quiet `fillHorizon` (never `force` wipe treemap for sparse weeks)
+- Session restore of `sectorMap` / `sectorMapTf`
+
+## Loading / cache guardrails
+
+- Empty timeout stubs (`sectors: []`, `strip: []`, `picks: []`) must **never** wipe already-painted UI
+- Lite / unquoted shells (`change_pct` sparse) are **not** warm cache — do not short-circuit rank clicks on them
+- Prefer `paintLinkedSectorDesk` (or equivalent) so rank + stock desk + picks paint on the same tick
+- Prefetch and soft desk load share one inflight key (`soft:<sectorId>`), timeout ≥ server budget (~20s)
+- Stuck "正在切换…" is a bug — use local stock-desk fallback + watchdog recovery
+
+## Revert / version policy
+
+- Do **not** revert linkage/stub fixes just to keep map week fills — keep **both**
+- When changing sectors UI/load paths, manually verify: rank click → left desk + 成分股 + chart update within one interaction
+- Bump `base.html` `?v=` and `sw.js` cache together after FE changes
+
+## Key files
+
+- `src/us_market_pulse/static/app.js` — `openSectorDesk`, `paintLinkedSectorDesk`, `loadSectorDesk`, `loadSectorMap`, `renderSectorPulse`
+- `src/us_market_pulse/market_map.py` — horizon returns / fill
+- `src/us_market_pulse/sectors.py` — desk + peek cache
+- `src/us_market_pulse/app.py` — `/api/sectors`, `/api/sectors/map`, `/api/us-markets` budgets
