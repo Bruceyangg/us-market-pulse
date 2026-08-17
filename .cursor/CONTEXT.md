@@ -1,6 +1,6 @@
 # Pulse Desk — living context (agents must update)
 
-Last updated: 2026-08-16 · tip pending `a39`
+Last updated: 2026-08-16 · tip pending `a40`
 
 ## Product
 
@@ -10,8 +10,20 @@ Last updated: 2026-08-16 · tip pending `a39`
 
 ## Current shipped FE/SW
 
-- Static `?v=20260811a39` (shipping)
-- SW cache `pulse-desk-shell-v161` · reset key `pulse_sw_reset_v161`
+- Static `?v=20260811a40` (shipping)
+- SW cache `pulse-desk-shell-v162` · reset key `pulse_sw_reset_v162`
+
+## Rank→研判文案 linkage fix (a40, keep)
+
+- BUG: rank click rotation fast path in `renderSectorDesk` (`hasPulseGrid && rotatePaint`)
+  updated only `markPulseRankActive` + `paintPulseStockDesk` — the 板块动向研判 analysis
+  text (`.sector-pulse-summary/detail/playbook/factors`), bias chip, kicker/blurb, and
+  情报交叉 (`.sector-pulse-intel-grid`) stayed on the PREVIOUS sector.
+- FIX: `patchPulseAnalysis(data)` updates those sub-nodes IN PLACE (no ranking rebuild →
+  keeps scroll + instant switch). Called in the fast path before `paintPulseStockDesk`.
+  Backend `sector_pulse.summary` is already per-active-sector (`当前聚焦「{active_label}」`).
+- Result: clicking 今日排名 now resyncs the WHOLE 板块动向研判 block + 个股强弱 + 成分股/图表 together.
+  Do NOT revert to stock-desk-only patch.
 
 ## Cross-section data prefetch (a39, keep)
 

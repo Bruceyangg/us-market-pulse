@@ -9392,6 +9392,107 @@ function sectorPickListSignature(picks) {
     .join("|");
 }
 
+// In-place update of the 板块动向研判 analysis text / bias / 情报 for the active
+// sector — used by the rotation fast path so rank clicks resync the WHOLE block
+// (研判文案 + 个股强弱 + 情报) without rebuilding the ranking list (keeps scroll).
+function patchPulseAnalysis(data) {
+  const body = els.sectorPulseBody;
+  const pulse = data?.sector_pulse;
+  if (!body || !pulse) return;
+  const pulseHzOrder = ["1w", "2w", "3w", "4w", "2m"];
+  const pulseHzLabels = {
+    "1w": "近一周",
+    "2w": "近两周",
+    "3w": "近三周",
+    "4w": "近四周",
+    "2m": "近两月",
+  };
+  const horizons = pulse.horizons || {};
+  const wanted = pulseHzOrder.includes(state.sectorPulseHorizon)
+    ? state.sectorPulseHorizon
+    : "2w";
+  let view = horizons[wanted];
+  if (!view || !((view.ranking) || []).length) {
+    for (const hid of pulseHzOrder) {
+      if (hid === wanted) continue;
+      const cand = horizons[hid];
+      if (cand && (cand.ranking || []).length) {
+        view = cand;
+        break;
+      }
+    }
+  }
+  if (!view) view = pulse;
+  const windowShort =
+    view.window_short || pulseHzLabels[state.sectorPulseHorizon] || "近两周";
+
+  const kicker = document.getElementById("sector-pulse-kicker");
+  if (kicker) {
+    kicker.textContent = `研判窗口 · ${
+      view.horizon_zh || pulse.horizon_zh || "近 10 个交易日（约两周）"
+    }`;
+  }
+  if (els.sectorPulseTitle) {
+    els.sectorPulseTitle.textContent = pulse.title || "板块动向研判";
+  }
+  if (els.sectorPulseBlurb) {
+    const breadth = view.breadth || pulse.breadth || {};
+    const bits = [pulse.blurb || "涨跌结构 · 热点评判 · 情报交叉 · 下一步布局"];
+    if (breadth.total) {
+      bits.push(
+        `涨 ${breadth.up || 0} / 跌 ${breadth.down || 0} · ${windowShort}均值 ${
+          breadth.avg_pct == null ? "—" : pctText(breadth.avg_pct)
+        }`,
+      );
+    }
+    els.sectorPulseBlurb.innerHTML = colorizePctHtml(bits.join(" · "));
+  }
+  if (els.sectorPulseBias) {
+    const bias = String(view.bias || pulse.bias || "neutral");
+    els.sectorPulseBias.className = `brief-chip bias-${
+      bias === "bullish" ? "bullish" : bias === "bearish" ? "bearish" : ""
+    }`.trim();
+    els.sectorPulseBias.textContent = view.bias_zh || pulse.bias_zh || "研判中";
+  }
+  const analysis = body.querySelector(".sector-pulse-analysis");
+  if (analysis) {
+    const detail = String(view.detail || pulse.detail || "").trim();
+    const playbook = String(view.playbook || pulse.playbook || "").trim();
+    const factors = (view.factors || pulse.factors || []).slice(0, 10);
+    analysis.innerHTML = `
+      <p class="sector-pulse-summary">${colorizePctHtml(
+        view.summary || pulse.summary || "暂无总判",
+      )}</p>
+      ${
+        detail
+          ? `<p class="sector-pulse-detail">${colorizePctHtml(detail)}</p>`
+          : ""
+      }
+      ${
+        playbook
+          ? `<p class="sector-pulse-playbook"><strong>下一步</strong> · ${colorizePctHtml(
+              playbook.replace(/^下一步[：:]?\s*/, ""),
+            )}</p>`
+          : ""
+      }
+      ${
+        factors.length
+          ? `<ul class="sector-pulse-factors">${factors
+              .map((f) => `<li>${colorizePctHtml(f)}</li>`)
+              .join("")}</ul>`
+          : ""
+      }
+    `;
+  }
+  const intelGrid = body.querySelector(".sector-pulse-intel-grid");
+  if (intelGrid) {
+    const intel = (pulse.intel || []).slice(0, 4);
+    intelGrid.innerHTML = intel.length
+      ? intel.map((item) => spotlightCardHtml(item)).join("")
+      : '<p class="empty">暂无匹配情报，稍后随板块新闻补充。</p>';
+  }
+}
+
 function renderSectorDesk(data, { sectorSwitch = false } = {}) {
   const prev = state.sectors;
   // Empty timeout stubs must not blank a painted desk.
@@ -9458,6 +9559,9 @@ function renderSectorDesk(data, { sectorSwitch = false } = {}) {
   );
   if (hasPulseGrid && rotatePaint) {
     markPulseRankActive(data?.active_sector_id || state.sectorId);
+    // Sync 研判文案 / bias / 情报 in place so the whole 板块动向研判 block
+    // follows the clicked rank — not just the 个股强弱 stock desk below it.
+    patchPulseAnalysis(data);
     const desk =
       data?.sector_pulse?.stock_desk || synthesizePulseStockDesk(data);
     paintPulseStockDesk(desk);

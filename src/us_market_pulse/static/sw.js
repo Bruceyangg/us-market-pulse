@@ -1,8 +1,8 @@
 /* Pulse Desk shell cache — static assets only. HTML/API always hit the network. */
-const CACHE = "pulse-desk-shell-v161";
+const CACHE = "pulse-desk-shell-v162";
 const SHELL = [
-  "/static/styles.css?v=20260811a39",
-  "/static/app.js?v=20260811a39",
+  "/static/styles.css?v=20260811a40",
+  "/static/app.js?v=20260811a40",
   "/static/manifest.webmanifest",
   "/static/icons/apple-touch-icon.png",
   "/static/icons/icon-192.png",

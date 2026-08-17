@@ -79,7 +79,7 @@
         document.head.appendChild(fonts);
       })();
     </script>
-    <link rel="stylesheet" href="/static/styles.css?v=20260811a39" />
+    <link rel="stylesheet" href="/static/styles.css?v=20260811a40" />
     {% block head %}{% endblock %}
   </head>
   <body class="page-{{ page }}" data-page="{{ page }}">
@@ -189,7 +189,7 @@
     </div>
     {% endblock %}
 
-    <script src="/static/app.js?v=20260811a39" type="module"></script>
+    <script src="/static/app.js?v=20260811a40" type="module"></script>
     <script>
       window.addEventListener("load", function () {
         // Soft wake: ping health so cold Render instances start while shell paints.
@@ -201,7 +201,7 @@
         } catch (e) {}
         if (!("serviceWorker" in navigator)) return;
         // Force-drop legacy SW controllers that showed a fake wake screen on HTML timeout.
-        var RESET_KEY = "pulse_sw_reset_v161";
+        var RESET_KEY = "pulse_sw_reset_v162";
         var bootSw = function () {
           navigator.serviceWorker.register("/sw.js").catch(function () {});
         };
