@@ -24,6 +24,18 @@ Last updated: 2026-08-16 · shipping `a43/v165`
   runs `cycleNav`, guarded by `canConsumeHorizontalScroll`/`isEditableTarget` + skips `.chart-zoom` +
   vertical-intent. Pointer/trackpad intentionally NOT bound. Do NOT bind swipe to mouse/wheel.
 
+## iOS native .ipa (sideload path, user opted in)
+
+- `ios-app/` = Capacitor v6 wrapper; `capacitor.config.json` `server.url` = live Render URL (thin
+  WKWebView shell, no bundled assets). `ios-app/.gitignore` excludes `ios/` + `node_modules/` (CI regenerates).
+- `.github/workflows/ios.yml` (macOS runner, no local Mac needed): `npm i` → `cap add/sync ios` →
+  `xcodebuild ... CODE_SIGNING_ALLOWED=NO` → zip Payload → **UNSIGNED** `PulseDesk-unsigned.ipa` →
+  GitHub Release tag `ios-latest`. Triggers on push to `ios-app/**` or manual dispatch.
+- Download (public, no login): https://github.com/Bruceyangg/us-market-pulse/releases/download/ios-latest/PulseDesk-unsigned.ipa
+- User side: Sideloadly (Windows) + free Apple ID → USB install → trust profile → re-sign every 7 days.
+- `gh` NOT available locally → can't dispatch/read logs; poll GH API for release/run status; ask user for logs on failure.
+- Render Docker only copies pyproject/uv.lock/README/src, so `ios-app/` + `.github/` do NOT affect prod.
+
 ## iOS install = PWA "Add to Home Screen" (NO Apple cert needed)
 
 - iPhone install path is Safari → Share → 添加到主屏幕 (free, no App Store, no $99 dev program).

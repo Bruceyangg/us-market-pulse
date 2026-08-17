@@ -1,0 +1,12 @@
+{
+  "appId": "com.pulsedesk.app",
+  "appName": "Pulse Desk",
+  "webDir": "www",
+  "ios": {
+    "contentInset": "always"
+  },
+  "server": {
+    "url": "https://us-market-pulse-6sqa.onrender.com",
+    "cleartext": false
+  }
+}

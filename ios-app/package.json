@@ -1,0 +1,13 @@
+{
+  "name": "pulse-desk-ios",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Capacitor iOS wrapper for Pulse Desk — a thin WKWebView shell that loads the live web app.",
+  "devDependencies": {
+    "@capacitor/cli": "^6.2.0"
+  },
+  "dependencies": {
+    "@capacitor/core": "^6.2.0",
+    "@capacitor/ios": "^6.2.0"
+  }
+}

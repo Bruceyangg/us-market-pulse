@@ -1,0 +1,76 @@
+name: Build iOS IPA (unsigned)
+
+# Produces an UNSIGNED .ipa (a thin Capacitor/WKWebView shell that loads the
+# live Pulse Desk site) and publishes it as a GitHub Release asset so it can be
+# downloaded without logging in, then sideloaded with Sideloadly/AltStore + a
+# free Apple ID. Runs on GitHub's macOS runner so no local Mac is needed.
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - "ios-app/**"
+      - ".github/workflows/ios.yml"
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: macos-14
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Install Capacitor and add iOS platform
+        working-directory: ios-app
+        run: |
+          npm install
+          npx cap add ios
+          npx cap sync ios
+
+      - name: Build unsigned .app
+        working-directory: ios-app
+        run: |
+          xcodebuild \
+            -workspace ios/App/App.xcworkspace \
+            -scheme App \
+            -configuration Release \
+            -sdk iphoneos \
+            -derivedDataPath build \
+            CODE_SIGN_IDENTITY="" \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGNING_ALLOWED=NO \
+            ONLY_ACTIVE_ARCH=NO
+
+      - name: Package into .ipa
+        working-directory: ios-app
+        run: |
+          APP_PATH="build/Build/Products/Release-iphoneos/App.app"
+          if [ ! -d "$APP_PATH" ]; then echo "App.app not found at $APP_PATH"; exit 1; fi
+          rm -rf Payload
+          mkdir Payload
+          cp -R "$APP_PATH" "Payload/App.app"
+          mkdir -p "$GITHUB_WORKSPACE/dist"
+          zip -qry "$GITHUB_WORKSPACE/dist/PulseDesk-unsigned.ipa" Payload
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: PulseDesk-unsigned-ipa
+          path: dist/PulseDesk-unsigned.ipa
+          if-no-files-found: error
+
+      - name: Publish to GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release delete ios-latest --yes --cleanup-tag || true
+          gh release create ios-latest "dist/PulseDesk-unsigned.ipa" \
+            --title "Pulse Desk iOS (unsigned IPA)" \
+            --notes "Unsigned IPA — a Capacitor/WKWebView shell that loads the live Pulse Desk site. Sideload with Sideloadly or AltStore using your free Apple ID. Re-sign every 7 days (free Apple ID limit)."
