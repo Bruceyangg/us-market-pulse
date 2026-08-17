@@ -1,6 +1,6 @@
 # Pulse Desk — living context (agents must update)
 
-Last updated: 2026-08-16 · tip pending `a38`
+Last updated: 2026-08-16 · tip pending `a39`
 
 ## Product
 
@@ -10,8 +10,18 @@ Last updated: 2026-08-16 · tip pending `a38`
 
 ## Current shipped FE/SW
 
-- Static `?v=20260811a38` (shipping)
-- SW cache `pulse-desk-shell-v160` · reset key `pulse_sw_reset_v160`
+- Static `?v=20260811a39` (shipping)
+- SW cache `pulse-desk-shell-v161` · reset key `pulse_sw_reset_v161`
+
+## Cross-section data prefetch (a39, keep)
+
+- `prefetchSectionData(page)` + `scheduleSectionDataWarmup()` (end of app.js):
+  warm OTHER sections' `pageDataKey` sessionStorage slots (idle staggered from
+  3.5s, /api/sectors last; nav hover/touch re-fires; 4min re-warm; skips fresh
+  slots / saveData / logged-out desk). First switch to any 栏目 paints from the
+  slot via existing `paintFromPageDataCache`, network refresh follows.
+- Slot shapes must stay in sync with `paintFromPageDataCache` branches
+  (desk→portfolio, sectors→slim+sectorId, markets/earnings/intel/chains→raw).
 
 ## 2026-08-16 hardening (do not regress)
 

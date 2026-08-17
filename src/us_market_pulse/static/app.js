@@ -12067,7 +12067,112 @@ function bindNavPrefetch() {
     };
     a.addEventListener("pointerenter", warm, { once: true });
     a.addEventListener("touchstart", warm, { once: true, passive: true });
+    // Data prefetch re-fires on every hover; freshness check inside dedups.
+    const warmData = () => {
+      try {
+        const url = new URL(a.getAttribute("href") || "", location.origin);
+        void prefetchSectionData(pageForNavPath(url.pathname));
+      } catch {
+        /* ignore */
+      }
+    };
+    a.addEventListener("pointerenter", warmData);
+    a.addEventListener("touchstart", warmData, { passive: true });
   });
+}
+
+// ---- Cross-section data prefetch ----------------------------------------
+// Every 栏目 keeps an instant-paint slot in sessionStorage (pageDataKey).
+// Pages persist their own slot only after a visit; these helpers warm the
+// OTHER sections' slots (hover + idle) so the first switch paints instantly
+// instead of waiting on its API.
+const SECTION_PAGES = ["desk", "sectors", "markets", "earnings", "intel", "chains"];
+const sectionPrefetchInflight = new Set();
+
+function pageForNavPath(pathname) {
+  const p = String(pathname || "").replace(/\/+$/, "") || "/";
+  if (p === "/") return "desk";
+  const seg = p.slice(1).split("/")[0];
+  return SECTION_PAGES.includes(seg) ? seg : null;
+}
+
+async function prefetchSectionData(page) {
+  if (!page || page === PAGE || !SECTION_PAGES.includes(page)) return;
+  if (page === "desk" && !AUTHED) return;
+  if (sectionPrefetchInflight.has(page)) return;
+  if (readPageDataCache(page)) return; // fresh slot already paints instantly
+  try {
+    if (navigator.connection?.saveData) return;
+  } catch {
+    /* ignore */
+  }
+  sectionPrefetchInflight.add(page);
+  const put = (payload) => {
+    try {
+      sessionStorage.setItem(
+        pageDataKey(page),
+        JSON.stringify({ at: Date.now(), ...payload })
+      );
+    } catch {
+      /* quota / private mode */
+    }
+  };
+  const grab = async (url) => {
+    const res = await fetch(url, { credentials: "same-origin" });
+    if (!res.ok) return null;
+    return res.json();
+  };
+  try {
+    if (page === "desk") {
+      const data = await grab("/api/portfolio");
+      if (data && Array.isArray(data.holdings)) put({ portfolio: data });
+    } else if (page === "markets") {
+      const data = await grab("/api/markets");
+      if (data && typeof data === "object") put({ markets: data });
+    } else if (page === "earnings") {
+      const data = await grab("/api/earnings");
+      if (data && typeof data === "object") put({ earnings: data });
+    } else if (page === "intel") {
+      const data = await grab("/api/intel?category=all&sentiment=all&sort=bearish");
+      if (data && Array.isArray(data.items)) put({ intel: data });
+    } else if (page === "chains") {
+      const data = await grab("/api/chains");
+      if (data && typeof data === "object") put({ chains: data });
+    } else if (page === "sectors") {
+      const data = await grab("/api/sectors");
+      if (data && (data.hot_sectors || data.picks)) {
+        put({
+          sectors: slimSectorsForCache(data),
+          sectorId: data.active_sector_id || "",
+          sectorSymbol: data.selected_symbol || "",
+          sectorTf: "intraday",
+        });
+      }
+    }
+  } catch {
+    /* offline / cold start — nav falls back to the normal page load */
+  } finally {
+    sectionPrefetchInflight.delete(page);
+  }
+}
+
+function scheduleSectionDataWarmup() {
+  const others = SECTION_PAGES.filter((p) => p !== PAGE);
+  // Heaviest desk (/api/sectors) last so it never contends with cheap wins.
+  others.sort((a, b) => (a === "sectors" ? 1 : 0) - (b === "sectors" ? 1 : 0));
+  let delay = 3500;
+  for (const p of others) {
+    window.setTimeout(() => {
+      if (document.hidden) return;
+      void prefetchSectionData(p);
+    }, delay);
+    delay += 1600;
+  }
+  // Re-warm expired slots (TTL 5min) so later switches stay instant too.
+  window.setInterval(() => {
+    if (document.hidden) return;
+    for (const p of others) void prefetchSectionData(p);
+  }, 4 * 60 * 1000);
 }
 
 // Collapse phone map / futures BEFORE boot fetches, so map API can be skipped.
@@ -12077,3 +12182,4 @@ bindStickyNavChrome();
 bindThemeChrome();
 bindVisibilityResume();
 bindNavPrefetch();
+scheduleSectionDataWarmup();
