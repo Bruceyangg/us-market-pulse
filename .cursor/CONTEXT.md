@@ -1,6 +1,6 @@
 # Pulse Desk — living context (agents must update)
 
-Last updated: 2026-08-16 · shipping `a42/v164`
+Last updated: 2026-08-16 · shipping `a43/v165`
 
 ## Product
 
@@ -10,8 +10,19 @@ Last updated: 2026-08-16 · shipping `a42/v164`
 
 ## Current shipped FE/SW
 
-- Static `?v=20260811a42` (shipping)
-- SW cache `pulse-desk-shell-v164` · reset key `pulse_sw_reset_v164`
+- Static `?v=20260811a43` (shipping)
+- SW cache `pulse-desk-shell-v165` · reset key `pulse_sw_reset_v165`
+
+## a43/v165 (keep) — APK readiness (TWA/PWABuilder) + touch swipe-nav
+
+- manifest is PWABuilder-optimal: `id`, `orientation:any` (tablet landscape; do NOT relock portrait),
+  `display_override`, `categories`, `dir`, `prefer_related_applications:false`.
+- `GET /.well-known/assetlinks.json` (app.py) serves Digital Asset Links from env
+  `TWA_PACKAGE_NAME` + `TWA_SHA256_FINGERPRINTS` (comma-sep colon-hex); empty `[]` until set. Set on
+  Render after PWABuilder to drop the TWA URL bar. Do NOT hardcode fingerprints in code.
+- Touch-only swipe-nav re-enabled via `bindTouchSwipeNav()` in `bindStickyNavChrome` — horizontal swipe
+  runs `cycleNav`, guarded by `canConsumeHorizontalScroll`/`isEditableTarget` + skips `.chart-zoom` +
+  vertical-intent. Pointer/trackpad intentionally NOT bound. Do NOT bind swipe to mouse/wheel.
 
 ## a42/v164 (keep) — fixed status line + anchored crosshair tip
 

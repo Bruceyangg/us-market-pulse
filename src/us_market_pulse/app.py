@@ -3,12 +3,18 @@
 from __future__ import annotations
 
 import asyncio
+import os
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any
 
 from fastapi import FastAPI, Header, HTTPException, Query, Request
-from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse
+from fastapi.responses import (
+    FileResponse,
+    HTMLResponse,
+    JSONResponse,
+    RedirectResponse,
+)
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from pydantic import BaseModel, Field
@@ -234,6 +240,38 @@ async def settings_page(request: Request) -> HTMLResponse:
 @app.get("/install", response_class=HTMLResponse)
 async def install_page(request: Request) -> HTMLResponse:
     return _page(request, "install.html", "install")
+
+
+@app.get("/.well-known/assetlinks.json")
+async def assetlinks() -> JSONResponse:
+    """Digital Asset Links for the Android TWA (PWABuilder wrapper) so the app
+    verifies domain ownership and drops the browser URL bar.
+
+    After generating the APK, set these on Render (Environment) — no code change:
+      TWA_PACKAGE_NAME        e.g. app.pulse_desk.twa
+      TWA_SHA256_FINGERPRINTS colon-hex SHA-256 of the signing key(s),
+                              comma-separated for multiple (upload + local).
+    Until both are set this returns an empty (still valid) statement list.
+    """
+    package = os.getenv("TWA_PACKAGE_NAME", "").strip()
+    fingerprints = [
+        fp.strip()
+        for fp in os.getenv("TWA_SHA256_FINGERPRINTS", "").split(",")
+        if fp.strip()
+    ]
+    if not package or not fingerprints:
+        return JSONResponse([], headers={"Cache-Control": "no-store"})
+    statement = [
+        {
+            "relation": ["delegate_permission/common.handle_all_urls"],
+            "target": {
+                "namespace": "android_app",
+                "package_name": package,
+                "sha256_cert_fingerprints": fingerprints,
+            },
+        }
+    ]
+    return JSONResponse(statement, headers={"Cache-Control": "public, max-age=300"})
 
 
 @app.get("/sw.js")

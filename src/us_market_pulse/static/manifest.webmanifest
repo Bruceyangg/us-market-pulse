@@ -1,14 +1,19 @@
 {
+  "id": "/",
   "name": "Pulse Desk · 美股情报台",
   "short_name": "Pulse Desk",
   "description": "追踪美股、板块、财报与情报的实时情报台",
   "start_url": "/",
   "scope": "/",
   "display": "standalone",
-  "orientation": "portrait-primary",
+  "display_override": ["standalone", "minimal-ui"],
+  "orientation": "any",
   "background_color": "#0E141B",
   "theme_color": "#102033",
   "lang": "zh-CN",
+  "dir": "ltr",
+  "categories": ["finance", "news", "business"],
+  "prefer_related_applications": false,
   "icons": [
     {
       "src": "/static/icons/icon-192.png",

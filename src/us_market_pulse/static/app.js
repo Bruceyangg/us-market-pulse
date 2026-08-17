@@ -11925,7 +11925,90 @@ function bindStickyNavChrome() {
     restoreScrollPosition();
   });
 
-  /* Horizontal swipe / trackpad sideways nav disabled — use top/bottom tab bar. */
+  bindTouchSwipeNav();
+}
+
+/**
+ * Touch-only horizontal swipe to move between sections (phone/tablet).
+ * Guarded so it never steals content h-scroll (heatmap / charts / tables),
+ * chart scrubbing, or input gestures. Mouse/trackpad is intentionally NOT
+ * bound (that caused accidental nav historically — tab bar stays for pointer).
+ */
+function bindTouchSwipeNav() {
+  if (PAGE === "login") return;
+  if (document.body?.dataset.swipeNavBound === "1") return;
+  if (document.body) document.body.dataset.swipeNavBound = "1";
+
+  const H_TRIGGER = 64; // px of horizontal travel to switch section
+  const V_TOLERANCE = 48; // abort if the finger drifts this far vertically
+  let startX = 0;
+  let startY = 0;
+  let startTarget = null;
+  let tracking = false;
+  let locked = false; // once we know it's a vertical scroll, stop considering
+
+  window.addEventListener(
+    "touchstart",
+    (event) => {
+      if (event.touches.length !== 1) {
+        tracking = false;
+        return;
+      }
+      const t = event.touches[0];
+      startX = t.clientX;
+      startY = t.clientY;
+      startTarget = event.target;
+      tracking = true;
+      locked = false;
+    },
+    { passive: true }
+  );
+
+  window.addEventListener(
+    "touchmove",
+    (event) => {
+      if (!tracking || locked || event.touches.length !== 1) return;
+      const t = event.touches[0];
+      const dx = t.clientX - startX;
+      const dy = t.clientY - startY;
+      if (Math.abs(dx) < 10 && Math.abs(dy) < 10) return;
+      // Vertical intent, editable field, or in-chart scrub → let the page handle it.
+      if (
+        Math.abs(dy) > Math.abs(dx) ||
+        Math.abs(dy) > V_TOLERANCE ||
+        isEditableTarget(startTarget) ||
+        (startTarget instanceof Element && startTarget.closest(".chart-zoom"))
+      ) {
+        locked = true;
+        return;
+      }
+      // Horizontal, but content can still scroll that way → defer to the content.
+      const dir = dx < 0 ? 1 : -1; // swipe left = next section
+      if (canConsumeHorizontalScroll(startTarget, dir)) {
+        locked = true;
+      }
+    },
+    { passive: true }
+  );
+
+  window.addEventListener(
+    "touchend",
+    (event) => {
+      if (!tracking || locked) {
+        tracking = false;
+        return;
+      }
+      tracking = false;
+      const t = (event.changedTouches && event.changedTouches[0]) || null;
+      if (!t) return;
+      const dx = t.clientX - startX;
+      const dy = t.clientY - startY;
+      if (Math.abs(dx) >= H_TRIGGER && Math.abs(dy) <= V_TOLERANCE) {
+        cycleNav(dx < 0 ? 1 : -1);
+      }
+    },
+    { passive: true }
+  );
 }
 
 const THEME_MODE_KEY = "pulse_theme_mode";
