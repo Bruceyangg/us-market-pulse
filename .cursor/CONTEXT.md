@@ -24,6 +24,14 @@ Last updated: 2026-08-16 · shipping `a43/v165`
   runs `cycleNav`, guarded by `canConsumeHorizontalScroll`/`isEditableTarget` + skips `.chart-zoom` +
   vertical-intent. Pointer/trackpad intentionally NOT bound. Do NOT bind swipe to mouse/wheel.
 
+## iOS install = PWA "Add to Home Screen" (NO Apple cert needed)
+
+- iPhone install path is Safari → Share → 添加到主屏幕 (free, no App Store, no $99 dev program).
+  Apple meta tags already in base.html (`apple-mobile-web-app-capable`, status-bar-style, title,
+  apple-touch-icon). base.html detection now also treats `display-mode:standalone` /
+  `navigator.standalone` as app mode → iOS home-screen AND Android TWA both get `pulse-native-app` chrome.
+  base.html is served no-store and SW never intercepts navigations, so this ships without a version bump.
+
 ## a42/v164 (keep) — fixed status line + anchored crosshair tip
 
 - `#status-line` now fixed width (`flex:0 0 16rem` + nowrap + ellipsis; full text via `title`;

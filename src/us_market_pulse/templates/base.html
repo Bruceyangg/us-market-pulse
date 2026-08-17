@@ -38,7 +38,20 @@
           document.documentElement.setAttribute("data-theme-mode", mode);
           var ua = navigator.userAgent || "";
           var qs = location.search || "";
-          if (/PulseDeskApp/i.test(ua) || /[?&]app=1(?:&|$)/.test(qs)) {
+          // Installed / home-screen launches (iOS "添加到主屏幕" → navigator.standalone,
+          // Android TWA / installed PWA → display-mode: standalone) get the app chrome too.
+          var standalone = false;
+          try {
+            standalone =
+              (window.matchMedia &&
+                window.matchMedia("(display-mode: standalone)").matches) ||
+              window.navigator.standalone === true;
+          } catch (e) {}
+          if (
+            /PulseDeskApp/i.test(ua) ||
+            /[?&]app=1(?:&|$)/.test(qs) ||
+            standalone
+          ) {
             document.documentElement.classList.add("pulse-native-app");
             var vw = window.innerWidth || document.documentElement.clientWidth || 0;
             document.documentElement.classList.add(
