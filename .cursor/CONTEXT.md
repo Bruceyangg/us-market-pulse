@@ -1,6 +1,6 @@
 # Pulse Desk — living context (agents must update)
 
-Last updated: 2026-08-16 · tip pending `a40`
+Last updated: 2026-08-16 · shipping `a42/v164`
 
 ## Product
 
@@ -10,8 +10,17 @@ Last updated: 2026-08-16 · tip pending `a40`
 
 ## Current shipped FE/SW
 
-- Static `?v=20260811a40` (shipping)
-- SW cache `pulse-desk-shell-v162` · reset key `pulse_sw_reset_v162`
+- Static `?v=20260811a42` (shipping)
+- SW cache `pulse-desk-shell-v164` · reset key `pulse_sw_reset_v164`
+
+## a42/v164 (keep) — fixed status line + anchored crosshair tip
+
+- `#status-line` now fixed width (`flex:0 0 16rem` + nowrap + ellipsis; full text via `title`;
+  hidden `@media(max-width:640px)`). WHY: variable-length `setStatus()` text was resizing `.header-meta`
+  and shifting the whole nav/栏目. Do NOT drop the fixed width.
+- `placeChartCrosshairTip()` pins the OHLC readout to the chart top-left (`left/top=8px`), ignoring the
+  cursor — applies to BOTH 分时 and 日/月/季 (one function → all charts). Box shrunk (min-width 8rem,
+  font 0.62rem). Do NOT revert to cursor-following float.
 
 ## Rank→研判文案 linkage fix (a40, keep)
 

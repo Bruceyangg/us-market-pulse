@@ -755,6 +755,18 @@ body {
   font-size: 0.85rem;
 }
 
+/* Fixed-width status so its variable-length text never shifts the header layout.
+   Width tracks the viewport only (not the text); full text is exposed via title. */
+#status-line {
+  flex: 0 0 16rem;
+  width: 16rem;
+  max-width: 16rem;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  text-align: left;
+}
+
 .live-dot {
   width: 0.5rem;
   height: 0.5rem;
@@ -5477,18 +5489,18 @@ html[data-theme="dark"] .yahoo-intraday-svg .band-post {
 .chart-zoom .chart-crosshair-tip {
   position: absolute;
   z-index: 4;
-  min-width: 10.5rem;
-  max-width: min(16rem, calc(100% - 12px));
-  padding: 0.45rem 0.55rem 0.5rem;
-  border-radius: 8px;
+  min-width: 8rem;
+  max-width: min(11rem, calc(100% - 12px));
+  padding: 0.3rem 0.4rem 0.34rem;
+  border-radius: 7px;
   border: 1px solid color-mix(in srgb, var(--line) 85%, #8aa0b5);
-  background: color-mix(in srgb, var(--panel) 94%, #0b1220);
-  box-shadow: 0 8px 22px color-mix(in srgb, #000 28%, transparent);
-  backdrop-filter: blur(10px);
+  background: color-mix(in srgb, var(--panel) 90%, #0b1220);
+  box-shadow: 0 6px 16px color-mix(in srgb, #000 26%, transparent);
+  backdrop-filter: blur(8px);
   color: var(--ink);
   pointer-events: none;
-  font-size: 0.72rem;
-  line-height: 1.35;
+  font-size: 0.62rem;
+  line-height: 1.25;
 }
 
 .chart-zoom .chart-crosshair-tip.is-hidden {
@@ -5497,7 +5509,8 @@ html[data-theme="dark"] .yahoo-intraday-svg .band-post {
 
 .chart-zoom .chart-crosshair-tip .cht-time {
   font-weight: 700;
-  margin-bottom: 0.28rem;
+  margin-bottom: 0.2rem;
+  font-size: 0.6rem;
   color: var(--ink);
   letter-spacing: 0.01em;
 }
@@ -5505,25 +5518,25 @@ html[data-theme="dark"] .yahoo-intraday-svg .band-post {
 .chart-zoom .chart-crosshair-tip .cht-grid {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 0.28rem 0.55rem;
+  gap: 0.18rem 0.4rem;
 }
 
 .chart-zoom .chart-crosshair-tip .cht-grid-candle {
   grid-template-columns: repeat(3, minmax(0, 1fr));
-  row-gap: 0.35rem;
+  row-gap: 0.22rem;
 }
 
 .chart-zoom .chart-crosshair-tip .cht-grid span {
   display: block;
   color: var(--ink-soft);
-  font-size: 0.64rem;
+  font-size: 0.55rem;
   font-weight: 600;
 }
 
 .chart-zoom .chart-crosshair-tip .cht-grid strong {
   display: block;
-  margin-top: 0.08rem;
-  font-size: 0.78rem;
+  margin-top: 0.04rem;
+  font-size: 0.64rem;
   font-weight: 750;
   font-variant-numeric: tabular-nums;
 }
@@ -7001,6 +7014,10 @@ p.news-title-zh {
     font-size: 0.75rem;
     text-align: right;
     line-height: 1.35;
+  }
+
+  #status-line {
+    display: none;
   }
 
   .hero {

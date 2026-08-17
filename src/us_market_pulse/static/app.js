@@ -1571,17 +1571,13 @@ function ensureIntradayCrosshairTip(zoomRoot) {
 }
 
 function placeChartCrosshairTip(tip, zoomRoot, clientX, clientY) {
-  const zr = zoomRoot.getBoundingClientRect();
-  const localX = clientX - zr.left;
-  const localY = clientY - zr.top;
-  const tipW = tip.offsetWidth || 168;
-  const tipH = tip.offsetHeight || 72;
-  let left = localX - tipW / 2;
-  let top = localY - tipH - 14;
-  left = clamp(left, 6, Math.max(6, zr.width - tipW - 6));
-  if (top < 6) top = Math.min(localY + 18, Math.max(6, zr.height - tipH - 6));
-  tip.style.left = `${left}px`;
-  tip.style.top = `${top}px`;
+  // Anchored (does not follow the cursor): the readout box stays pinned to the
+  // chart's top-left corner while scrubbing. Same logic for 分时 and 日/月/季.
+  void zoomRoot;
+  void clientX;
+  void clientY;
+  tip.style.left = "8px";
+  tip.style.top = "8px";
 }
 
 function nearestCandleSample(hit, svgX) {
@@ -4046,7 +4042,10 @@ function safeUrl(url) {
 }
 
 function setStatus(text) {
-  if (els.status) els.status.textContent = text;
+  if (els.status) {
+    els.status.textContent = text;
+    els.status.title = text;
+  }
 }
 
 async function loadMarketsDesk({ force = false } = {}) {
