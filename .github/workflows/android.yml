@@ -44,6 +44,15 @@ jobs:
           npx cap add android
           npx cap sync android
 
+      - name: Generate branded launcher icons
+        working-directory: android-app
+        run: |
+          npm i -D @capacitor/assets sharp
+          # @capacitor/assets requires a >=1024px source; upscale the 512 brand icon.
+          node -e "require('sharp')('resources/icon.png').resize(1024,1024,{fit:'contain',background:{r:14,g:20,b:27,alpha:1}}).png().toFile('resources/icon-1024.png').then(()=>console.log('upscaled')).catch(e=>{console.error(e);process.exit(1)})"
+          mv resources/icon-1024.png resources/icon.png
+          npx capacitor-assets generate --android
+
       - name: Build debug-signed APK
         working-directory: android-app/android
         run: |
