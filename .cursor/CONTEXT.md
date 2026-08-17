@@ -1,6 +1,6 @@
 # Pulse Desk — living context (agents must update)
 
-Last updated: 2026-08-12 · tip pending `a37`
+Last updated: 2026-08-16 · tip pending `a38`
 
 ## Product
 
@@ -10,8 +10,23 @@ Last updated: 2026-08-12 · tip pending `a37`
 
 ## Current shipped FE/SW
 
-- Static `?v=20260811a37` (shipping)
-- SW cache `pulse-desk-shell-v159` · reset key `pulse_sw_reset_v159`
+- Static `?v=20260811a38` (shipping)
+- SW cache `pulse-desk-shell-v160` · reset key `pulse_sw_reset_v160`
+
+## 2026-08-16 hardening (do not regress)
+
+- FE: `safeUrl()` next to `escapeHtml` — ALL server/RSS `href` interpolations
+  (indicators, index cards, agenda, listLinks, news/watch/spotlight/holding-intel
+  cards, drivers, event nodes, vc-chip, earnings rows) go through it; http(s)/`/`
+  only, else `#`. `escapeHtml` alone is NOT URL-safe (javascript: passes).
+- BE: `portfolio.py` `_momentum_fields(c)` (was no-op ternary); `quotes.py`
+  `_pct_from_change` derives % from price+change (fraction/percent ambiguity) +
+  paren-negative `(1.2)` → -1.2 in `_parse_number`; ET dates via
+  `datetime.now(_ET).date()` in quotes/sectors/market_map (not server-local);
+  `earnings_calendar` rows isinstance guard; `config.py` atomic settings write;
+  `auth.py` RLock + atomic register + `_DUMMY_HASH` anti-enumeration;
+  `portfolio.py` RLock around add/remove/select; `app.py` `_BG_TASKS` strong
+  refs for fire-and-forget `refresh_intel` tasks (2 sites).
 
 ## Design linkages that must work
 

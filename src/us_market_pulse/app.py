@@ -73,6 +73,10 @@ from us_market_pulse.portfolio_intel import summarize_holding_intel
 from us_market_pulse.push import push_status, scheduler_loop, send_digest
 from us_market_pulse import share as public_share
 
+# Strong refs for fire-and-forget background tasks so the event loop does not
+# garbage-collect them mid-flight (asyncio only holds weak refs to tasks).
+_BG_TASKS: set[asyncio.Task[Any]] = set()
+
 BASE_DIR = Path(__file__).resolve().parent
 DEFAULT_PORT = int(
     __import__("os").getenv("PORT")
@@ -295,7 +299,9 @@ async def api_sectors(
     items = peek_intel_items() or []
     if not items:
         try:
-            asyncio.get_running_loop().create_task(refresh_intel(force=False))
+            _task = asyncio.get_running_loop().create_task(refresh_intel(force=False))
+            _BG_TASKS.add(_task)
+            _task.add_done_callback(_BG_TASKS.discard)
         except RuntimeError:
             pass
     # Full desk first; on timeout fall back to lite (quotes + stock_desk) so
@@ -484,7 +490,9 @@ async def api_portfolio_intel(
             }
     else:
         try:
-            asyncio.get_running_loop().create_task(refresh_intel(force=False))
+            _task = asyncio.get_running_loop().create_task(refresh_intel(force=False))
+            _BG_TASKS.add(_task)
+            _task.add_done_callback(_BG_TASKS.discard)
         except RuntimeError:
             pass
     summary = summarize_holding_intel(

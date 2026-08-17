@@ -316,11 +316,11 @@ function renderIndicators(rows) {
     .map((row) => {
       const delta = formatDelta(row.delta);
       return `
-        <a class="indicator" href="${row.url}" target="_blank" rel="noopener noreferrer">
-          <div class="label">${row.label}</div>
+        <a class="indicator" href="${safeUrl(row.url)}" target="_blank" rel="noopener noreferrer">
+          <div class="label">${escapeHtml(row.label || "")}</div>
           <div class="value">${formatNumber(row.value, row.unit)}</div>
           <div class="meta">
-            <span>${row.date || ""}</span>
+            <span>${escapeHtml(row.date || "")}</span>
             <span class="delta ${delta.cls}">${delta.text}</span>
           </div>
         </a>
@@ -2181,8 +2181,8 @@ function renderMarkets(markets) {
           const path = sparklinePath(sparkPoints);
           const stroke = cls === "down" ? TAPE_DOWN : TAPE_UP;
           return `
-            <a class="index-card" href="${escapeHtml(
-              row.url || "#"
+            <a class="index-card" href="${safeUrl(
+              row.url
             )}" target="_blank" rel="noopener noreferrer">
               <div class="label">${escapeHtml(row.label || "")}</div>
               <span class="short">${escapeHtml(row.short || "")}</span>
@@ -3130,7 +3130,7 @@ function renderAgenda(events, nextFomc) {
       `;
       const cls = `agenda-card is-${ev.sentiment || "neutral"}`;
       if (ev.url) {
-        return `<a class="${cls}" href="${ev.url}" target="_blank" rel="noopener noreferrer">${inner}</a>`;
+        return `<a class="${cls}" href="${safeUrl(ev.url)}" target="_blank" rel="noopener noreferrer">${inner}</a>`;
       }
       return `<div class="${cls}">${inner}</div>`;
     })
@@ -3152,7 +3152,7 @@ function listLinks(rows) {
     .map((row) => {
       const title = escapeHtml(row.title || "");
       if (row.url) {
-        return `<li><a href="${row.url}" target="_blank" rel="noopener noreferrer">[${escapeHtml(
+        return `<li><a href="${safeUrl(row.url)}" target="_blank" rel="noopener noreferrer">[${escapeHtml(
           row.label || ""
         )}] ${title}</a></li>`;
       }
@@ -3267,7 +3267,7 @@ function newsTitleBlockHtml(item, { heading = "h3", href = null } = {}) {
   if (!en && !zh) return "";
   const zhTag = heading === "span" ? "span" : "p";
   const enBody = href
-    ? `<a href="${escapeHtml(href)}" target="_blank" rel="noopener noreferrer">${escapeHtml(
+    ? `<a href="${safeUrl(href)}" target="_blank" rel="noopener noreferrer">${escapeHtml(
         en
       )}</a>`
     : escapeHtml(en);
@@ -3291,7 +3291,7 @@ function holdingIntelCardHtml(item) {
   return `
     <a class="holding-intel-card ${newsMoodClass(
       item
-    )}" href="${escapeHtml(item.url || "#")}" target="_blank" rel="noopener noreferrer">
+    )}" href="${safeUrl(item.url)}" target="_blank" rel="noopener noreferrer">
       <div class="holding-intel-meta">
         ${verdictBadge(item)}
         ${
@@ -3431,7 +3431,7 @@ function renderWatchHits(hits) {
           return `
             <a class="watch-hit-card ${newsMoodClass(
               item
-            )}" href="${item.url}" target="_blank" rel="noopener noreferrer">
+            )}" href="${safeUrl(item.url)}" target="_blank" rel="noopener noreferrer">
               <div class="watch-hit-meta">
                 <span class="chip ${item.sentiment || "neutral"}">${escapeHtml(
                   item.sentiment_label || "中性"
@@ -3467,7 +3467,7 @@ function spotlightCardHtml(item) {
     item.sentiment_logic || item.sentiment_reason || item.brief_zh || "";
   return `
     <a class="spotlight-card ${newsMoodClass(item)}" href="${
-      item.url || "#"
+      safeUrl(item.url)
     }" target="_blank" rel="noopener noreferrer">
       ${verdictBadge(item)}
       ${newsTitleBlockHtml(item)}
@@ -3705,7 +3705,7 @@ function renderLiveBriefing(brief) {
         const mood = newsMoodClass(d);
         return `
           <li class="driver-item ${mood}">
-            <a href="${escapeHtml(href)}" target="_blank" rel="noopener noreferrer">
+            <a href="${safeUrl(href)}" target="_blank" rel="noopener noreferrer">
               ${newsTitleBlockHtml(d, { heading: "span" })}
             </a>
             <div class="driver-meta">
@@ -3919,7 +3919,7 @@ function openEventDrawer(event) {
           <div class="when">${escapeHtml(formatClock(node.published))} · ${escapeHtml(
             node.source || ""
           )} · ${escapeHtml(node.sentiment_label || "中性")}</div>
-          <p class="zh"><a href="${node.url}" target="_blank" rel="noopener noreferrer">${escapeHtml(
+          <p class="zh"><a href="${safeUrl(node.url)}" target="_blank" rel="noopener noreferrer">${escapeHtml(
             zh
           )}</a></p>
           ${showEn ? `<p class="en">${escapeHtml(en)}</p>` : ""}
@@ -4031,6 +4031,18 @@ function escapeHtml(text) {
     .replaceAll("<", "&lt;")
     .replaceAll(">", "&gt;")
     .replaceAll('"', "&quot;");
+}
+
+// Only allow http(s) links in interpolated href/src; block javascript:, data:,
+// etc. Returns an HTML-escaped, safe URL or "#". escapeHtml alone does NOT make
+// a URL safe (it won't stop javascript:...).
+function safeUrl(url) {
+  const raw = String(url == null ? "" : url).trim();
+  if (!raw) return "#";
+  if (/^(https?:)?\/\//i.test(raw) || raw.startsWith("/")) {
+    return escapeHtml(raw);
+  }
+  return "#";
 }
 
 function setStatus(text) {
@@ -8368,7 +8380,7 @@ function vcChipHtml(raw, { linkable = true } = {}) {
     const href = `/chains?q=${encodeURIComponent(row.symbol)}&focus=${encodeURIComponent(
       row.symbol,
     )}`;
-    return `<a class="vc-chip is-link" href="${href}" title="在产业链中查看 ${escapeHtml(
+    return `<a class="vc-chip is-link" href="${safeUrl(href)}" title="在产业链中查看 ${escapeHtml(
       row.symbol,
     )}">${escapeHtml(row.text)}</a>`;
   }
@@ -10436,7 +10448,7 @@ function renderEarningsDesk(data) {
               row.prev_earnings_label || row.last_year_report_date || "—"
             );
             return `
-          <a class="earnings-row ${focus ? "is-focus" : ""}" href="${escapeHtml(
+          <a class="earnings-row ${focus ? "is-focus" : ""}" href="${safeUrl(
             row.url || `https://finance.yahoo.com/quote/${row.symbol}/`
           )}" target="_blank" rel="noopener noreferrer">
             <span class="sym">${escapeHtml(row.symbol)}${

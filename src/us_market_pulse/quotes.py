@@ -57,18 +57,39 @@ def _parse_number(value: Any) -> float | None:
     text = str(value).strip()
     if not text or text in {"—", "-", "N/A", "n/a"}:
         return None
+    # Accounting-style negatives: "(1.2)" means -1.2, not +1.2.
+    neg = text.startswith("(") and text.endswith(")")
     text = text.replace(",", "").replace("%", "").replace("+", "")
     text = _NUM_RE.sub("", text)
     if not text or text in {"+", "-"}:
         return None
     try:
-        return float(text)
+        val = float(text)
     except ValueError:
         return None
+    return -abs(val) if neg else val
 
 
 def _parse_pct(value: Any) -> float | None:
     return _parse_number(value)
+
+
+def _pct_from_change(price: Any, change: Any) -> float | None:
+    """Unambiguous percent from absolute price + change (prev = price - change).
+
+    Preferred over the fraction-vs-percent guesswork below: Yahoo sometimes
+    stores *ChangePercent as a fraction (0.0049) and sometimes as a percent
+    (0.49); deriving from the sibling absolute change removes the ambiguity.
+    """
+    try:
+        px = float(price)
+        chg = float(change)
+    except (TypeError, ValueError):
+        return None
+    prev = px - chg
+    if not prev:
+        return None
+    return chg / prev * 100.0
 
 
 _SESSION_LABELS = {
@@ -375,13 +396,20 @@ def _overnight_from_yahoo_html(html: str) -> dict[str, float | None] | None:
         overnight_px = blob.get("overnightMarketPrice")
         overnight_chg = blob.get("overnightMarketChange")
         overnight_pct = blob.get("overnightMarketChangePercent")
-        # Yahoo sometimes stores percent as fraction (0.0049).
-        if overnight_pct is not None and abs(overnight_pct) < 1:
+        # Prefer deriving % from price+change; fall back to the fraction
+        # heuristic (0.0049 → 0.49%) only when we cannot derive it.
+        derived = _pct_from_change(overnight_px, overnight_chg)
+        if derived is not None:
+            overnight_pct = derived
+        elif overnight_pct is not None and abs(overnight_pct) < 1:
             overnight_pct *= 100.0
         close_px = blob.get("regularMarketPrice")
         close_chg = blob.get("regularMarketChange")
         close_pct = blob.get("regularMarketChangePercent")
-        if close_pct is not None and abs(close_pct) < 1:
+        derived_close = _pct_from_change(close_px, close_chg)
+        if derived_close is not None:
+            close_pct = derived_close
+        elif close_pct is not None and abs(close_pct) < 1:
             close_pct *= 100.0
 
     if overnight_px is None:
@@ -1399,7 +1427,7 @@ async def fetch_nasdaq_daily_bars(
     path_sym = _nasdaq_path_symbol(sym)
     if not path_sym:
         return []
-    to_d = todate or date.today()
+    to_d = todate or datetime.now(_ET).date()
     from_d = fromdate or date(to_d.year - 25, 1, 1)
     ac = (assetclass or "stocks").strip().lower() or "stocks"
     url = (

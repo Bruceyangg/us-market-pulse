@@ -304,7 +304,13 @@ async def fetch_earnings_for_date(
             resp.raise_for_status()
             payload = resp.json() or {}
             rows_raw = ((payload.get("data") or {}).get("rows")) or []
-            rows = [_normalize_row(row, key) for row in rows_raw if row.get("symbol")]
+            if not isinstance(rows_raw, list):
+                rows_raw = []
+            rows = [
+                _normalize_row(row, key)
+                for row in rows_raw
+                if isinstance(row, dict) and row.get("symbol")
+            ]
             rows = _attach_focus(rows)
             rows.sort(
                 key=lambda r: (

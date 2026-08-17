@@ -17,9 +17,17 @@ from fastapi import HTTPException, Request
 
 from us_market_pulse.config import DATA_DIR
 
-_LOCK = threading.Lock()
+_LOCK = threading.RLock()
 USERS_PATH = DATA_DIR / "users.json"
 SECRET_PATH = DATA_DIR / "secret.key"
+
+# Fixed dummy hash so authenticating a non-existent user still spends PBKDF2
+# time, preventing username enumeration via response timing.
+_DUMMY_HASH = (
+    "pbkdf2_sha256$210000$"
+    "00000000000000000000000000000000$"
+    "0000000000000000000000000000000000000000000000000000000000000000"
+)
 
 _USERNAME_RE = re.compile(r"^[A-Za-z0-9_]{3,24}$")
 _PBKDF2_ITERS = 210_000
@@ -134,18 +142,21 @@ def get_user(username: str) -> dict[str, Any] | None:
 def register_user(username: str, password: str, *, display_name: str = "") -> dict[str, Any]:
     user = validate_username(username)
     pwd = validate_password(password)
-    data = _load_users()
-    users = data.setdefault("users", {})
-    if user in users:
-        raise ValueError("用户名已被占用")
-    record = {
-        "username": user,
-        "display_name": (display_name or user).strip()[:40] or user,
-        "password_hash": _hash_password(pwd),
-        "created_at": time.time(),
-    }
-    users[user] = record
-    _save_users(data)
+    # Read-check-write under one lock so concurrent registrations cannot both
+    # pass the uniqueness check or clobber each other's records.
+    with _LOCK:
+        data = _load_users()
+        users = data.setdefault("users", {})
+        if user in users:
+            raise ValueError("用户名已被占用")
+        record = {
+            "username": user,
+            "display_name": (display_name or user).strip()[:40] or user,
+            "password_hash": _hash_password(pwd),
+            "created_at": time.time(),
+        }
+        users[user] = record
+        _save_users(data)
     return public_user(record)  # type: ignore[return-value]
 
 
@@ -153,7 +164,9 @@ def authenticate_user(username: str, password: str) -> dict[str, Any]:
     user = normalize_username(username)
     pwd = str(password or "")
     record = get_user(user)
-    if not record or not _verify_password(pwd, str(record.get("password_hash") or "")):
+    encoded = str((record or {}).get("password_hash") or "") or _DUMMY_HASH
+    ok = _verify_password(pwd, encoded)
+    if not record or not ok:
         raise ValueError("用户名或密码错误")
     return public_user(record)  # type: ignore[return-value]
 

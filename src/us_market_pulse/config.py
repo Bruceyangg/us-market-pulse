@@ -234,10 +234,12 @@ def save_settings(patch: dict[str, Any]) -> Settings:
                 current[key] = value
 
         DATA_DIR.mkdir(parents=True, exist_ok=True)
-        SETTINGS_PATH.write_text(
-            json.dumps(current, ensure_ascii=False, indent=2),
+        tmp = SETTINGS_PATH.with_suffix(".tmp")
+        tmp.write_text(
+            json.dumps(current, ensure_ascii=False, indent=2) + "\n",
             encoding="utf-8",
         )
+        tmp.replace(SETTINGS_PATH)
     return load_settings()
 
 

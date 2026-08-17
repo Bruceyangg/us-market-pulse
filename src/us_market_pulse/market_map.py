@@ -5,11 +5,14 @@ from __future__ import annotations
 import asyncio
 import copy
 import time
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 from typing import Any
 from urllib.parse import quote
+from zoneinfo import ZoneInfo
 
 import httpx
+
+_ET = ZoneInfo("America/New_York")
 
 from us_market_pulse.quotes import (
     USER_AGENT,
@@ -541,7 +544,8 @@ async def _fetch_map_horizon_returns(
         return out
 
     uniq = list(dict.fromkeys(need))
-    from_d = date.today() - timedelta(days=90)
+    _today_et = datetime.now(_ET).date()
+    from_d = _today_et - timedelta(days=90)
 
     async def _one(
         client: httpx.AsyncClient, sym: str, sem: asyncio.Semaphore
@@ -554,7 +558,7 @@ async def _fetch_map_horizon_returns(
                         client,
                         sym,
                         fromdate=from_d,
-                        todate=date.today(),
+                        todate=_today_et,
                         assetclass="stocks",
                     )
                 except Exception:  # noqa: BLE001

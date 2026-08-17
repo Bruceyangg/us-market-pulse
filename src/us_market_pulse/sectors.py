@@ -2290,7 +2290,8 @@ async def _attach_sector_horizon_returns(sectors: list[dict[str, Any]]) -> None:
 
     uniq = list(dict.fromkeys(need))
     # ~42 trading sessions ≈ 2 months → need ~90 calendar days of bars.
-    from_d = date.today() - timedelta(days=100)
+    _today_et = datetime.now(_ET).date()
+    from_d = _today_et - timedelta(days=100)
 
     async def _one(
         client: httpx.AsyncClient, sym: str, sem: asyncio.Semaphore
@@ -2303,7 +2304,7 @@ async def _attach_sector_horizon_returns(sectors: list[dict[str, Any]]) -> None:
                     client,
                     sym,
                     fromdate=from_d,
-                    todate=date.today(),
+                    todate=_today_et,
                     assetclass="etf",
                 )
             except Exception:  # noqa: BLE001

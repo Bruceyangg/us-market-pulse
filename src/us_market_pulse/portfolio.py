@@ -31,7 +31,7 @@ from us_market_pulse.sectors import (
     _value_chain_for,
 )
 
-_LOCK = threading.Lock()
+_LOCK = threading.RLock()
 PORTFOLIOS_DIR = DATA_DIR / "portfolios"
 LEGACY_PORTFOLIO_PATH = DATA_DIR / "portfolio.json"
 _SYMBOL_RE = re.compile(r"^[A-Za-z0-9.\-^]{1,12}$")
@@ -176,49 +176,54 @@ def add_holding(
         )
     symbol = resolved_symbol
     display_name = (name or canonical_name or symbol).strip()[:40]
-    data = load_portfolio(username)
-    holdings = data["holdings"]
-    for row in holdings:
-        if row["symbol"] == symbol:
-            row["name"] = display_name or row["name"] or symbol
-            row["note"] = (note if note is not None else row.get("note") or "").strip()[
-                :80
-            ]
-            data["selected"] = symbol
-            return save_portfolio(username, data)
-    if len(holdings) >= MAX_HOLDINGS:
-        raise ValueError(f"最多添加 {MAX_HOLDINGS} 只持仓。")
-    holdings.append(
-        {
-            "symbol": symbol,
-            "name": display_name or symbol,
-            "note": (note or "").strip()[:80],
-            "added_at": time.time(),
-        }
-    )
-    data["holdings"] = holdings
-    data["selected"] = symbol
-    return save_portfolio(username, data)
+    # Read-modify-write atomically so rapid optimistic +/- toggles or multiple
+    # tabs cannot lose updates.
+    with _LOCK:
+        data = load_portfolio(username)
+        holdings = data["holdings"]
+        for row in holdings:
+            if row["symbol"] == symbol:
+                row["name"] = display_name or row["name"] or symbol
+                row["note"] = (
+                    note if note is not None else row.get("note") or ""
+                ).strip()[:80]
+                data["selected"] = symbol
+                return save_portfolio(username, data)
+        if len(holdings) >= MAX_HOLDINGS:
+            raise ValueError(f"最多添加 {MAX_HOLDINGS} 只持仓。")
+        holdings.append(
+            {
+                "symbol": symbol,
+                "name": display_name or symbol,
+                "note": (note or "").strip()[:80],
+                "added_at": time.time(),
+            }
+        )
+        data["holdings"] = holdings
+        data["selected"] = symbol
+        return save_portfolio(username, data)
 
 
 def remove_holding(username: str, symbol: str) -> dict[str, Any]:
     symbol = normalize_symbol(symbol)
-    data = load_portfolio(username)
-    data["holdings"] = [h for h in data["holdings"] if h["symbol"] != symbol]
-    if data.get("selected") == symbol:
-        data["selected"] = data["holdings"][0]["symbol"] if data["holdings"] else ""
-    _CACHE["boards"].pop(symbol, None)
-    return save_portfolio(username, data)
+    with _LOCK:
+        data = load_portfolio(username)
+        data["holdings"] = [h for h in data["holdings"] if h["symbol"] != symbol]
+        if data.get("selected") == symbol:
+            data["selected"] = data["holdings"][0]["symbol"] if data["holdings"] else ""
+        _CACHE["boards"].pop(symbol, None)
+        return save_portfolio(username, data)
 
 
 def select_holding(username: str, symbol: str) -> dict[str, Any]:
     symbol = normalize_symbol(symbol)
-    data = load_portfolio(username)
-    symbols = {h["symbol"] for h in data["holdings"]}
-    if symbol and symbol not in symbols:
-        raise ValueError("该代码不在持仓列表中")
-    data["selected"] = symbol
-    return save_portfolio(username, data)
+    with _LOCK:
+        data = load_portfolio(username)
+        symbols = {h["symbol"] for h in data["holdings"]}
+        if symbol and symbol not in symbols:
+            raise ValueError("该代码不在持仓列表中")
+        data["selected"] = symbol
+        return save_portfolio(username, data)
 
 
 def replace_holdings(
@@ -705,7 +710,7 @@ async def build_portfolio_view(
         vc = c.get("value_chain") or _value_chain_for(sym)
         c["value_chain"] = vc
         c["sector_label"] = c.get("sector_label") or vc.get("industry") or "持仓"
-        wave = _momentum_fields(c if _pick_has_chart(c) else c)
+        wave = _momentum_fields(c)
         try:
             c["move_analysis"] = _move_analysis(
                 day_pct=c.get("change_pct"),
