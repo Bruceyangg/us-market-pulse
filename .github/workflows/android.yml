@@ -1,0 +1,76 @@
+name: Build Android APK
+
+# Produces a directly-installable, debug-signed .apk (a thin Capacitor/WebView
+# shell that loads the live Pulse Desk site) and publishes it as a GitHub Release
+# asset. Download on any Android phone/tablet, enable "install unknown apps",
+# then open the APK — no store, no account, no tools. Android only (an APK cannot
+# be installed on iPhone). Runs on GitHub's Linux runner (fast, free).
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - "android-app/**"
+      - ".github/workflows/android.yml"
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Setup Java (JDK 21)
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Install Capacitor and add Android platform
+        working-directory: android-app
+        run: |
+          npm install
+          npx cap add android
+          npx cap sync android
+
+      - name: Build debug-signed APK
+        working-directory: android-app/android
+        run: |
+          chmod +x ./gradlew
+          ./gradlew assembleDebug --no-daemon --stacktrace
+
+      - name: Collect APK
+        working-directory: android-app
+        run: |
+          APK=$(find android/app/build/outputs/apk -name "*.apk" | head -n1)
+          if [ -z "$APK" ]; then echo "APK not found"; exit 1; fi
+          echo "Found APK: $APK"
+          mkdir -p "$GITHUB_WORKSPACE/dist"
+          cp "$APK" "$GITHUB_WORKSPACE/dist/PulseDesk.apk"
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: PulseDesk-apk
+          path: dist/PulseDesk.apk
+          if-no-files-found: error
+
+      - name: Publish to GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release delete android-latest --yes --cleanup-tag || true
+          gh release create android-latest "dist/PulseDesk.apk" \
+            --title "Pulse Desk Android (APK)" \
+            --notes "Directly-installable debug-signed APK — a Capacitor/WebView shell that loads the live Pulse Desk site. Download on any Android phone/tablet, enable 'install unknown apps', then open the APK. Android only (cannot be installed on iPhone)."
