@@ -8149,11 +8149,47 @@ html[data-theme="dark"] .earnings-row .session-pre-market {
 }
 
 /* ===== Android / native app shell (html.pulse-native-app) ===== */
-/* Keep a slim top chrome (theme + account); hide web nav to avoid double bars */
+/* Keep a slim top chrome (theme + account); hide the top web nav + footer, and
+   promote the mobile tab bar into the app's single, always-fixed bottom nav. */
 html.pulse-native-app .desk-nav,
-html.pulse-native-app .mobile-tabbar,
 html.pulse-native-app .site-footer {
   display: none !important;
+}
+
+/* Native shell: one stable, fixed bottom tab bar. Equal columns (grid-auto-columns
+   1fr) so the row NEVER reflows when the active tab changes or you switch sections,
+   and it stays pinned to the bottom regardless of page/viewport width. */
+html.pulse-native-app .mobile-tabbar {
+  display: grid !important;
+  position: fixed;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 60;
+  grid-auto-flow: column;
+  grid-auto-columns: minmax(0, 1fr);
+  gap: 0.1rem;
+  padding: 0.3rem 0.35rem calc(0.3rem + env(safe-area-inset-bottom));
+  background: var(--tabbar-bg);
+  border-top: 1px solid var(--line);
+  backdrop-filter: blur(14px);
+}
+html.pulse-native-app .mobile-tabbar a {
+  text-decoration: none;
+  color: var(--ink-soft);
+  font-weight: 700;
+  text-align: center;
+  padding: 0.5rem 0.1rem;
+  border-radius: 10px;
+  min-width: 0;
+}
+html.pulse-native-app .mobile-tabbar a .tab-label {
+  font-size: 0.66rem;
+}
+html.pulse-native-app .mobile-tabbar a.is-active {
+  color: var(--ink);
+  background: var(--tabbar-active);
+  box-shadow: inset 0 0 0 1px var(--line);
 }
 
 html.pulse-native-app .site-header {
@@ -8209,7 +8245,7 @@ html.pulse-native-app #status-line {
 }
 
 html.pulse-native-app body {
-  padding-bottom: 0.5rem !important;
+  padding-bottom: calc(3.6rem + env(safe-area-inset-bottom)) !important;
   padding-top: 0;
   overscroll-behavior-y: contain;
   -webkit-tap-highlight-color: transparent;
@@ -8217,7 +8253,7 @@ html.pulse-native-app body {
 
 html.pulse-native-app .page-main {
   padding-top: 0.4rem;
-  padding-bottom: 0.75rem;
+  padding-bottom: 0.9rem;
   min-height: calc(100dvh - 3rem);
 }
 

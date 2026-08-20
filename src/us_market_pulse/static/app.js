@@ -1810,6 +1810,20 @@ function bindChartTouchZoomPan(zoomRoot, key) {
   zoomRoot.dataset.touchZoomBound = "1";
   let pinch0 = null;
   let pan0 = null;
+  // Long-press (~280ms hold) turns on a scrub crosshair so touch users can read
+  // 开/收/高/低/涨跌额/涨跌幅; dragging then moves the readout, lifting hides it.
+  const LONG_PRESS_MS = 280;
+  const PRESS_MOVE_CANCEL = 10;
+  let pressTimer = 0;
+  let reading = false;
+  let pressX = 0;
+  let pressY = 0;
+  const clearPress = () => {
+    if (pressTimer) {
+      clearTimeout(pressTimer);
+      pressTimer = 0;
+    }
+  };
 
   zoomRoot.addEventListener(
     "touchstart",
@@ -1817,6 +1831,11 @@ function bindChartTouchZoomPan(zoomRoot, key) {
       if (event.target.closest("[data-zoom-act]")) return;
       if (event.touches.length === 2) {
         pan0 = null;
+        clearPress();
+        if (reading) {
+          reading = false;
+          hideChartCrosshair(key);
+        }
         const a = event.touches[0];
         const b = event.touches[1];
         const dist = Math.hypot(a.clientX - b.clientX, a.clientY - b.clientY);
@@ -1832,6 +1851,16 @@ function bindChartTouchZoomPan(zoomRoot, key) {
         };
       } else if (event.touches.length === 1) {
         pinch0 = null;
+        reading = false;
+        pressX = event.touches[0].clientX;
+        pressY = event.touches[0].clientY;
+        clearPress();
+        pressTimer = window.setTimeout(() => {
+          pressTimer = 0;
+          reading = true;
+          pan0 = null;
+          showChartCrosshair(key, pressX, pressY);
+        }, LONG_PRESS_MS);
         const meta = chartZoomData.get(key);
         const z = normalizeChartZoom(state.chartZoom[key], meta?.len || 0);
         // Only pan chart window when already zoomed-in; else let page scroll.
@@ -1853,6 +1882,23 @@ function bindChartTouchZoomPan(zoomRoot, key) {
   zoomRoot.addEventListener(
     "touchmove",
     (event) => {
+      if (reading && event.touches.length === 1) {
+        event.preventDefault();
+        event.stopPropagation();
+        const t = event.touches[0];
+        showChartCrosshair(key, t.clientX, t.clientY);
+        return;
+      }
+      if (pressTimer) {
+        const t = event.touches[0];
+        if (
+          t &&
+          (Math.abs(t.clientX - pressX) > PRESS_MOVE_CANCEL ||
+            Math.abs(t.clientY - pressY) > PRESS_MOVE_CANCEL)
+        ) {
+          clearPress();
+        }
+      }
       if (event.touches.length === 2 && pinch0) {
         event.preventDefault();
         event.stopPropagation();
@@ -1911,6 +1957,11 @@ function bindChartTouchZoomPan(zoomRoot, key) {
   const clearTouch = () => {
     pinch0 = null;
     pan0 = null;
+    clearPress();
+    if (reading) {
+      reading = false;
+      hideChartCrosshair(key);
+    }
   };
   zoomRoot.addEventListener("touchend", clearTouch, { passive: true });
   zoomRoot.addEventListener("touchcancel", clearTouch, { passive: true });

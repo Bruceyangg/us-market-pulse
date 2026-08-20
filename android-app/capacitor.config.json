@@ -2,8 +2,10 @@
   "appId": "com.pulsedesk.app",
   "appName": "Pulse Desk",
   "webDir": "www",
+  "appendUserAgent": "PulseDeskApp",
   "android": {
-    "allowMixedContent": false
+    "allowMixedContent": false,
+    "appendUserAgent": "PulseDeskApp"
   },
   "server": {
     "url": "https://us-market-pulse-6sqa.onrender.com",

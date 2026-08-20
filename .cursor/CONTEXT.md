@@ -1,6 +1,6 @@
 # Pulse Desk — living context (agents must update)
 
-Last updated: 2026-08-16 · shipping `a43/v165`
+Last updated: 2026-08-18 · shipping `a44/v166`
 
 ## Product
 
@@ -10,8 +10,35 @@ Last updated: 2026-08-16 · shipping `a43/v165`
 
 ## Current shipped FE/SW
 
-- Static `?v=20260811a43` (shipping)
-- SW cache `pulse-desk-shell-v165` · reset key `pulse_sw_reset_v165`
+- Static `?v=20260811a44` (shipping)
+- SW cache `pulse-desk-shell-v166` · reset key `pulse_sw_reset_v166`
+
+## a44/v166 (keep) — tablet APK: touch crosshair + fixed native bottom tabs
+
+- WHY: on the Android tablet APK, (1) 分时/日月季 charts showed NO tooltip on touch, and
+  (2) the bottom nav "changed/moved" when switching sections.
+- CAUSE(2): a Capacitor Android WebView is NOT detected as native (no `PulseDeskApp` UA,
+  no `?app=1`, `display-mode` = browser), so it rendered the plain responsive site where
+  `.mobile-tabbar` only exists < 800px — a tablet near the 800px CSS-width flips between the
+  top `.desk-nav` and the bottom `.mobile-tabbar` per page.
+- FIX(2): `capacitor.config.json` (android+ios) now sets `appendUserAgent: "PulseDeskApp"`
+  (top-level + per-platform) → base.html `/PulseDeskApp/i` detection deterministically adds
+  `pulse-native-app` + `pulse-native-tablet/phone` regardless of width. CSS: STOP hiding
+  `.mobile-tabbar` in native mode; instead render it as ONE fixed bottom tab bar
+  (`position:fixed; grid-auto-flow:column; grid-auto-columns:minmax(0,1fr)` = equal columns so
+  the row never reflows on active-change / section switch). `desk-nav` + `site-footer` stay
+  hidden. Native `body` padding-bottom bumped to `calc(3.6rem + safe-area)` to clear the bar.
+  NOTE: enabling the UA activates the WHOLE `html.pulse-native-app` stylesheet (top slim chrome,
+  bigger touch targets, tablet grids) — intended, but watch for regressions on-device.
+- CAUSE(1): `bindIntradayCrosshair` shows the crosshair for mouse/pen only (touch path returns
+  early — "never steal page scroll"), so touch never triggered the OHLC readout.
+- FIX(1): `bindChartTouchZoomPan` now has LONG-PRESS (~280ms hold) → scrub crosshair. Hold on a
+  chart shows the anchored 开/收/高/低/涨跌额/涨跌幅 tip; drag moves it (preventDefault stops
+  scroll); lift hides. Quick tap or early move cancels (page scroll intact); 2-finger cancels
+  reading → pinch-zoom. Works for 分时 AND 日/月/季 (both bind this fn). Requires touchmove
+  `{passive:false}` (already so). Do NOT re-enable touch in `bindIntradayCrosshair` (double-fire).
+- Web (crosshair) auto-reaches the OLD installed APK after SW update; the fixed bottom bar needs
+  the REBUILT APK (new UA). Rebuild via `android.yml` (push to `android-app/**`).
 
 ## a43/v165 (keep) — APK readiness (TWA/PWABuilder) + touch swipe-nav
 
