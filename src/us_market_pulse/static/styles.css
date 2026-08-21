@@ -8302,12 +8302,14 @@ html.pulse-native-rail .mobile-tabbar a.is-active {
   box-shadow: inset 0 0 0 1px var(--line);
 }
 
-/* Content clears the left rail instead of a bottom bar. */
+/* Content clears the left rail instead of a bottom bar. !important + doubled
+   class beat the later, equal-specificity `html.pulse-native-tablet .page-main`
+   (padding-left:0.85rem) and the app `body{padding-bottom:… !important}`. */
 html.pulse-native-rail body {
   padding-bottom: 0 !important;
 }
-html.pulse-native-rail .page-main {
-  padding-left: calc(5.2rem + env(safe-area-inset-left));
+html.pulse-native-app.pulse-native-rail .page-main {
+  padding-left: calc(5.2rem + env(safe-area-inset-left)) !important;
   padding-bottom: 0.9rem;
   min-height: calc(100dvh - 3rem);
 }
