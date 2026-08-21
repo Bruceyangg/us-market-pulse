@@ -1,0 +1,14 @@
+{
+  "appId": "com.pulsedesk.rail",
+  "appName": "Pulse Desk Rail",
+  "webDir": "www",
+  "appendUserAgent": "PulseDeskApp PulseDeskRail",
+  "android": {
+    "allowMixedContent": false,
+    "appendUserAgent": "PulseDeskApp PulseDeskRail"
+  },
+  "server": {
+    "url": "https://us-market-pulse-6sqa.onrender.com",
+    "cleartext": false
+  }
+}

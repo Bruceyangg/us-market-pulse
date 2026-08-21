@@ -1,0 +1,85 @@
+name: Build Android APK (Rail)
+
+# Produces a directly-installable, debug-signed .apk for the LEFT vertical nav
+# RAIL variant (appId com.pulsedesk.rail, UA token "PulseDeskRail"). It is a
+# separate app that installs alongside the normal bottom-bar Pulse Desk. Loads
+# the live site; the rail UA token switches the nav into a full-height left rail.
+# Runs on GitHub's Linux runner (fast, free). Android only.
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - "android-app-rail/**"
+      - ".github/workflows/android-rail.yml"
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Setup Java (JDK 21)
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Install Capacitor and add Android platform
+        working-directory: android-app-rail
+        run: |
+          npm install
+          npx cap add android
+          npx cap sync android
+
+      - name: Generate branded launcher icons
+        working-directory: android-app-rail
+        run: |
+          npm i -D @capacitor/assets sharp
+          # @capacitor/assets requires a >=1024px source; upscale the 512 brand icon.
+          node -e "require('sharp')('resources/icon.png').resize(1024,1024,{fit:'contain',background:{r:14,g:20,b:27,alpha:1}}).png().toFile('resources/icon-1024.png').then(()=>console.log('upscaled')).catch(e=>{console.error(e);process.exit(1)})"
+          mv resources/icon-1024.png resources/icon.png
+          npx capacitor-assets generate --android
+
+      - name: Build debug-signed APK
+        working-directory: android-app-rail/android
+        run: |
+          chmod +x ./gradlew
+          ./gradlew assembleDebug --no-daemon --stacktrace
+
+      - name: Collect APK
+        working-directory: android-app-rail
+        run: |
+          APK=$(find android/app/build/outputs/apk -name "*.apk" | head -n1)
+          if [ -z "$APK" ]; then echo "APK not found"; exit 1; fi
+          echo "Found APK: $APK"
+          mkdir -p "$GITHUB_WORKSPACE/dist"
+          cp "$APK" "$GITHUB_WORKSPACE/dist/PulseDesk-Rail.apk"
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: PulseDesk-rail-apk
+          path: dist/PulseDesk-Rail.apk
+          if-no-files-found: error
+
+      - name: Publish to GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release delete android-rail-latest --yes --cleanup-tag || true
+          gh release create android-rail-latest "dist/PulseDesk-Rail.apk" \
+            --title "Pulse Desk Android — Rail (left vertical nav)" \
+            --notes "Directly-installable debug-signed APK for the LEFT vertical nav rail variant (appId com.pulsedesk.rail). Installs alongside the normal Pulse Desk app. Download on any Android tablet, enable 'install unknown apps', then open the APK. Android only."
