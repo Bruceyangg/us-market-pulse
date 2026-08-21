@@ -1,6 +1,6 @@
 # Pulse Desk — living context (agents must update)
 
-Last updated: 2026-08-20 · shipping `a45/v167`
+Last updated: 2026-08-20 · shipping `a46/v168`
 
 ## Product
 
@@ -10,8 +10,25 @@ Last updated: 2026-08-20 · shipping `a45/v167`
 
 ## Current shipped FE/SW
 
-- Static `?v=20260811a45` (shipping)
-- SW cache `pulse-desk-shell-v167` · reset key `pulse_sw_reset_v167`
+- Static `?v=20260811a46` (shipping)
+- SW cache `pulse-desk-shell-v168` · reset key `pulse_sw_reset_v168`
+
+## a46/v168 (keep) — rail content padding fix + BlueStacks emulator verified
+
+- FIX: rail `.page-main` content overlapped the left rail because `html.pulse-native-tablet
+  .page-main {padding-left:0.85rem}` sits LATER with EQUAL specificity and won. Now
+  `html.pulse-native-app.pulse-native-rail .page-main {padding-left:… !important}` (doubled
+  class + !important) and rail `body{padding-bottom:0 !important}` (app body rule has !important).
+  Do NOT drop the doubled-class/!important — the later tablet rule will re-win otherwise.
+- EMULATOR THAT WORKS: Google x86_64 AVD is dead here (VBS/HVCI running: `HypervisorPresent=true`,
+  DeviceGuard SecurityServicesRunning=2). **BlueStacks 5** (winget `BlueStack.BlueStacks`) boots fine
+  alongside VBS. GOTCHA: adb "connect works but every command → `Connect error for write: closed`"
+  means `bst.enable_adb_access="0"` in `C:\ProgramData\BlueStacks_nxt\bluestacks.conf` — close
+  BlueStacks, set it to `"1"`, relaunch. Then use BlueStacks' OWN `C:\Program Files\BlueStacks_nxt\
+  HD-Adb.exe` (1.0.36) — kill platform-tools adb (1.0.41) first or the version skew re-breaks it.
+  Instance `Nougat32`, adb `127.0.0.1:5555` (shows as `emulator-5554`), `install -r` + `input tap`
+  + `screencap` all work. VERIFIED rail left nav stays fixed switching 持仓→市场 (no disappear/widen).
+- Archived rail APK (a45) still valid: it loads the LIVE site → auto-gets a46 CSS via SW update. No rebuild needed.
 
 ## a45/v167 (keep) — LEFT vertical nav RAIL variant (separate tablet APK)
 
