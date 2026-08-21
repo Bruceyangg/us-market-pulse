@@ -1,6 +1,6 @@
 # Pulse Desk — living context (agents must update)
 
-Last updated: 2026-08-18 · shipping `a44/v166`
+Last updated: 2026-08-20 · shipping `a45/v167`
 
 ## Product
 
@@ -10,8 +10,30 @@ Last updated: 2026-08-18 · shipping `a44/v166`
 
 ## Current shipped FE/SW
 
-- Static `?v=20260811a44` (shipping)
-- SW cache `pulse-desk-shell-v166` · reset key `pulse_sw_reset_v166`
+- Static `?v=20260811a45` (shipping)
+- SW cache `pulse-desk-shell-v167` · reset key `pulse_sw_reset_v167`
+
+## a45/v167 (keep) — LEFT vertical nav RAIL variant (separate tablet APK)
+
+- WHAT: opt-in `html.pulse-native-rail` turns the always-fixed nav from a bottom bar into a
+  slim full-height LEFT rail (`.mobile-tabbar` → `display:flex;flex-direction:column;
+  position:fixed;left:0;top:0;bottom:0;width:4.9rem`; content clears via `.page-main`
+  `padding-left`, native `body` bottom padding zeroed). First item drops below the sticky
+  header (padding-top ~3.3rem; header z-index 80 overpaints the top).
+- TRIGGER: base.html adds `pulse-native-rail` (on TOP of `pulse-native-app`) when UA has
+  `PulseDeskRail` OR `?rail=1`. So `?rail=1` previews it in a browser; the RAIL APK sends it.
+- PURELY ADDITIVE: only active with the rail class → the default bottom-bar app
+  (`PulseDeskApp`) and the plain website are byte-for-byte unchanged. Do NOT fold rail rules
+  into the shared `pulse-native-app` block.
+- APK: `android-app-rail/` = separate Capacitor project, `appId com.pulsedesk.rail`,
+  appName "Pulse Desk Rail", `appendUserAgent: "PulseDeskApp PulseDeskRail"` (keep BOTH tokens
+  so native mode + rail both fire). Installs ALONGSIDE the normal app (different appId).
+  Built by `.github/workflows/android-rail.yml` (push to `android-app-rail/**`) → Release tag
+  `android-rail-latest` → `PulseDesk-Rail.apk`. Archived desktop:
+  `Stock render/PulseDesk_web-a45_sw-v167_20260820/app/PulseDesk-Rail-Android_a45_20260820.apk` (5.05MB, PK-valid).
+- EMULATOR: Google x86_64 AVD (`pulse_tablet`) will NOT boot on this Windows host — stalls
+  `offline` for 5+ min across auto/swiftshader/cold-boot+wipe (Hyper-V / Core Isolation nested-virt).
+  Verify on a real tablet or via `?rail=1` in a browser. Don't keep retrying the AVD here.
 
 ## a44/v166 (keep) — tablet APK: touch crosshair + fixed native bottom tabs
 
