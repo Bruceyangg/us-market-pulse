@@ -47,12 +47,16 @@
                 window.matchMedia("(display-mode: standalone)").matches) ||
               window.navigator.standalone === true;
           } catch (e) {}
+          // Rail variant: left vertical nav rail (separate tablet APK / ?rail=1).
+          var rail = /PulseDeskRail/i.test(ua) || /[?&]rail=1(?:&|$)/.test(qs);
           if (
             /PulseDeskApp/i.test(ua) ||
             /[?&]app=1(?:&|$)/.test(qs) ||
-            standalone
+            standalone ||
+            rail
           ) {
             document.documentElement.classList.add("pulse-native-app");
+            if (rail) document.documentElement.classList.add("pulse-native-rail");
             var vw = window.innerWidth || document.documentElement.clientWidth || 0;
             document.documentElement.classList.add(
               vw >= 600 ? "pulse-native-tablet" : "pulse-native-phone",
@@ -92,7 +96,7 @@
         document.head.appendChild(fonts);
       })();
     </script>
-    <link rel="stylesheet" href="/static/styles.css?v=20260811a44" />
+    <link rel="stylesheet" href="/static/styles.css?v=20260811a45" />
     {% block head %}{% endblock %}
   </head>
   <body class="page-{{ page }}" data-page="{{ page }}">
@@ -202,7 +206,7 @@
     </div>
     {% endblock %}
 
-    <script src="/static/app.js?v=20260811a44" type="module"></script>
+    <script src="/static/app.js?v=20260811a45" type="module"></script>
     <script>
       window.addEventListener("load", function () {
         // Soft wake: ping health so cold Render instances start while shell paints.
@@ -214,7 +218,7 @@
         } catch (e) {}
         if (!("serviceWorker" in navigator)) return;
         // Force-drop legacy SW controllers that showed a fake wake screen on HTML timeout.
-        var RESET_KEY = "pulse_sw_reset_v166";
+        var RESET_KEY = "pulse_sw_reset_v167";
         var bootSw = function () {
           navigator.serviceWorker.register("/sw.js").catch(function () {});
         };
